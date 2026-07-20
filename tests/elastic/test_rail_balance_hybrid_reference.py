@@ -627,6 +627,9 @@ def test_strict_expert_mapping_and_force_entry_contract():
 
 
 def test_input_validation_and_corruption_detection():
+    class IntSubclass(int):
+        pass
+
     valid = (((0,),), ((0,),))
     common = dict(destinations=1, channels=1, max_tokens=1)
     _assert_raises(
@@ -697,6 +700,21 @@ def test_input_validation_and_corruption_detection():
     assert _build(
         ((),), destinations=32, channels=1, max_tokens=1,
     ).num_destinations == 32
+    assert _build(
+        valid,
+        **common,
+        remainder_seed=1 << 40,
+    ).remainder_seed == 0
+    _assert_raises(
+        ValueError,
+        "signed int64 host ABI",
+        lambda: _build(valid, **common, remainder_seed=1 << 70),
+    )
+    _assert_raises(
+        ValueError,
+        "must be an integer",
+        lambda: _build(valid, **common, remainder_seed=IntSubclass(0)),
+    )
 
     schedule = _build(valid, **common)
     _assert_raises(

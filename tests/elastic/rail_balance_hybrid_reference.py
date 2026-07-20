@@ -21,6 +21,7 @@ Matrix = Tuple[Tuple[int, ...], ...]
 Tensor3 = Tuple[Tuple[Tuple[int, ...], ...], ...]
 
 _INT32_MAX = 0x7FFFFFFF
+_INT64_MAX = 0x7FFFFFFFFFFFFFFF
 _MAX_RAILS = 32
 _MAX_CHANNELS = 1024
 _MAX_DESTINATIONS = 32
@@ -35,6 +36,16 @@ def _require_int(name: str, value: int, *, minimum: Optional[int] = None) -> int
         raise ValueError(f"{name} must be at least {minimum}")
     if value > _INT32_MAX:
         raise ValueError(f"{name} exceeds the signed int32 CUDA ABI")
+    return value
+
+
+def _require_nonnegative_int64(name: str, value: int) -> int:
+    if type(value) is not int:
+        raise ValueError(f"{name} must be an integer")
+    if value < 0:
+        raise ValueError(f"{name} must be at least 0")
+    if value > _INT64_MAX:
+        raise ValueError(f"{name} exceeds the signed int64 host ABI")
     return value
 
 
@@ -373,7 +384,8 @@ def build_hybrid_rail_schedule_from_destinations(
             f"num_channels exceeds the legacy Hybrid {_MAX_CHANNELS} limit")
     num_max_tokens_per_rank = _require_int(
         "num_max_tokens_per_rank", num_max_tokens_per_rank, minimum=1)
-    remainder_seed = _require_int("remainder_seed", remainder_seed, minimum=0)
+    remainder_seed = _require_nonnegative_int64(
+        "remainder_seed", remainder_seed)
     if local_destination is not None:
         local_destination = _require_int(
             "local_destination", local_destination, minimum=0)
