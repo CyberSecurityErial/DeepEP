@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+import struct
 from typing import Sequence
 
 from rail_balance_hybrid_reference import (
@@ -100,8 +101,11 @@ class VnodeCopyRoute:
     owner_ordinal: int
     moved: bool
     egress: int
+    target_channel: int
     proxy_slot: int
     remote_slot: int
+    dense_slot: int
+    vnode_slot: int
     reduce_row: int
     source_physical: int
     egress_physical: int
@@ -130,6 +134,9 @@ class VnodeRoundTripResult:
     contributions: tuple[VnodeContribution, ...]
     reduce_rows: tuple[tuple[tuple[Vector, ...], ...], ...]
     combined: tuple[tuple[Vector, ...], ...]
+    # Diagnostic flat lane reduction.  This is deliberately not the
+    # authoritative legacy answer: destination reduction followed by the
+    # combine epilogue has an extra BF16 rounding boundary.
     direct: tuple[tuple[Vector, ...], ...]
 
 
@@ -186,25 +193,83 @@ def _zero(width: int) -> Vector:
     return (Fraction(0),) * width
 
 
-def _add(left: Vector, right: Vector) -> Vector:
-    if len(left) != len(right):
-        raise ValueError("vector widths do not match")
-    return tuple(a + b for a, b in zip(left, right))
+def _float32_bits(value: Scalar) -> int:
+    return struct.unpack(">I", struct.pack(">f", float(value)))[0]
+
+
+def _fraction_from_float32_bits(bits: int) -> Scalar:
+    value = struct.unpack(">f", struct.pack(">I", bits))[0]
+    if not (-float("inf") < value < float("inf")):
+        raise ValueError("the vnode oracle accepts only finite values")
+    return Fraction.from_float(value)
+
+
+def round_float32(value: Scalar) -> Scalar:
+    """Round a finite fixture rational to IEEE float32, ties to even."""
+
+    return _fraction_from_float32_bits(_float32_bits(value))
+
+
+def round_bfloat16(value: Scalar) -> Scalar:
+    """Round a finite fixture rational through float32 to BF16 RN."""
+
+    bits = _float32_bits(value)
+    if bits & 0x7f800000 == 0x7f800000:
+        raise ValueError("the vnode oracle accepts only finite values")
+    bits = (bits + 0x7fff + ((bits >> 16) & 1)) & 0xffffffff
+    return _fraction_from_float32_bits(bits & 0xffff0000)
+
+
+def _float32_add(left: Scalar, right: Scalar) -> Scalar:
+    return round_float32(left + right)
+
+
+def _float32_mul(left: Scalar, right: Scalar) -> Scalar:
+    return round_float32(left * right)
+
+
+def combine_reduce_bf16(values: Sequence[Vector]) -> Vector:
+    """Mirror ``combine_reduce`` without bias for one ordered slot list.
+
+    One or two valid slots take its BF16 hadd path. Three or more slots use
+    lane-ordered FP32 accumulation and one final BF16 conversion.
+    """
+
+    if not values:
+        raise ValueError("combine reduction requires at least one value")
+    width = len(values[0])
+    if width < 1 or any(len(value) != width for value in values):
+        raise ValueError("combine reduction vector widths do not match")
+    if len(values) <= 2:
+        second = values[1] if len(values) == 2 else _zero(width)
+        return tuple(
+            round_bfloat16(left + right)
+            for left, right in zip(values[0], second)
+        )
+
+    reduced = [Fraction(0) for _ in range(width)]
+    for value in values:
+        for column, element in enumerate(value):
+            reduced[column] = _float32_add(reduced[column], element)
+    return tuple(round_bfloat16(value) for value in reduced)
 
 
 def _weighted_expert(
     source: Vector,
     expert: int,
-    lane: int,
+    expert_begin: int,
     weight: Scalar,
 ) -> Vector:
-    # Integer affine expert transforms and rational weights make the oracle
-    # exact while ensuring expert/lane mix-ups change the final answer.
-    scale = 1 + expert % 7
-    return tuple(
-        weight * (scale * value + expert * 3 + lane * 5 + column)
-        for column, value in enumerate(source)
-    )
+    """Mirror ``rail_balance_vnode_expert_impl`` including BF16 output."""
+
+    bias = Fraction(8 * (expert - expert_begin + 1))
+    rounded_weight = round_float32(weight)
+    output = []
+    for value in source:
+        summed = _float32_add(round_bfloat16(value), bias)
+        output.append(round_bfloat16(
+            _float32_mul(summed, rounded_weight)))
+    return tuple(output)
 
 
 def _validate_case(case: VnodeRoundTripCase) -> int:
@@ -245,7 +310,11 @@ def _validate_case(case: VnodeRoundTripCase) -> int:
             if len(set(experts)) != case.num_topk:
                 raise ValueError("top-k experts must be distinct")
             for expert in experts:
-                expert_destination(expert, case.num_experts, d)
+                destination = expert_destination(
+                    expert, case.num_experts, d)
+                if destination == topology.source_node:
+                    raise ValueError(
+                        "the vnode GPU fixture must contain only remote experts")
             if width < 0:
                 width = len(source)
             if not source or len(source) != width:
@@ -298,6 +367,7 @@ def run_vnode_roundtrip(case: VnodeRoundTripCase) -> VnodeRoundTripResult:
     contributions: list[VnodeContribution] = []
 
     experts_per_destination = case.num_experts // d
+    expert_begin = topology.rails_per_node * case.experts_per_physical_rank
     num_reduce_rows = d if d <= case.num_topk else case.num_topk
     for owner, tokens in enumerate(case.topk_idx):
         owner_rows: list[list[Vector]] = []
@@ -308,16 +378,16 @@ def run_vnode_roundtrip(case: VnodeRoundTripCase) -> VnodeRoundTripResult:
             weights = case.topk_weights[owner][token]
             token_rows = [_zero(width) for _ in range(num_reduce_rows)]
             row_destinations: dict[int, int] = {}
-            direct_value = _zero(width)
             lanes_by_destination: dict[int, list[int]] = {}
+            lane_values = []
             for lane, expert in enumerate(experts):
                 destination = expert // experts_per_destination
                 lanes_by_destination.setdefault(destination, []).append(lane)
-                direct_value = _add(
-                    direct_value,
-                    _weighted_expert(source, expert, lane, weights[lane]),
-                )
+                lane_values.append(_weighted_expert(
+                    source, expert, expert_begin, weights[lane]))
+            direct_value = combine_reduce_bf16(lane_values)
 
+            epilogue_rows: list[tuple[int, Vector]] = []
             for destination in sorted(lanes_by_destination):
                 lanes = tuple(lanes_by_destination[destination])
                 row = derive_reduce_row(
@@ -330,7 +400,7 @@ def run_vnode_roundtrip(case: VnodeRoundTripCase) -> VnodeRoundTripResult:
                     raise AssertionError("two destinations selected one reduce row")
                 row_destinations[row] = destination
 
-                destination_value = _zero(width)
+                destination_partials = []
                 expert_physicals = []
                 for lane in lanes:
                     expert = experts[lane]
@@ -339,34 +409,39 @@ def run_vnode_roundtrip(case: VnodeRoundTripCase) -> VnodeRoundTripResult:
                     if expert_node != destination:
                         raise AssertionError("expert destination mapping changed")
                     expert_physicals.append(expert_rank)
-                    destination_value = _add(
-                        destination_value,
-                        _weighted_expert(
-                            source, expert, lane, weights[lane]),
-                    )
+                    destination_partials.append(lane_values[lane])
+                destination_value = combine_reduce_bf16(
+                    destination_partials)
 
                 source_physical = topology.physical(
                     topology.source_node, owner)
-                if destination == topology.source_node:
-                    moved = False
-                    egress = owner
-                    proxy_slot = -1
-                    remote_slot = -1
-                    source_channel = token % case.num_channels
-                    owner_ordinal = -1
-                else:
-                    record = remote_by_key.pop((owner, token, destination))
-                    copy, resolution = record.copy, record.resolution
-                    moved = resolution.moved
-                    egress = resolution.egress
-                    proxy_slot = resolution.proxy_slot
-                    remote_slot = resolution.remote_slot
-                    source_channel = copy.source_channel
-                    owner_ordinal = copy.owner_ordinal
-                    if moved != (egress != owner):
-                        raise AssertionError("moved and egress identities disagree")
-                    if moved != (proxy_slot >= 0):
-                        raise AssertionError("proxy p exists on the wrong path")
+                record = remote_by_key.pop((owner, token, destination))
+                copy, resolution = record.copy, record.resolution
+                moved = resolution.moved
+                egress = resolution.egress
+                proxy_slot = resolution.proxy_slot
+                remote_slot = resolution.remote_slot
+                target_channel = resolution.channel
+                source_channel = copy.source_channel
+                owner_ordinal = copy.owner_ordinal
+                if moved != (egress != owner):
+                    raise AssertionError("moved and egress identities disagree")
+                if moved != (proxy_slot >= 0):
+                    raise AssertionError("proxy p exists on the wrong path")
+                dense_base = min(
+                    schedule.owner_channel_prefix[
+                        egress][target_channel][destination],
+                    schedule.keep_count[egress][destination],
+                ) + schedule.moved_channel_prefix[
+                    egress][destination][target_channel]
+                dense_slot = dense_base + remote_slot
+                if not 0 <= dense_slot < schedule.quota[
+                        egress][destination]:
+                    raise AssertionError(
+                        "vnode destination slot is outside its quota")
+                vnode_slot = (
+                    (destination - 1) * case.num_max_tokens_per_rank
+                    + dense_slot)
 
                 egress_physical = topology.physical(
                     topology.source_node, egress)
@@ -379,8 +454,11 @@ def run_vnode_roundtrip(case: VnodeRoundTripCase) -> VnodeRoundTripResult:
                     owner_ordinal=owner_ordinal,
                     moved=moved,
                     egress=egress,
+                    target_channel=target_channel,
                     proxy_slot=proxy_slot,
                     remote_slot=remote_slot,
+                    dense_slot=dense_slot,
+                    vnode_slot=vnode_slot,
                     reduce_row=row,
                     source_physical=source_physical,
                     egress_physical=egress_physical,
@@ -392,13 +470,15 @@ def run_vnode_roundtrip(case: VnodeRoundTripCase) -> VnodeRoundTripResult:
                 )
                 routes.append(route)
                 contributions.append(VnodeContribution(route, destination_value))
-                token_rows[row] = _add(token_rows[row], destination_value)
+                token_rows[row] = destination_value
+                epilogue_rows.append((lanes[-1], destination_value))
 
-            combined_value = _zero(width)
-            for value in token_rows:
-                combined_value = _add(combined_value, value)
-            if combined_value != direct_value:
-                raise AssertionError("vnode round trip differs from direct expert sum")
+            # Legacy deduplication elects the highest lane for each
+            # destination, then compute_topk_slots visits elected lanes from
+            # low to high.
+            combined_value = combine_reduce_bf16([
+                value for _lane, value in sorted(epilogue_rows)
+            ])
             owner_rows.append(token_rows)
             owner_combined.append(combined_value)
             owner_direct.append(direct_value)
@@ -485,8 +565,9 @@ def _case_from_patterns(
         tuple(weights for _token in owner) for owner in topk_idx)
     source_values = tuple(
         tuple(
-            tuple(Fraction(100 * owner + 10 * token + column + 1)
-                  for column in range(3))
+            tuple(round_bfloat16(Fraction(
+                8 * ((5 * owner + 3 * token + (column & 7)) & 7)
+            )) for column in range(3))
             for token in range(len(owner_tokens))
         )
         for owner, owner_tokens in enumerate(topk_idx)
@@ -510,10 +591,10 @@ def _case_from_patterns(
 def build_4x2_case() -> VnodeRoundTripCase:
     topology = VnodeTopology(rails_per_node=4, num_nodes=2)
     patterns = (
-        ((1, 1, 0, 0),) * 4,
-        ((1, 1, 0, 0),) * 2,
-        ((0, 0, 0, 0),),
-        ((0, 0, 0, 0),),
+        ((1, 1, 1, 1),) * 4,
+        ((1, 1, 1, 1),) * 2,
+        ((1, 1, 1, 1),),
+        ((1, 1, 1, 1),),
     )
     return _case_from_patterns(
         name="hybrid_vnode_4x2_d_le_k",
@@ -522,7 +603,7 @@ def build_4x2_case() -> VnodeRoundTripCase:
         num_topk=4,
         num_channels=2,
         num_max_tokens_per_rank=4,
-        proxy_capacity_per_egress=2,
+        proxy_capacity_per_egress=1,
         remainder_seed=0,
     )
 
@@ -530,8 +611,8 @@ def build_4x2_case() -> VnodeRoundTripCase:
 def build_2x4_case() -> VnodeRoundTripCase:
     topology = VnodeTopology(rails_per_node=2, num_nodes=4)
     patterns = (
-        ((1, 1), (1, 2), (1, 3), (1, 0), (1, 0), (2, 0)),
-        ((3, 3), (2, 3), (2, 3), (3, 0), (3, 0), (1, 0)),
+        ((1, 2), (3, 3), (1, 2), (3, 3), (3, 3), (3, 3)),
+        ((1, 2),) * 6,
     )
     return _case_from_patterns(
         name="hybrid_vnode_2x4_d_gt_k",
@@ -540,6 +621,34 @@ def build_2x4_case() -> VnodeRoundTripCase:
         num_topk=2,
         num_channels=2,
         num_max_tokens_per_rank=6,
-        proxy_capacity_per_egress=2,
+        proxy_capacity_per_egress=4,
+        remainder_seed=0,
+    )
+
+
+def build_rounding_sensitive_case() -> VnodeRoundTripCase:
+    """Minimal full oracle case that distinguishes legacy two-level BF16.
+
+    The three expert partials are exactly ``[1, 1/256, 1/256]``.  Lanes zero
+    and one share destination one, so its two-slot BF16 hadd rounds to one.
+    The epilogue then adds destination two's ``1/256`` and rounds to one again.
+    An incorrect flat three-slot FP32 reduction instead produces ``129/128``.
+    """
+
+    zero = (Fraction(0),) * 3
+    return VnodeRoundTripCase(
+        name="hybrid_vnode_rounding_sensitive",
+        topology=VnodeTopology(rails_per_node=2, num_nodes=4),
+        topk_idx=(((4, 7, 11),), ()),
+        topk_weights=((
+            (Fraction(1, 8), Fraction(1, 8192), Fraction(1, 16384)),
+        ), ()),
+        source_values=((zero,), ()),
+        num_topk=3,
+        num_channels=1,
+        num_max_tokens_per_rank=1,
+        num_experts=16,
+        experts_per_physical_rank=2,
+        proxy_capacity_per_egress=1,
         remainder_seed=0,
     )
