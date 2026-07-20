@@ -33,7 +33,7 @@ import subprocess
 import sys
 import traceback
 from collections import Counter
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Callable, Sequence, TypeVar
@@ -56,11 +56,9 @@ from test_rail_balance_hybrid_plan_lsa import (
     _abort,
     _encode_destination_rows,
     _finish,
-    _gate_signature,
     _gather_objects,
     _local_topk,
     _monitored_barrier,
-    _prepare,
     _schedule,
     _skew_case,
     _verify_outputs,
@@ -68,13 +66,24 @@ from test_rail_balance_hybrid_plan_lsa import (
 
 
 _WORLD_SIZE = 8
-_HIDDEN = 256
+_SMALL_HIDDEN = 256
+_LARGE_HIDDEN = 7168
 _NUM_TOPK = 4
 _MAX_TOKENS = 10
 _PROXY_CAPACITY = 6
 _TMA_ALIGNMENT = 32
+_STREAM_DELAY_CYCLES = 2_000_000
 _OPERATION = "rail_balance_hybrid_source_shuffle"
 _TYPE = TypeVar("_TYPE")
+
+
+@dataclass(frozen=True)
+class ShuffleCase:
+    plan: PlanCase
+    hidden: int
+    iteration: int
+    nondefault_stream: bool
+    expected_moved_copies: int
 
 
 def _align(value: int, alignment: int = _TMA_ALIGNMENT) -> int:
@@ -130,6 +139,44 @@ def _wide_destination_case() -> PlanCase:
     )
 
 
+def _balanced_case() -> PlanCase:
+    # Every owner contributes exactly two copies to each remote destination,
+    # so quota equals count and the source shuffle must publish no bytes.
+    owners = []
+    for owner in range(_WORLD_SIZE):
+        token = (owner, 8 + owner, 16 + owner, 24 + owner)
+        owners.append((token, token))
+    return PlanCase(
+        name="balanced_zero_move",
+        topk_idx=tuple(owners),
+        num_topk=_NUM_TOPK,
+        num_channels=2,
+        num_max_tokens_per_rank=_MAX_TOKENS,
+        num_experts=32,
+        num_scaleout_ranks=4,
+        local_scaleout_rank=0,
+        proxy_capacity_per_egress=_PROXY_CAPACITY,
+        remainder_seed=67,
+    )
+
+
+def _single_token_case() -> PlanCase:
+    # The count-aware remainder policy keeps each of this one token's remote
+    # copies on its owner.  Seven ranks exercise the zero-N launch path.
+    return PlanCase(
+        name="single_global_token_zero_move",
+        topk_idx=(((0, 8, 16, 24),),) + ((),) * (_WORLD_SIZE - 1),
+        num_topk=_NUM_TOPK,
+        num_channels=2,
+        num_max_tokens_per_rank=_MAX_TOKENS,
+        num_experts=32,
+        num_scaleout_ranks=4,
+        local_scaleout_rank=0,
+        proxy_capacity_per_egress=_PROXY_CAPACITY,
+        remainder_seed=68,
+    )
+
+
 def _copies_by_egress(
     records: Sequence[ResolvedHybridDestinationCopy],
 ) -> tuple[dict[int, ResolvedHybridDestinationCopy], ...]:
@@ -144,7 +191,7 @@ def _copies_by_egress(
     return tuple(result)
 
 
-def _assert_shuffle_oracle() -> tuple[PlanCase, PlanCase, PlanCase]:
+def _assert_shuffle_oracle() -> tuple[ShuffleCase, ...]:
     first = _skew_case(
         capacity=_PROXY_CAPACITY,
         seed=62,
@@ -156,16 +203,35 @@ def _assert_shuffle_oracle() -> tuple[PlanCase, PlanCase, PlanCase]:
         remainder_seed=63,
     )
     wide = _wide_destination_case()
+    balanced = _balanced_case()
+    single = _single_token_case()
+    large = replace(
+        first,
+        name="c061_h7168_moved_seed64",
+        remainder_seed=64,
+    )
     assert first.num_topk == second.num_topk == _NUM_TOPK
     assert first.num_max_tokens_per_rank == _MAX_TOKENS
     assert first.num_tokens_per_rank == (9, 9, 0, 0, 0, 0, 0, 0)
 
-    for case in (first, second, wide):
+    cases = (
+        ShuffleCase(first, _SMALL_HIDDEN, 1, False, 21),
+        ShuffleCase(second, _SMALL_HIDDEN, 2, True, 21),
+        ShuffleCase(wide, _SMALL_HIDDEN, 3, True, 24),
+        ShuffleCase(balanced, _SMALL_HIDDEN, 4, False, 0),
+        ShuffleCase(single, _SMALL_HIDDEN, 5, True, 0),
+        ShuffleCase(large, _LARGE_HIDDEN, 6, True, 21),
+        # Reinterpret the same tail arena back to the small layout after the
+        # large transaction; no stale large-layout payload may stay live.
+        ShuffleCase(first, _SMALL_HIDDEN, 7, True, 21),
+    )
+    for spec in cases:
+        case = spec.plan
         schedule = _schedule(case)
         records = _moved_copies(case, schedule)
         by_egress = _copies_by_egress(records)
         assert schedule.enabled and schedule.moved_copies == len(records)
-        assert schedule.moved_copies > 0
+        assert schedule.moved_copies == spec.expected_moved_copies
         assert max(schedule.proxy_required) <= case.proxy_capacity_per_egress
         for egress, slots in enumerate(by_egress):
             required = schedule.proxy_required[egress]
@@ -182,7 +248,7 @@ def _assert_shuffle_oracle() -> tuple[PlanCase, PlanCase, PlanCase]:
                         record.copy.destination][resolution.channel]
                 )
 
-        if case is not wide:
+        if case.name.startswith("c061"):
             # The C061 route is not merely one-hot: one physical owner token
             # can contribute multiple independently balanced destinations.
             multiplicity = Counter(
@@ -207,19 +273,28 @@ def _assert_shuffle_oracle() -> tuple[PlanCase, PlanCase, PlanCase]:
     assert wide_schedule.moved_copies == 24
     assert wide_schedule.proxy_required == (4, 1, 4, 4, 3, 2, 3, 3)
     assert max(_schedule(second).proxy_required) == _PROXY_CAPACITY
-    return first, second, wide
+    assert _schedule(balanced).proxy_required == (0,) * _WORLD_SIZE
+    assert balanced.num_tokens_per_rank == (2,) * _WORLD_SIZE
+    assert _schedule(single).proxy_required == (0,) * _WORLD_SIZE
+    assert single.num_tokens_per_rank == (1, 0, 0, 0, 0, 0, 0, 0)
+    assert any(
+        spec.hidden == _LARGE_HIDDEN and spec.expected_moved_copies > 0
+        for spec in cases
+    )
+    return cases
 
 
 def _cpu_source_inputs(
     case: PlanCase,
     owner: int,
     iteration: int,
+    hidden: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     num_tokens = len(case.topk_idx[owner])
     linear = torch.arange(
-        num_tokens * _HIDDEN, dtype=torch.int32, device="cpu")
+        num_tokens * hidden, dtype=torch.int32, device="cpu")
     x = (
-        linear.reshape(num_tokens, _HIDDEN) % 29
+        linear.reshape(num_tokens, hidden) % 29
         + owner * 31
         + iteration * 3
     ).to(torch.bfloat16).contiguous()
@@ -230,7 +305,7 @@ def _cpu_source_inputs(
     weights = (
         iteration * 10000.0 + owner * 1000.0 + token * 32.0 + lane
     ).contiguous()
-    assert x.shape == (num_tokens, _HIDDEN)
+    assert x.shape == (num_tokens, hidden)
     assert weights.shape == (num_tokens, case.num_topk)
     return x, weights
 
@@ -239,14 +314,18 @@ def _local_source_inputs(
     case: PlanCase,
     rank: int,
     iteration: int,
+    hidden: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    x, weights = _cpu_source_inputs(case, rank, iteration)
+    x, weights = _cpu_source_inputs(case, rank, iteration, hidden)
     device = torch.device("cuda", rank)
     return x.to(device), weights.to(device)
 
 
-def _token_layout(case: PlanCase) -> tuple[int, int, int, int, int]:
-    hidden_bytes = _HIDDEN * torch.bfloat16.itemsize
+def _token_layout(
+    case: PlanCase,
+    hidden: int,
+) -> tuple[int, int, int, int, int]:
+    hidden_bytes = hidden * torch.bfloat16.itemsize
     metadata_offset = _align(hidden_bytes)
     topk_offset = metadata_offset
     weights_offset = topk_offset + case.num_topk * 4
@@ -283,12 +362,13 @@ def _verify_local_snapshot(
     baseline: torch.Tensor,
     snapshot: torch.Tensor,
     iteration: int,
+    hidden: int,
 ) -> tuple[tuple[int, ...], ...]:
     assert baseline.device.type == snapshot.device.type == "cpu"
     assert baseline.dtype == snapshot.dtype == torch.uint8
     assert baseline.is_contiguous() and snapshot.is_contiguous()
     topk_offset, weights_offset, src_offset, linked_offset, token_bytes = \
-        _token_layout(case)
+        _token_layout(case, hidden)
     assert tuple(baseline.shape) == tuple(snapshot.shape) == (
         case.proxy_capacity_per_egress, token_bytes)
 
@@ -315,8 +395,8 @@ def _verify_local_snapshot(
 
         row = snapshot[proxy_slot]
         expected_x, expected_weights = _cpu_source_inputs(
-            case, copy.owner, iteration)
-        hidden = _reinterpret(row, 0, _HIDDEN, torch.bfloat16)
+            case, copy.owner, iteration, hidden)
+        hidden_values = _reinterpret(row, 0, hidden, torch.bfloat16)
         topk_idx = _reinterpret(
             row, topk_offset, case.num_topk, torch.int32)
         topk_weights = _reinterpret(
@@ -326,7 +406,7 @@ def _verify_local_snapshot(
         linked = _reinterpret(
             row, linked_offset, case.num_topk, torch.int32)
 
-        assert torch.equal(hidden, expected_x[copy.token])
+        assert torch.equal(hidden_values, expected_x[copy.token])
         assert topk_idx.tolist() == list(case.topk_idx[copy.owner][copy.token])
         assert torch.equal(topk_weights, expected_weights[copy.token])
         assert src_global == copy.owner * case.num_max_tokens_per_rank + copy.token
@@ -412,6 +492,68 @@ def _source_shuffle(
             call()
 
 
+def _prepare_case(
+    runtime: object,
+    topk_idx: torch.Tensor,
+    case: PlanCase,
+    hidden: int,
+    *,
+    arena_offset: int,
+    invocation_id: int,
+    stream: torch.cuda.Stream | None,
+) -> tuple[int, str | None]:
+    try:
+        def call() -> int:
+            return int(runtime._rail_balance_hybrid_plan_prepare(  # type: ignore[attr-defined]
+                topk_idx,
+                hidden,
+                case.num_channels,
+                case.num_max_tokens_per_rank,
+                case.num_experts,
+                case.num_scaleout_ranks,
+                case.local_scaleout_rank,
+                case.proxy_capacity_per_egress,
+                arena_offset,
+                invocation_id,
+                case.remainder_seed,
+            ))
+
+        if stream is None:
+            status = call()
+        else:
+            with torch.cuda.stream(stream):
+                status = call()
+        return status, None
+    except BaseException:
+        return 100, traceback.format_exc()
+
+
+def _gate_signature(
+    case: PlanCase,
+    hidden: int,
+    *,
+    arena_offset: int,
+    arena_bytes: int,
+) -> tuple[object, ...]:
+    # Local N intentionally differs across ranks and is gated separately.
+    return (
+        _OPERATION,
+        _WORLD_SIZE,
+        hidden,
+        case.num_topk,
+        case.num_channels,
+        case.num_max_tokens_per_rank,
+        case.num_experts,
+        case.num_scaleout_ranks,
+        case.local_scaleout_rank,
+        case.proxy_capacity_per_egress,
+        arena_offset,
+        arena_bytes,
+        case.remainder_seed,
+        "force-v1-local-lsa",
+    )
+
+
 def _run_shuffle_transaction(
     *,
     runtime: object,
@@ -419,6 +561,7 @@ def _run_shuffle_transaction(
     control_group: dist.ProcessGroup,
     timeout: int,
     case: PlanCase,
+    hidden: int,
     arena_offset: int,
     arena_bytes: int,
     invocation_id: int,
@@ -427,23 +570,33 @@ def _run_shuffle_transaction(
 ) -> None:
     schedule = _schedule(case)
     records = _moved_copies(case, schedule)
-    topk_idx = _local_topk(case, rank)
-    x, topk_weights = _local_source_inputs(case, rank, iteration)
-    source_topk = topk_idx.cpu()
-    source_x = x.cpu()
-    source_weights = topk_weights.cpu()
     stream = torch.cuda.Stream(device=rank) if nondefault_stream else None
-    if stream is not None:
-        # Inputs were constructed on the caller's current stream.  Make the
-        # private transaction's stream dependency explicit instead of relying
-        # on small fixtures completing before the alternate stream starts.
-        stream.wait_stream(torch.cuda.current_stream(rank))
+    if stream is None:
+        topk_idx = _local_topk(case, rank)
+        x, topk_weights = _local_source_inputs(
+            case, rank, iteration, hidden)
+    else:
+        # Produce all inputs on the non-default caller stream.  Both prepare
+        # and shuffle must explicitly order their private comm stream behind
+        # it; no default-stream completion is available to hide a missing edge.
+        with torch.cuda.stream(stream):
+            torch.cuda._sleep(_STREAM_DELAY_CYCLES)
+            topk_idx = _local_topk(case, rank)
+            x, topk_weights = _local_source_inputs(
+                case, rank, iteration, hidden)
+    rows = case.topk_idx[rank]
+    source_topk = torch.tensor(
+        rows, dtype=_C.topk_idx_t, device="cpu").reshape(
+            len(rows), case.num_topk)
+    source_x, source_weights = _cpu_source_inputs(
+        case, rank, iteration, hidden)
 
     try:
-        status, prepare_error = _prepare(
+        status, prepare_error = _prepare_case(
             runtime,
             topk_idx,
             case,
+            hidden,
             arena_offset=arena_offset,
             invocation_id=invocation_id,
             stream=stream,
@@ -454,7 +607,8 @@ def _run_shuffle_transaction(
             invocation_id,
             status,
             _gate_signature(
-                case, arena_offset=arena_offset, arena_bytes=arena_bytes),
+                case, hidden,
+                arena_offset=arena_offset, arena_bytes=arena_bytes),
             int(topk_idx.shape[0]),
             prepare_error,
         ), control_group)
@@ -518,6 +672,7 @@ def _run_shuffle_transaction(
                 baseline=baseline,
                 snapshot=snapshot,
                 iteration=iteration,
+                hidden=hidden,
             ),
         )
         coverage = _gather_objects(local_coverage, control_group)
@@ -572,18 +727,23 @@ def _worker(local_rank: int, num_local_ranks: int,
     buffer = None
     clean_shutdown = False
     try:
-        first, second, wide = _assert_shuffle_oracle()
-        layout = tuple(int(value) for value in
-                       _C._get_rail_balance_hybrid_layout(
-                           _HIDDEN, _NUM_TOPK, _PROXY_CAPACITY))
-        assert len(layout) == 10
-        assert layout[5] == _token_layout(first)[-1]
-        arena_bytes = layout[-1]
+        cases = _assert_shuffle_oracle()
+        layouts = []
+        for spec in cases:
+            layout = tuple(int(value) for value in
+                           _C._get_rail_balance_hybrid_layout(
+                               spec.hidden, spec.plan.num_topk,
+                               spec.plan.proxy_capacity_per_egress))
+            assert len(layout) == 10
+            assert layout[5] == _token_layout(spec.plan, spec.hidden)[-1]
+            layouts.append(layout)
+        arena_bytes = max(layout[-1] for layout in layouts)
+        max_hidden = max(spec.hidden for spec in cases)
         alignment = int(_C.get_elastic_buffer_alignment())
         base_bytes = deep_ep.ElasticBuffer.get_buffer_size_hint(
             ep_group,
             num_max_tokens_per_rank=_MAX_TOKENS,
-            hidden=_HIDDEN,
+            hidden=max_hidden,
             num_topk=_NUM_TOPK,
             use_fp8_dispatch=False,
             allow_hybrid_mode=False,
@@ -595,7 +755,7 @@ def _worker(local_rank: int, num_local_ranks: int,
             ep_group,
             num_bytes=arena_offset + arena_bytes,
             num_max_tokens_per_rank=_MAX_TOKENS,
-            hidden=_HIDDEN,
+            hidden=max_hidden,
             num_topk=_NUM_TOPK,
             allow_hybrid_mode=False,
             allow_multiple_reduction=True,
@@ -618,42 +778,20 @@ def _worker(local_rank: int, num_local_ranks: int,
                 True, True, True),
         )
 
-        _run_shuffle_transaction(
-            runtime=buffer.runtime,
-            rank=rank,
-            control_group=control_group,
-            timeout=args.timeout,
-            case=first,
-            arena_offset=arena_offset,
-            arena_bytes=arena_bytes,
-            invocation_id=881,
-            iteration=1,
-            nondefault_stream=False,
-        )
-        _run_shuffle_transaction(
-            runtime=buffer.runtime,
-            rank=rank,
-            control_group=control_group,
-            timeout=args.timeout,
-            case=second,
-            arena_offset=arena_offset,
-            arena_bytes=arena_bytes,
-            invocation_id=882,
-            iteration=2,
-            nondefault_stream=True,
-        )
-        _run_shuffle_transaction(
-            runtime=buffer.runtime,
-            rank=rank,
-            control_group=control_group,
-            timeout=args.timeout,
-            case=wide,
-            arena_offset=arena_offset,
-            arena_bytes=arena_bytes,
-            invocation_id=883,
-            iteration=3,
-            nondefault_stream=True,
-        )
+        for index, spec in enumerate(cases):
+            _run_shuffle_transaction(
+                runtime=buffer.runtime,
+                rank=rank,
+                control_group=control_group,
+                timeout=args.timeout,
+                case=spec.plan,
+                hidden=spec.hidden,
+                arena_offset=arena_offset,
+                arena_bytes=arena_bytes,
+                invocation_id=881 + index,
+                iteration=spec.iteration,
+                nondefault_stream=spec.nondefault_stream,
+            )
 
         _monitored_barrier(control_group, args.timeout)
         clean_shutdown = True
@@ -666,9 +804,11 @@ def _worker(local_rank: int, num_local_ranks: int,
                 print(
                     "PASS C080-D Hybrid source shuffle: true 8-GPU LSA, "
                     "C061 skew/zero-N/multi-destination/multi-copy plus "
-                    "all-owner C1024/D32/K4, exact-capacity, exact legacy "
-                    "TokenLayout bytes, unused unchanged, reusable "
-                    "transaction, non-default stream",
+                    "all-owner C1024/D32/K4, H7168 moved, balanced/zero-"
+                    "move and single-token cases, exact-capacity, exact "
+                    "legacy TokenLayout bytes, unused unchanged, reusable "
+                    "transaction, H256/H7168/H256 arena reuse, and explicit "
+                    "non-default stream ordering",
                     flush=True,
                 )
             dist.destroy_process_group()
@@ -720,14 +860,18 @@ def main() -> None:
     if arguments.timeout <= 0 or arguments.watchdog_seconds <= 0:
         parser.error("timeouts must be positive")
 
-    first, second, wide = _assert_shuffle_oracle()
-    assert _schedule(first).moved_copies == 21
+    cases = _assert_shuffle_oracle()
+    by_name = {spec.plan.name: spec for spec in cases}
+    first = by_name["c061_source_shuffle_seed62"].plan
+    second = by_name["c061_source_shuffle_reuse_seed63"].plan
+    wide = by_name["all_owner_c1024_d32_k4"].plan
     print(
         "PASS C080-D CPU oracle: C061-like 8-rail source shuffle, "
         "zero-N owners, multi-destination/multi-copy, moved=21, "
         f"Pcap={_PROXY_CAPACITY}, seeds="
         f"{first.remainder_seed}/{second.remainder_seed}; all-owner "
-        f"C={wide.num_channels}/D={wide.num_scaleout_ranks}/K={wide.num_topk}",
+        f"C={wide.num_channels}/D={wide.num_scaleout_ranks}/K={wide.num_topk}; "
+        "H256/H7168/H256 reuse, balanced zero-move, global single-token",
         flush=True,
     )
     if arguments.oracle_only:
