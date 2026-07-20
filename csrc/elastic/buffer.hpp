@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <vector>
 #include <pybind11/functional.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -87,6 +88,11 @@ class ElasticBuffer {
     static constexpr int kNumMaxChannelsPerSM = 8;
     static constexpr int kNumMaxSMs = 160;
     static constexpr int kNumMaxChannels = kNumMaxChannelsPerSM * kNumMaxSMs;
+
+    // Private C080-B2 prepare -> local snapshot -> plan transaction. Only one
+    // may own the force arena and the legacy workspace barrier epoch at once.
+    std::optional<RailBalanceHybridPlanPending>
+        rail_balance_hybrid_plan_pending;
 
     // Some Engram storage settings
     int num_engram_entries = 0, engram_hidden = 0;
@@ -249,6 +255,225 @@ public:
         EP_HOST_ASSERT(
             legacy_bytes % rail_balance::kNumHybridBufferAlignmentBytes == 0);
         return rail_balance::checked_add_i64(legacy_bytes, layout.arena_bytes);
+    }
+
+    int rail_balance_hybrid_plan_prepare(
+        const torch::Tensor& topk_idx,
+        const int& hidden,
+        const int& num_channels,
+        const int& num_max_tokens_per_rank,
+        const int& num_experts,
+        const int& num_scaleout_ranks,
+        const int& local_scaleout_rank,
+        const int& proxy_capacity_per_egress,
+        const int64_t& arena_offset,
+        const int& invocation_id,
+        const pybind11::object& remainder_seed) {
+        // Everything below is noncollective. Fail before touching the arena if
+        // another private force transaction still owns it.
+        EP_HOST_ASSERT(not destroyed);
+        EP_HOST_ASSERT(not rail_balance_hybrid_plan_pending.has_value());
+        EP_HOST_ASSERT(topk_idx.dim() == 2);
+        EP_HOST_ASSERT(topk_idx.is_cuda() and topk_idx.is_contiguous());
+        EP_HOST_ASSERT(topk_idx.get_device() == device_index);
+        EP_HOST_ASSERT(
+            topk_idx.scalar_type() ==
+            c10::CppTypeToScalarType<topk_idx_t>::value);
+        EP_HOST_ASSERT(PyLong_CheckExact(remainder_seed.ptr()));
+        EP_HOST_ASSERT(invocation_id >= 0);
+        int expected_device = -1;
+        if (not rail_balance_hybrid_plan_process_device.compare_exchange_strong(
+                expected_device, device_index, std::memory_order_relaxed) and
+            expected_device != device_index)
+            EP_HOST_UNREACHABLE(
+                "Hybrid rail-balance planner supports one CUDA device per process");
+
+        const auto num_tokens_i64 = topk_idx.size(0);
+        const auto num_topk_i64 = topk_idx.size(1);
+        EP_HOST_ASSERT(num_tokens_i64 >= 0 and num_tokens_i64 <= INT_MAX);
+        EP_HOST_ASSERT(num_topk_i64 >= 1 and num_topk_i64 <= 32);
+        const int num_tokens = static_cast<int>(num_tokens_i64);
+        const int num_topk = static_cast<int>(num_topk_i64);
+        const int num_rails = nccl_context->num_nvl_ranks;
+        const int nvl_rank_idx = nccl_context->nvl_rank_idx;
+        EP_HOST_ASSERT(num_rails >= 2 and num_rails <= 32);
+        EP_HOST_ASSERT(nvl_rank_idx >= 0 and nvl_rank_idx < num_rails);
+        EP_HOST_ASSERT(nccl_context->is_scaleup_nvlink);
+        EP_HOST_ASSERT(nccl_context->num_scaleup_ranks == num_rails);
+        EP_HOST_ASSERT(
+            static_cast<int>(nccl_context->nvl_window_ptrs.size()) ==
+            num_rails);
+        EP_HOST_ASSERT(num_channels >= 1 and
+                       num_channels <= rail_balance::kNumHybridMaxChannels);
+        EP_HOST_ASSERT(num_max_tokens_per_rank > 0);
+        EP_HOST_ASSERT(num_tokens <= num_max_tokens_per_rank);
+        EP_HOST_ASSERT(num_experts > 0);
+        EP_HOST_ASSERT(num_scaleout_ranks >= 2 and
+                       num_scaleout_ranks <= 32 and
+                       num_scaleout_ranks <= num_topk);
+        EP_HOST_ASSERT(local_scaleout_rank >= 0 and
+                       local_scaleout_rank < num_scaleout_ranks);
+        EP_HOST_ASSERT(proxy_capacity_per_egress > 0);
+        EP_HOST_ASSERT(
+            num_experts % (num_scaleout_ranks * num_rails) == 0);
+        EP_HOST_ASSERT(
+            static_cast<int64_t>(num_rails) * num_scaleout_ranks *
+                num_max_tokens_per_rank <= INT_MAX);
+
+        const int64_t remainder_seed_i64 = remainder_seed.cast<int64_t>();
+        EP_HOST_ASSERT(remainder_seed_i64 >= 0);
+        const int normalized_remainder_seed = static_cast<int>(
+            remainder_seed_i64 % num_rails);
+
+        // The force arena is an aligned tail of the symmetric GPU buffer. Its
+        // offset is relative to ElasticBuffer::buffer, never to workspace.
+        EP_HOST_ASSERT(arena_offset >= 0 and
+                       arena_offset %
+                           rail_balance::kNumHybridBufferAlignmentBytes == 0);
+        EP_HOST_ASSERT(arena_offset <= num_gpu_buffer_bytes);
+        auto* arena = math::advance_ptr(buffer, arena_offset);
+        const auto arena_layout = rail_balance::HybridArenaLayout(
+            hidden, num_topk, proxy_capacity_per_egress, arena);
+        EP_HOST_ASSERT(arena_layout.arena_bytes <=
+                       num_gpu_buffer_bytes - arena_offset);
+
+        const c10::cuda::CUDAGuard device_guard(topk_idx.device());
+        const auto compute_stream = at::cuda::getCurrentCUDAStream(device_index);
+        const auto int_options = topk_idx.options().dtype(torch::kInt);
+
+        // Allocate every Gate #2 output and build all four cubins before the
+        // first arena store. Cold JIT/allocation failures therefore remain on
+        // the noncollective side of WORLD Gate #1.
+        auto outputs = allocate_rail_balance_hybrid_plan_outputs(
+            int_options, num_rails, num_channels, num_scaleout_ranks);
+        auto prepared = prepare_rail_balance_hybrid_plan();
+        auto local_barrier = prepare_rail_balance_hybrid_local_barrier(
+            num_rails, num_gpu_timeout_cycles);
+
+        // topk_idx and the zeros/full tensor initializers above belong to the
+        // caller's current stream. Count and all later B2 work use comm_stream.
+        if (comm_stream.id() != compute_stream.id())
+            stream_wait(comm_stream, compute_stream);
+
+        auto* local_channel_count = arena_layout.get_channel_count_ptr();
+        launch_prepared_rail_balance_hybrid_count(
+            prepared, topk_idx.data_ptr<topk_idx_t>(),
+            local_channel_count, outputs.status.data_ptr<int>(),
+            1, num_tokens, num_topk, num_channels,
+            num_experts, num_scaleout_ranks,
+            local_scaleout_rank, comm_stream);
+
+        int host_status = 0;
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            &host_status, outputs.status.data_ptr<int>(), sizeof(host_status),
+            cudaMemcpyDeviceToHost, comm_stream));
+        CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
+        EP_HOST_ASSERT(host_status == 0 or host_status == 2 or
+                       host_status == 3);
+        if (host_status != 0)
+            return host_status;
+
+        rail_balance_hybrid_plan_pending.emplace(
+            RailBalanceHybridPlanPending{
+                .invocation_id = invocation_id,
+                .finished = false,
+                .num_rails = num_rails,
+                .num_channels = num_channels,
+                .num_destinations = num_scaleout_ranks,
+                .num_max_tokens_per_rank = num_max_tokens_per_rank,
+                .proxy_capacity_per_egress = proxy_capacity_per_egress,
+                .normalized_remainder_seed = normalized_remainder_seed,
+                .local_channel_count = local_channel_count,
+                .prepared = std::move(prepared),
+                .local_barrier = std::move(local_barrier),
+                .outputs = std::move(outputs),
+            });
+        return 0;
+    }
+
+    RailBalanceHybridPlanTensors rail_balance_hybrid_plan_finish(
+        const int& invocation_id) {
+        EP_HOST_ASSERT(not destroyed);
+        EP_HOST_ASSERT(rail_balance_hybrid_plan_pending.has_value());
+        auto& pending = rail_balance_hybrid_plan_pending.value();
+        EP_HOST_ASSERT(pending.invocation_id == invocation_id);
+        if (pending.finished)
+            return pending.outputs.as_tuple();
+
+        const c10::cuda::CUDAGuard device_guard(device_index);
+        // WORLD Gate #1 is owned by Python. Once it succeeds, every local rank
+        // consumes exactly one monotonic legacy-workspace barrier epoch.
+        launch_prepared_rail_balance_hybrid_local_barrier(
+            pending.local_barrier,
+            nccl_context->dev_comm, nccl_context->window,
+            workspace,
+            pending.num_rails, nccl_context->nvl_rank_idx,
+            num_gpu_timeout_cycles, comm_stream);
+
+        const int64_t active_count_values =
+            static_cast<int64_t>(pending.num_channels) *
+            pending.num_destinations;
+        EP_HOST_ASSERT(active_count_values > 0 and
+                       active_count_values <= INT_MAX);
+        const auto active_count_bytes = static_cast<size_t>(
+            active_count_values * sizeof(int));
+        auto* snapshot = pending.outputs.channel_count.data_ptr<int>();
+        for (int lsa_owner = 0; lsa_owner < pending.num_rails; ++lsa_owner) {
+            const auto* peer_count = static_cast<const int*>(
+                nccl_context->get_sym_ptr(
+                    pending.local_channel_count, lsa_owner));
+            CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+                snapshot + lsa_owner * active_count_values,
+                peer_count, active_count_bytes,
+                cudaMemcpyDeviceToDevice, comm_stream));
+        }
+
+        launch_prepared_rail_balance_hybrid_plan(
+            pending.prepared,
+            pending.outputs.channel_count.data_ptr<int>(),
+            pending.outputs.count.data_ptr<int>(),
+            pending.outputs.quota.data_ptr<int>(),
+            pending.outputs.keep_count.data_ptr<int>(),
+            pending.outputs.segments.data_ptr<int>(),
+            pending.outputs.num_segments.data_ptr<int>(),
+            pending.num_rails, pending.num_channels,
+            pending.num_destinations,
+            pending.normalized_remainder_seed, comm_stream);
+        launch_prepared_rail_balance_hybrid_prefix(
+            pending.prepared,
+            pending.outputs.channel_count.data_ptr<int>(),
+            pending.outputs.quota.data_ptr<int>(),
+            pending.outputs.keep_count.data_ptr<int>(),
+            pending.outputs.owner_channel_prefix.data_ptr<int>(),
+            pending.outputs.retained.data_ptr<int>(),
+            pending.outputs.moved.data_ptr<int>(),
+            pending.outputs.moved_channel_prefix.data_ptr<int>(),
+            pending.outputs.group_prefix.data_ptr<int>(),
+            pending.outputs.proxy_required.data_ptr<int>(),
+            pending.outputs.moved_copies.data_ptr<int>(),
+            pending.outputs.status.data_ptr<int>(),
+            pending.num_rails, pending.num_channels,
+            pending.num_destinations,
+            pending.num_max_tokens_per_rank,
+            pending.proxy_capacity_per_egress, comm_stream);
+
+        int host_status = 0;
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            &host_status, pending.outputs.status.data_ptr<int>(),
+            sizeof(host_status), cudaMemcpyDeviceToHost, comm_stream));
+        CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
+        EP_HOST_ASSERT(host_status == 0 or host_status == 1);
+        pending.finished = true;
+        return pending.outputs.as_tuple();
+    }
+
+    void rail_balance_hybrid_plan_abort(const int& invocation_id) {
+        // Idempotent and transaction-specific: a stale abort may not clear a
+        // newer owner. In particular, never reset the shared legacy barrier
+        // workspace; its phase is monotonic across all EP operations.
+        if (rail_balance_hybrid_plan_pending.has_value() and
+            rail_balance_hybrid_plan_pending->invocation_id == invocation_id)
+            rail_balance_hybrid_plan_pending.reset();
     }
 
     static std::tuple<int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t>
@@ -2955,6 +3180,28 @@ static void register_apis(pybind11::module_& m) {
         .def("get_comm_stream", &ElasticBuffer::get_comm_stream)
         .def("get_physical_domain_size", &ElasticBuffer::get_physical_domain_size)
         .def("get_logical_domain_size", &ElasticBuffer::get_logical_domain_size)
+        .def(
+            "_rail_balance_hybrid_plan_prepare",
+            &ElasticBuffer::rail_balance_hybrid_plan_prepare,
+            pybind11::arg("topk_idx"),
+            pybind11::arg("hidden"),
+            pybind11::arg("num_channels"),
+            pybind11::arg("num_max_tokens_per_rank"),
+            pybind11::arg("num_experts"),
+            pybind11::arg("num_scaleout_ranks"),
+            pybind11::arg("local_scaleout_rank"),
+            pybind11::arg("proxy_capacity_per_egress"),
+            pybind11::arg("arena_offset"),
+            pybind11::arg("invocation_id"),
+            pybind11::arg("remainder_seed") = pybind11::int_(0))
+        .def(
+            "_rail_balance_hybrid_plan_finish",
+            &ElasticBuffer::rail_balance_hybrid_plan_finish,
+            pybind11::arg("invocation_id"))
+        .def(
+            "_rail_balance_hybrid_plan_abort",
+            &ElasticBuffer::rail_balance_hybrid_plan_abort,
+            pybind11::arg("invocation_id"))
         .def("_rail_balance_source_shuffle", &ElasticBuffer::rail_balance_source_shuffle)
         .def("_rail_balance_source_shuffle_protocol",
              &ElasticBuffer::rail_balance_source_shuffle_protocol)

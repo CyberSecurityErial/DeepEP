@@ -283,7 +283,11 @@ void rail_balance_hybrid_count_impl(
     if (lane < num_destinations) {
         const auto output_offset = rail_balance::hybrid_plan_detail::gcd_offset(
             owner, channel, lane, num_channels, num_destinations);
-        channel_count[output_offset] = destination_count;
+        // B1 writes ordinary CUDA memory, while B2 points this output at an
+        // LSA-visible symmetric arena. Publish each compact count with system
+        // release semantics so the following local-team barrier can establish
+        // visibility before peers gather their snapshots.
+        ptx::st_release_sys(channel_count + output_offset, destination_count);
     }
 }
 

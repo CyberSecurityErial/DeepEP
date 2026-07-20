@@ -5,6 +5,8 @@
 #include <tuple>
 
 #include <c10/cuda/CUDAGuard.h>
+#include <nccl.h>
+#include <nccl_device.h>
 #include <torch/python.h>
 
 #include <deep_ep/common/compiled.cuh>
@@ -175,10 +177,171 @@ static void __instantiate_kernel() {
     }
 };
 
+// Force-v1 count exchange is local to one physical LSA team even in a real
+// multi-node Hybrid job. This runtime deliberately specializes the existing
+// barrier implementation as synthetic (scaleout=1, scaleup=G); using the
+// actual Hybrid topology here would also enter Rail.
+class RailBalanceHybridLocalBarrierRuntime final:
+    public jit::LaunchRuntime<RailBalanceHybridLocalBarrierRuntime> {
+public:
+    struct Args {
+        int num_rails;
+        int64_t num_timeout_cycles;
+        jit::NoRefPtr nccl_dev_comm;
+        ncclWindow_t nccl_window;
+        void* workspace;
+        int nvl_rank_idx;
+        jit::LaunchArgs launch_args;
+    };
+
+    static std::string generate_impl(const Args& args) {
+        return fmt::format(R"(
+#include <deep_ep/impls/barrier.cuh>
+
+using namespace deep_ep::elastic;
+
+static void __instantiate_kernel() {{
+    auto ptr = reinterpret_cast<void*>(
+        &barrier_impl<true, 1, 512, 1, {}, {}, true>);
+}}
+)", args.num_rails, args.num_timeout_cycles);
+    }
+
+    static void launch_impl(const jit::KernelHandle& kernel,
+                            const jit::LaunchConfigHandle& config,
+                            Args args) {
+        EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(
+            kernel, config,
+            args.nccl_dev_comm, args.nccl_window, args.workspace,
+            0, args.nvl_rank_idx));
+    }
+};
+
+static std::shared_ptr<jit::KernelRuntime>
+prepare_rail_balance_hybrid_local_barrier(
+    const int& num_rails,
+    const int64_t& num_timeout_cycles) {
+    const RailBalanceHybridLocalBarrierRuntime::Args args = {
+        .num_rails = num_rails,
+        .num_timeout_cycles = num_timeout_cycles,
+        .nccl_dev_comm = {nullptr},
+        .nccl_window = nullptr,
+        .workspace = nullptr,
+        .nvl_rank_idx = 0,
+        .launch_args = jit::LaunchArgs(1, 512, 0, 1, true),
+    };
+    return jit::compiler->build(
+        fmt::format(
+            "rail_balance_hybrid_local_barrier_g{}_t{}_v1",
+            num_rails, num_timeout_cycles),
+        RailBalanceHybridLocalBarrierRuntime::generate(args));
+}
+
+static void launch_prepared_rail_balance_hybrid_local_barrier(
+    const std::shared_ptr<jit::KernelRuntime>& prepared,
+    const jit::NoRefPtr& nccl_dev_comm,
+    const ncclWindow_t& nccl_window,
+    void* workspace,
+    const int& num_rails,
+    const int& nvl_rank_idx,
+    const int64_t& num_timeout_cycles,
+    const at::cuda::CUDAStream& stream) {
+    const RailBalanceHybridLocalBarrierRuntime::Args args = {
+        .num_rails = num_rails,
+        .num_timeout_cycles = num_timeout_cycles,
+        .nccl_dev_comm = nccl_dev_comm,
+        .nccl_window = nccl_window,
+        .workspace = workspace,
+        .nvl_rank_idx = nvl_rank_idx,
+        .launch_args = jit::LaunchArgs(1, 512, 0, 1, true),
+    };
+    RailBalanceHybridLocalBarrierRuntime::launch(prepared, args, stream);
+}
+
 struct PreparedRailBalanceHybridPlan {
     std::shared_ptr<jit::KernelRuntime> count;
     std::shared_ptr<jit::KernelRuntime> plan;
     std::shared_ptr<jit::KernelRuntime> prefix;
+};
+
+// Named storage keeps the production-shaped two-phase transaction readable;
+// as_tuple() preserves the exact private B1 14-tensor ABI.
+struct RailBalanceHybridPlanOutputs {
+    torch::Tensor channel_count;
+    torch::Tensor count;
+    torch::Tensor quota;
+    torch::Tensor keep_count;
+    torch::Tensor segments;
+    torch::Tensor num_segments;
+    torch::Tensor owner_channel_prefix;
+    torch::Tensor retained;
+    torch::Tensor moved;
+    torch::Tensor moved_channel_prefix;
+    torch::Tensor group_prefix;
+    torch::Tensor proxy_required;
+    torch::Tensor moved_copies;
+    torch::Tensor status;
+
+    RailBalanceHybridPlanTensors as_tuple() const {
+        return {
+            channel_count, count, quota, keep_count,
+            segments, num_segments, owner_channel_prefix,
+            retained, moved, moved_channel_prefix, group_prefix,
+            proxy_required, moved_copies, status,
+        };
+    }
+};
+
+static RailBalanceHybridPlanOutputs allocate_rail_balance_hybrid_plan_outputs(
+    const torch::TensorOptions& int_options,
+    const int& num_rails,
+    const int& num_channels,
+    const int& num_destinations) {
+    return {
+        .channel_count = torch::empty(
+            {num_rails, num_channels, num_destinations}, int_options),
+        .count = torch::empty(
+            {num_rails, num_destinations}, int_options),
+        .quota = torch::empty(
+            {num_rails, num_destinations}, int_options),
+        .keep_count = torch::empty(
+            {num_rails, num_destinations}, int_options),
+        .segments = torch::full(
+            {num_destinations, num_rails - 1, 5}, -1, int_options),
+        .num_segments = torch::empty(
+            {num_destinations}, int_options),
+        .owner_channel_prefix = torch::empty(
+            {num_rails, num_channels, num_destinations}, int_options),
+        .retained = torch::empty(
+            {num_rails, num_channels, num_destinations}, int_options),
+        .moved = torch::empty(
+            {num_rails, num_channels, num_destinations}, int_options),
+        .moved_channel_prefix = torch::empty(
+            {num_rails, num_destinations, num_channels + 1}, int_options),
+        .group_prefix = torch::empty(
+            {num_rails, num_channels, num_destinations}, int_options),
+        .proxy_required = torch::empty({num_rails}, int_options),
+        .moved_copies = torch::zeros({1}, int_options),
+        .status = torch::zeros({1}, int_options),
+    };
+}
+
+// One private prepare may be live per ElasticBuffer. PLAN_READY remains live
+// across the caller's Gate #2 and is released only by the explicit abort for
+// now; C080's source-shuffle commit will own the next state transition.
+struct RailBalanceHybridPlanPending {
+    int invocation_id;
+    bool finished;
+    int num_rails;
+    int num_channels;
+    int num_destinations;
+    int num_max_tokens_per_rank;
+    int proxy_capacity_per_egress;
+    int normalized_remainder_seed;
+    int* local_channel_count;
+    PreparedRailBalanceHybridPlan prepared;
+    std::shared_ptr<jit::KernelRuntime> local_barrier;
+    RailBalanceHybridPlanOutputs outputs;
 };
 
 static PreparedRailBalanceHybridPlan prepare_rail_balance_hybrid_plan() {
