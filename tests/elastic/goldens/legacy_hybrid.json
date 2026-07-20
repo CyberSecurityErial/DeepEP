@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "captured_commit": "cdac8a3fe218a2c62a1d21aed04c467fff7b65b1",
+  "captured_date_utc": "2026-07-20",
+  "purpose": "C080 default-off and legacy Hybrid JIT identity before rail-balance integration",
+  "immutable_sha256": {
+    "csrc/kernels/elastic/dispatch.hpp": "0913a5e4978ba5d83dd3bce887019573425e1f595e07b941135c79e330d368b7",
+    "csrc/kernels/elastic/combine.hpp": "87355c85fc148641b3a6ce3ef76b64ebcaca38d866d93bf138f502582448cbc5",
+    "deep_ep/include/deep_ep/impls/dispatch.cuh": "6f648ca69d50faf3fc8a2d2dcf736d458e0744f7b84d5a339303784af633e5f5",
+    "deep_ep/include/deep_ep/impls/hybrid_dispatch.cuh": "6e1e5c447244768780b86bee12d771375eb34ec330e9b29f1e982e1868278933",
+    "deep_ep/include/deep_ep/impls/combine.cuh": "b41eb3be63feacd521bc69a0377f1b96a263f6e9556e21ab3290d8b9bb76e28a",
+    "deep_ep/include/deep_ep/impls/hybrid_combine.cuh": "4fb979794c2e9b471ae48365febe3a494b5a6b2616c9da71976eb0aecb517785",
+    "deep_ep/include/deep_ep/impls/dispatch_copy_epilogue.cuh": "b084e71b518a9adc58a0e66d5ea80e5172c369d045d3fbc327fe90e1e5df56ac",
+    "deep_ep/include/deep_ep/impls/combine_reduce_epilogue.cuh": "32417d8e07f480202f51b0bcc3f28c480e7384fc2f087089f759790e84a108c6",
+    "deep_ep/include/deep_ep/impls/combine_utils.cuh": "1a9e35956e7f0978bd84ad6a5f571cc58ded7c763cd2e598e7b5a3262cb3d916",
+    "deep_ep/include/deep_ep/common/comm.cuh": "a2c7337c5c6dcaed0e57ba7776c0788202b0814142ed92b0ba5060bb4f45ae32",
+    "deep_ep/include/deep_ep/common/handle.cuh": "a7e28051378fbd8d6af2398fdfa4a892083c6f5bca9a7b2a309a03ada97d3f32",
+    "deep_ep/include/deep_ep/common/exception.cuh": "489616d28c7eaf2d7a6619841fd722da5570ec91d709cb386d2a1d6f086b0e7a",
+    "deep_ep/include/deep_ep/common/ptx.cuh": "2fe3a40b4662e14877bade6c8df9682f2e351a334e863acbf8be4eff817bd1ac",
+    "deep_ep/include/deep_ep/common/compiled.cuh": "d048d85a6a2cd4650c6e92fa1cfaa8cf2309c2d586778493377bfe3e40d79799",
+    "deep_ep/include/deep_ep/common/layout.cuh": "773cb68bff98dc0a91ec7113e7a7fc9a456b55dcb44b9cf52e2d62c08578b3b1",
+    "deep_ep/include/deep_ep/common/math.cuh": "e4597f9997face4af569a6736786085a41a601851801814a25d41623f0e5d335"
+  },
+  "recursive_include_hash": {
+    "deep_ep/impls/dispatch.cuh": "4d4d2d080b0665e6a4f593ed92c569d2",
+    "deep_ep/impls/hybrid_dispatch.cuh": "e1da72044d061caa416d7909ee03e6d6",
+    "deep_ep/impls/combine.cuh": "806481bdc52de5448fe5654ba0452577",
+    "deep_ep/impls/hybrid_combine.cuh": "773d8a97e077bf73b5080ddca11d2448",
+    "deep_ep/impls/dispatch_copy_epilogue.cuh": "7aa89586d0a1c62cc746621b51a28b59",
+    "deep_ep/impls/combine_reduce_epilogue.cuh": "10d0f768a9ed98336ac35e33db0e801f"
+  },
+  "canonical_layout": {
+    "hidden": 7168,
+    "num_topk": 8,
+    "num_max_tokens_per_rank": 8192,
+    "bf16_dispatch_token_bytes": 14464,
+    "combine_token_bytes": 14400,
+    "buffer_num_max_channels": 1280,
+    "workspace_num_max_channels": 1024,
+    "workspace_raw_bytes": 12820528,
+    "workspace_aligned_bytes": 14680064,
+    "cases": {
+      "num_scaleout_1_num_scaleup_8_nvlink": {
+        "dispatch_bytes": 947912704,
+        "combine_bytes": 943718400,
+        "aligned_max_bytes": 947912704
+      },
+      "num_scaleout_2_num_scaleup_4": {
+        "dispatch_bytes": 1340407808,
+        "combine_bytes": 1452441600,
+        "aligned_max_bytes": 1453326336
+      },
+      "num_scaleout_4_num_scaleup_2": {
+        "dispatch_bytes": 1614413824,
+        "combine_bytes": 1961164800,
+        "aligned_max_bytes": 1962934272
+      }
+    }
+  }
+}

@@ -1233,3 +1233,279 @@ checkpoint even though repository commit identity is still unset.
 Decision: mark C070 `PASS` for the minimum trusted-snapshot replay proof. Move
 to C080 optional Hybrid integration with default off; do not claim that full
 public cached/expanded/backward semantics are complete.
+
+## 2026-07-20 — D020: C080 read-only Hybrid integration audit and plan freeze
+
+### Repository state restored
+
+- Resumed `feat/rail-balance-prototype` at
+  `cdac8a3fe218a2c62a1d21aed04c467fff7b65b1`, tracking the fork branch with a
+  clean worktree.
+- Re-read the C070 handoff, remaining Medium, checkpoint table, and architecture
+  decisions O011-O012 before inspecting C080 code anchors.
+- No Hybrid source file was edited during the audit.
+
+### Dispatch audit
+
+- The existing Hybrid source warp assigns destination slots dynamically within
+  each channel and sends with the current GPU's Rail Gin context. Changing the
+  destination pointer cannot select another local rail.
+- The destination forwarder consumes dense channel prefixes. Retained and
+  moved traffic therefore need a single static remote-slot namespace; separate
+  prefixes would collide or expose holes.
+- C030 stops at quota/segments. C040-C070 receive a CPU/test-generated per-copy
+  manifest. The missing production stage is a GPU materializer from real
+  `topk_idx` through destination dedup and channel counts to static egress,
+  channel, remote-slot, and proxy-slot assignments.
+- A channel-major owner ordinal matches the existing one-warp-per-channel token
+  walk and avoids a cross-channel data-path atomic.
+
+### Combine audit
+
+- Existing Hybrid combine derives source rail and receive slot from
+  `src_token_global_idx`; it assumes the dispatch egress rail is the original
+  owner's local rank.
+- A moved copy returns along the proxy egress rail. Different owners can share
+  the same local token index, so `src_token_idx` is not a valid proxy namespace.
+- Force metadata needs a unique per-destination-copy proxy slot plus egress
+  identity. Moved results first land on the source egress, then a standalone
+  LSA unshuffle writes the original owner's existing reduction row before the
+  existing epilogue.
+- Proxy fields cannot be appended to `recv_src_metadata`, whose later columns
+  have expanded-layout meaning. A force-only TokenLayout and forward-metadata
+  shape are required.
+
+### JIT/default-off audit
+
+- `LaunchRuntime` caches one transitive include hash per derived runtime, while
+  the compiler key includes generated source and those include hashes.
+- Modifying the old Hybrid headers, `common/layout.cuh`, or sharing the old
+  runtime would change default-off cache identity. C080 will add independent
+  force headers/runtimes and will leave the old transitive JIT inputs unchanged.
+- Force-only symmetric storage will be appended after the aligned legacy
+  dispatch/combine maximum. Expanding `WorkspaceLayout` would shift old offsets
+  and is rejected.
+- A follow-up baseline audit expanded the immutable old-Hybrid closure to
+  include `combine_utils.cuh` and common comm/handle/exception/ptx/compiled/
+  layout/math headers. Hashing only the two root kernels and `layout.cuh` would
+  miss real cache-key changes.
+- `LaunchRuntime` keeps one static include hash per derived runtime. Calling its
+  public `generate()` with synthetic Hybrid args and then generating a direct
+  kernel in the same process would reuse the wrong first hash. C080-A probes
+  must use `generate_impl()` plus explicit include parsing or isolated
+  subprocesses.
+
+### Topology/evidence boundary
+
+- This node's real logical topology has one scaleout rank, so the launcher does
+  not select Hybrid. Faking scaleout ranks would also fake Rail teams, barrier
+  teams, and rank decoding.
+- Local evidence will be reported separately as default-off regression, vnode
+  shared-core functionality, and synthetic Hybrid code generation. Real Hybrid
+  runtime remains pending until a multi-node Rail environment is available.
+
+### Frozen scope and decision
+
+- First mode: constructor-fixed `off|force`, default `off`; `auto` deferred.
+- First force matrix: BF16, non-expanded, non-cached, non-deterministic,
+  synchronous, exact copy-level, one-shot slots, one reduction configuration.
+- `force` capacity exhaustion is a collective error before publication; it does
+  not silently fallback.
+- Two-phase preflight is mandatory: all-rank prepare, GPU plan without
+  publication, then all-rank commit before any payload/ready/tail exposure.
+- The detailed sequence and stop conditions are frozen in `C080_PLAN.md`.
+
+Decision: begin C080-A only after this plan passes diff/consistency review.
+
+### Resource release authorized by the user
+
+- Four GPU processes were positively identified as children of Megatron
+  `torchrun` PID 755241, running
+  `records/track_3_optimization/train_gpt_layer_cosine.py` from the
+  `megatron-lm-gpu` environment on GPUs 0-3.
+- After explicit user authorization, sent SIGTERM to the torchrun parent. Its
+  four workers, inductor workers, and W&B core exited; the one orphaned W&B XPU
+  helper from the same process tree was also terminated.
+- No file or checkpoint was deleted. Final `nvidia-smi` showed all eight GPUs at
+  0 MiB allocated and 0% utilization, enabling correctness and controlled local
+  performance work.
+
+### Goal activation and expanded local exit condition
+
+- Activated a persistent Goal for C080 with no token budget. The user clarified
+  that local completion must go beyond the first functional path: exhaust local
+  correctness/fault/sanitizer coverage, optimize all locally observable
+  kernels while GPUs are idle, and prepare the fastest possible multi-node
+  bring-up package.
+- C080 local closure therefore feeds C090, C100, and C105 before the Goal can be
+  considered complete. Real Gin/QP/NIC/fabric behavior remains an explicit
+  environment gate rather than a hidden blocker.
+
+### Independent plan review: blocker and corrections
+
+The first C080 plan review reported one Blocker, five High, and several Medium
+findings. No constructor or Hybrid source implementation had started.
+
+- Blocker: adding proxy fields to the transported TokenLayout would also require
+  a force-only buffer calculator and dispatch copy epilogue. Two `int32` fields
+  can cross alignment boundaries (including top-k 10 and 21), so padding cannot
+  be assumed. Resolution: preserve legacy TokenLayout bytes and carry the key
+  in a registered same-slot route sidecar consumed by the new forwarder.
+- Added an executable `IDLE -> PREPARING -> DISPATCH_RUNNING -> DISPATCH_LIVE ->
+  COMBINE_RUNNING -> IDLE` state machine, with instance cookie, arena epoch,
+  one-shot handle consumption, and `POISONED` recovery after post-publication
+  failure.
+- Added a capability gate so public force remains collectively unavailable
+  until both dispatch and combine exist; partial checkpoints cannot expose a
+  half pipeline.
+- Replaced the nonexistent `async_finish` shorthand with the real Python
+  stream/event/copy flags and froze the entire first support matrix.
+- Narrowed JIT liveness claims: returned/thrown build errors enter consensus;
+  compile-only tests use a subprocess watchdog, while an OS-level compiler hang
+  is recorded as an environment failure.
+- Added focused sanitizer prerequisites, instrumentation ABI, local symmetric
+  count placement, uint64 generation/wrap behavior, objective ptxas gates, and
+  an explicit C080-H correctness versus C110 performance split.
+
+Decision: request a second independent plan review. C080-A may begin only with
+the read-only golden snapshot until that review closes.
+
+### C080-A read-only golden first attempt
+
+- Added a CPU-only golden for immutable launcher/include SHA256 values, DeepEP's
+  recursive include hash algorithm, representative direct/Hybrid buffer bytes,
+  token strides, and workspace bytes. It does not construct a fake topology or
+  call `LaunchRuntime::generate()`.
+- The first run failed immediately because the manually transcribed
+  `hybrid_combine.cuh` SHA256 had one extra character sequence (`...b5a6c...`
+  instead of `...b5a6b...`). The verifier correctly reported the observed and
+  expected path/hash before evaluating later fields.
+- Corrected only the golden transcription. This is retained as evidence that
+  the identity check fails closed rather than accepting a near-match.
+- Second plan review noted that default EP8 direct roots and both copy/reduce
+  epilogues were missing from the immutable closure. Added `dispatch.cuh`,
+  `combine.cuh`, `dispatch_copy_epilogue.cuh`, and
+  `combine_reduce_epilogue.cuh` SHA256 plus recursive include hashes before any
+  source integration change.
+
+## 2026-07-20 — D021: reject the sidecar draft and minimize force-v1
+
+The user made hot-path simplicity an explicit requirement. Before starting a
+Hybrid source edit, two independent read-only audits rechecked every proposed
+route field against the current dispatch/combine lifetime.
+
+### Verified free transit lifetime
+
+- Source Hybrid dispatch writes top-k, weights, and src_token_global_idx but
+  gives no business meaning to linked_list_idx before network transit.
+- Destination forwarding overwrites every linked-list entry before the legacy
+  copy epilogue reads it.
+- Restricted non-cached force-v1 can therefore write compact proxy slot p into
+  linked_list_idx[0], snapshot it at destination before overwrite, and add only
+  one int to force-only forward metadata.
+- Moved state and egress identity are derived: original owner local rank comes
+  from src_token_global_idx and current ingress local rank is the return rail.
+
+### Removed from the first implementation
+
+The prior 32-byte same-slot route-sidecar design was semantically viable but
+rejected before code was written. The staged force-v1 path no longer contains:
+
+    network route sidecar
+    extra route Gin put
+    per-copy descriptor
+    per-slot ready/generation
+    return header
+    full per-copy assignment table
+    ring or producer/consumer queue
+
+Proxy slots are grouped by (egress, channel, destination). Group prefix/count
+derives destination, channel, remote slot, and p. The preserved dispatch
+payload derives original owner/token during unshuffle. Force-v1 is narrowed to
+allow_multiple_reduction=true and num_scaleout_ranks<=num_topk, so the final
+legacy reduce row is the destination and no alternate lane rule or route field
+is needed.
+
+### Required synchronization retained
+
+- Source peer TMA writes complete before an LSA-team barrier; only then may the
+  force Hybrid kernel read proxy payloads.
+- Hybrid combine completes Gin flush/rail signals before return unshuffle.
+- All unshuffle peer TMA writes complete before another LSA-team barrier; only
+  then may the legacy reduce epilogue run. Per-GPU stream order alone does not
+  order writes from other local GPUs.
+
+The plan state returned from frozen to rereview while this simplification was
+checked. C080_PLAN.md has been rewritten around the minimal staged ABI. No
+Hybrid source, constructor, binding, or buffer layout has been edited yet.
+
+### Recurrent Megatron resource release
+
+The user gave standing authorization to terminate any process positively
+identified as Megatron/MGT training. A new torchrun parent PID 843160 and four
+train_gpt_layer_cosine.py workers (PIDs 843238-843241) occupied about 36 GiB on
+each of GPUs 0-3. SIGTERM was sent to the parent; its workers and helpers exited.
+No unrelated process or file was touched, and nvidia-smi then reported no
+compute process.
+
+Next: run consistency/diff checks, obtain an independent review of the rewritten
+minimal plan, then commit and push the C080-A plan/golden checkpoint before any
+source integration.
+
+## 2026-07-20 — D022: minimal-plan executable guards and off smoke
+
+- Extended the legacy Hybrid identity runner with a semantic lifetime guard:
+  source scaleout must not use linked_list_idx before transmission, destination
+  linked-list overwrite remains after the token load and before forward
+  metadata, and the legacy rank-layout selector remains ranks <= top-k.
+- The identity runner now passes 4/4 checks.
+- The existing CPU planner/invariant runner passes all 38 tests after the
+  plan rewrite.
+- The first EP8 smoke invocation omitted PYTHONPATH and failed at
+  ModuleNotFoundError before any GPU process started. This repeats a known
+  command-line pitfall and is retained.
+- Corrected command used PYTHONPATH=$PWD, EP_DISABLE_GIN=1, all eight H200s,
+  128 tokens, hidden 1024, top-k 2, 64 experts, direct mode, first case only,
+  and performance disabled. The FP8/alignment-128 dispatch/combine case exited
+  zero on all ranks.
+
+No production or Hybrid source was modified by this checkpoint.
+
+## 2026-07-20 — D023: minimal plan final review and freeze
+
+The rewritten staged plan received a final independent review. The first pass
+found no data-path architecture blocker but identified four control-contract
+gaps. All were closed before freeze:
+
+- Every round-trip kernel is generated/built and every force-internal tensor is
+  allocated before WORLD GATE #1 and the first device collective.
+- The route-validation kernel checks all expert ids without derived indexing;
+  WORLD GATE #1 precedes count/node barriers and WORLD GATE #2 precedes shuffle.
+- Combine outputs are allocated and world-consensed before the uninterrupted
+  force combine -> unshuffle -> scaleup barrier -> epilogue sequence.
+- Source shuffle does not add a second node barrier; force Hybrid dispatch
+  reuses its existing Tag0 scaleup/scaleout release-acquire barrier.
+
+A separate minimal-schedule audit then froze exact owner_channel_prefix,
+moved_channel_prefix, channel-major/destination-minor group_prefix, and resolver
+formulas. It proved sequential fill capacity and dense remote/proxy namespaces.
+It also found that C061's old token-major moved-token golden must remain a
+compatibility test while C080-B gains a new channel-major 33-copy/six-move
+golden.
+
+Final review after checked arithmetic, terminal INVALID state, debug/static
+instrumentation, and file consolidation reports:
+
+    0 Blocker
+    0 High
+    PLAN_FROZEN / IMPLEMENTATION_NOT_STARTED
+
+Executable evidence at freeze:
+
+    PASS 4/4 legacy Hybrid identity goldens
+    PASS 38/38 rail-balance planner tests
+    PASS default-off EP8 FP8/alignment-128 smoke
+
+Decision: commit and push this plan/golden checkpoint, then begin C080-A
+constructor/config/capability integration. No Hybrid source edit preceded the
+freeze.

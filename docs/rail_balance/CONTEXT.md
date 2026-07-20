@@ -8,6 +8,14 @@ that each `(source server, destination server)` pair uses the rails more evenly,
 then reuse DeepEP V2's destination-side forwarding. Combine must return through
 the selected proxy rail and unshuffle to the original owner.
 
+The active long-running Goal additionally requires exhausting the correctness,
+fault, sanitizer, concurrency, and API cases that can be tested on the local
+8xH200 node, then measuring and optimizing every locally observable planner,
+shuffle, publication, and return-unshuffle component while GPUs are idle. A
+network-ready one-command test/metrics package must minimize cluster bring-up
+time. Only Gin/QP/NIC/fabric behavior that cannot exist locally may remain for
+the network phase.
+
 ## Source context reviewed
 
 - Proposal evaluation:
@@ -138,6 +146,10 @@ No repository-local `AGENTS.md` or `CLAUDE.md` was found in the first audit.
 - Local performance tests are required when GPUs are idle/available for clean
   measurement. Timing collected while GPUs are shared is diagnostic only and
   must not be used as an optimization conclusion.
+- On 2026-07-20 the user explicitly authorized stopping GPU jobs that are
+  positively identified as Megatron/MGT after coordinating with their owner.
+  Always inspect the PID and full command first; this authorization does not
+  extend to unrelated GPU processes.
 - The first audit found no built `_C` artifact and an uninitialized `fmt`
   submodule. Build/JIT setup is therefore a real WP0 prerequisite.
 - In-place development must ensure `_C` resolves from this checkout and JIT
@@ -162,24 +174,22 @@ Out of scope until evidence expands the project:
 - asserting multi-node speedup from LSA emulation;
 - changing the default DeepEP public behavior before forced-mode correctness.
 
-## Open questions to resolve with evidence
+## Remaining questions to resolve with evidence
 
 1. Where is the narrowest internal launcher boundary that shares production
    `TokenLayout` without prematurely changing `ElasticBuffer.dispatch()`?
 2. Should plan ownership be replicated per GPU or computed by a designated
    local warp after count publication?
-3. What is the smallest collision-free proxy-slot encoding that survives
-   combine and backward replay without widening the aligned token stride for
-   common top-k shapes?
-4. Can a bounded two-egress policy approach exact per-destination balance on
+3. Can a bounded two-egress policy approach exact per-destination balance on
    real routing traces at acceptable payload duplication?
-5. What capacity fallback is simplest to prove: trim lowest-value moves,
+4. Which future `auto` capacity policy is best: trim lowest-value moves,
    balance only the heaviest `(rail,dst)` pairs, or bypass the whole plan?
-6. Which TMA/LSA ordering primitive is required for direct peer writes before a
+   Experimental `force` is already resolved as collective fail-before-publish.
+5. Which TMA/LSA ordering primitive is required for direct peer writes before a
    descriptor is made visible to the egress consumer?
-7. Which composite return key best captures
-   `(proxy_gpu, dst_server, channel, slot, generation, contribution_row)` while
-   minimizing token-stride growth?
+6. Does the selected 32-byte same-slot route sidecar remain worthwhile after
+   real Gin measurement, or should the isolated force layout later pack a
+   smaller key once all top-k alignment cases have measured evidence?
 
 ## Communication protocol terminology
 
@@ -269,3 +279,62 @@ Out of scope until evidence expands the project:
   without deadlock. Before C080 can expose this through a less trusted path,
   rank-local host validation must be converted into a cross-rank preflight
   consensus so one early throw cannot strand peers at the first barrier.
+
+## C080 frozen minimal integration context (2026-07-20)
+
+- The branch resumed cleanly at
+  `cdac8a3fe218a2c62a1d21aed04c467fff7b65b1`. C080 began with a read-only audit;
+  no Hybrid source change preceded the plan freeze.
+- The old Hybrid JIT graph is immutable for this checkpoint. In particular,
+  the complete recursive include closure rooted at `hybrid_dispatch.cuh` and
+  `hybrid_combine.cuh` (including `combine_utils.cuh` and common comm/handle/
+  exception/ptx/compiled/layout/math headers), plus the old dispatch/combine
+  JIT launchers, cannot be edited or reused by force mode. Force receives
+  independent headers, runtime classes, generated code, and cache keys so
+  default-off identity is testable.
+- The old `LaunchRuntime` caches one include hash per derived class. A baseline
+  probe must not call its public `generate()` first with synthetic Hybrid args
+  and later with direct args in the same process. Use `generate_impl()` plus an
+  explicit include parse, or an isolated one-mode subprocess.
+- The main missing production component is not quota planning. It is a GPU path
+  that starts from real `topk_idx`, deduplicates remote destination servers,
+  counts by source channel, and derives static egress/channel/remote/proxy slots.
+  The simplified plan derives these from segments and grouped prefixes instead
+  of storing a full per-copy assignment table. C040-C070 currently receive this
+  information from a test/CPU manifest.
+- Production owner ordinals will be channel-major, matching the existing
+  one-warp-per-channel Hybrid traversal. Retained and moved copies share one
+  dense remote-slot prefix; a published tail may never cross a hole.
+- The experimental API is constructor-fixed `rail_balance="off|force"`, default
+  `off`, with explicit per-rank proxy capacity. `auto`, per-call switching, and
+  cached replay are deferred. First force support is BF16, non-expanded,
+  non-deterministic, synchronous, exact-copy, one-shot, and one-in-flight.
+- Force is fail-closed: constructor configuration, invocation/JIT preparation,
+  and GPU plan/capacity status reach consensus before any payload or remote tail
+  is published. Capacity exhaustion is a collective force error; fallback
+  belongs to future `auto`.
+- The first sidecar-heavy C080 draft is rejected. In non-cached force-v1,
+  `linked_list_idx[0]` has a verified free transit lifetime and carries only
+  compact proxy slot `p`. Static `(egress,channel,destination)` group prefixes
+  remove per-copy descriptors, ready/generation values, network route sidecars,
+  and return headers. Dispatch payloads remain alive through combine so
+  unshuffle derives owner/token from `src_token_global_idx`.
+- Force-v1 requires `allow_multiple_reduction=true` and
+  `num_scaleout_ranks<=num_topk`; therefore the legacy final reduce row is
+  exactly the destination scaleout rank. This avoids an alternate top-k-lane
+  branch and extra route state.
+- A moved combine result must return to its source egress's unique proxy slot
+  and then be written over LSA to the original owner's existing reduction row.
+  `src_token_idx` alone is collision-prone, and `recv_src_metadata[:,2:]` cannot
+  hold the key because those columns already belong to expanded mode.
+- The current node is truthfully `scaleout=1`. Local C080 evidence is limited to
+  default-off regression, shared planner/LSA/vnode functionality, and synthetic
+  Hybrid code generation. A public force call must reject this topology; only
+  real multi-node Rail execution can establish Hybrid runtime correctness.
+- The authoritative implementation order, support matrix, stop conditions, and
+  evidence labels are in `C080_PLAN.md`, checkpoints C080-A through C080-H,
+  followed by C090 exhaustive local validation, C100 local optimization, and
+  C105 network-readiness packaging.
+- Standing resource authorization: when a process is positively identified as
+  Megatron/MGT training, it may be terminated without another prompt. Other GPU
+  processes remain out of scope.

@@ -36,8 +36,9 @@ expert GPU -> destination ingress -> source proxy GPU
    possible; avoid a temporary shuffle buffer followed by an HBM copy.
 7. Dispatch and combine are symmetric. Every proxy copy must carry enough route
    information to return to the original owner without slot collisions.
-8. Bound payload duplication and proxy capacity. Capacity exhaustion degrades
-   to partial balancing or the original path instead of failing correctness.
+8. Bound payload duplication and proxy capacity. In experimental `force`,
+   capacity exhaustion is a collective pre-publication error; partial balancing
+   or original-path fallback belongs to the later `auto` policy.
    Production proxy payload space is reserved in the constructor's symmetric
    communication window; dispatch-time dynamic tensors are not Gin source
    buffers.
@@ -111,9 +112,10 @@ destination, and random distributions.
 Exit gate: no lost, duplicate, misrouted, or corrupted copies for all eight
 concurrent source GPUs, including capacity boundary cases.
 
-### WP4 — One-shot proxy protocol hardening
+### WP4 — One-shot proxy protocol hardening (completed PoC evidence)
 
-- Use generation/sequence values rather than a reusable boolean-only ready flag.
+- The C050 standalone overlapping PoC uses generation/sequence values rather
+  than a reusable boolean-only ready flag.
 - Define payload publication and descriptor acquire/release ordering.
 - If readiness may be out of order, publish only a contiguous-ready tail; never
   advance a monotonic consumer tail across a hole.
@@ -140,28 +142,36 @@ FP8 and the remaining semantic matrix are unlocked in WP6.
 
 ### WP6 — Handle, replay, and training semantics
 
-- Carry the proxy key in `TokenLayout`/forward replay metadata rather than
-  appending it to `recv_src_metadata`, whose columns after index 2 are interpreted
-  as expanded-tensor slots.
-- Use a collision-free namespace containing at least proxy GPU, remote server,
-  proxy channel, slot, and generation, plus the combine contribution/layout row.
-- Extend internal metadata/`EPHandle` state with persistent plan/route
-  information; cached dispatch must replay the original decision and must not
-  rerun `auto` planning.
-- Validate normal, expanded, cached, deterministic, masked, alignment, and
-  multiple-reduction paths.
+- Keep the legacy transmitted `TokenLayout` byte-identical. In restricted
+  non-cached force-v1, carry only compact proxy slot `p` in the otherwise
+  unused transit lifetime of `linked_list_idx[0]`; destination forwarding
+  snapshots it before restoring the normal linked-list fields. Do not append
+  it to `recv_src_metadata`, whose columns after index 2 have expanded-layout
+  meaning.
+- Group `p` by `(egress, channel, destination)` so destination, channel,
+  remote slot, original owner/token, and final reduce row are derived from
+  prefixes plus the retained dispatch payload. The staged epoch barrier removes
+  per-copy descriptor, ready, route-sidecar, and return-header requirements.
+- First prove that a matching combine can consume immutable route state from
+  its non-cached dispatch. Extend cached replay only after fresh-generation
+  child-handle semantics are defined; cached dispatch must replay the original
+  decision and must not rerun `auto` planning.
+- Treat expanded, cached, deterministic, masked, alignment, and
+  multiple-reduction matrices as incremental semantic gates rather than
+  prerequisites for the first isolated Hybrid code-generation proof.
 - Exercise dispatch/combine symmetry with explicit replay tests. This repository
   does not provide an `autograd.Function`; backward coverage is an external
   integration contract and must not be inferred from `test_ep.py`.
 
-Exit gate: all existing semantics pass under both balance-off and forced-balance
-specializations.
+Exit gate: minimum non-cached BF16 dispatch/combine route replay passes; every
+unsupported semantic combination fails collectively before publication. Full
+semantic coverage remains required before production enablement.
 
 ### WP7 — Optional Hybrid integration
 
 - Add an internal JIT specialization and a compatible Python control surface,
-  initially `off|plan|force`; enable `auto` only after the cost model is
-  calibrated.
+  initially constructor-fixed `off|force`; enable `auto` only after the cost
+  model is calibrated.
 - Extend workspace/buffer sizing and JIT keys without stealing bytes from
   existing counters with incompatible lifetimes.
 - Reserve proxy payload space at buffer construction and update both dispatch
@@ -170,7 +180,12 @@ specializations.
 - Keep the original implementation bit-for-bit selectable.
 
 Exit gate: existing regression coverage passes with default `off`; forced mode
-passes virtual-hybrid correctness and capacity fallback tests.
+passes virtual-hybrid correctness, fail-closed capacity tests, and isolated
+Hybrid code generation.
+
+The detailed C080 integration sequence, supported matrix, evidence labels, and
+stop conditions live in `C080_PLAN.md`. It is rereviewed before source edits.
+Fallback remains future `auto` work.
 
 ### WP8 — Validation and performance evidence
 
@@ -185,6 +200,12 @@ passes virtual-hybrid correctness and capacity fallback tests.
 
 Exit gate: correctness and sanitizer results are clean; performance conclusions
 are tagged with the environment in which they were obtained.
+
+Before real networking, package one-command build/JIT warmup, off/force A/B
+correctness, stable JSON protocol/traffic counters, canonical skew/capacity
+cases, and explicit evidence labels. The active Goal includes exhaustive local
+validation and locally measurable operator optimization; it does not stop at
+the first Hybrid code-generation pass.
 
 ### WP9 — Production fusion and optimization
 
@@ -211,7 +232,7 @@ sum_g q[g,d] == sum_g c[g,d]
 max_g q[g,d] - min_g q[g,d] <= 1          # exact-copy policy
 moved[d] == sum_g max(c[g,d] - q[g,d], 0)
 each input destination-copy is retained or moved exactly once
-each proxy slot is unique within its generation
+each proxy slot is unique within the staged invocation
 each return route resolves to exactly one original owner/token
 retained and moved copies never collide in a remote slot
 per-channel assigned copies never exceed the current channel capacity
@@ -232,8 +253,9 @@ route dependency, and the same externally visible output as the original path.
   amplification, keep token-primary as the production candidate.
 - If source shuffle plus destination forwarding creates a larger local bottleneck
   than the projected RDMA tail saving, `auto` must bypass that workload.
-- If any GPU cannot form the same generation-aware node-wide plan before payload
-  publication, bypass the entire call; per-GPU disagreement is not a valid
+- If any GPU cannot form the same deterministic node-wide plan before payload
+  publication, fail the experimental `force` call collectively. A later `auto`
+  mode may bypass the entire call; per-GPU disagreement is never a valid
   partial plan.
 
 ## Checkpoint discipline

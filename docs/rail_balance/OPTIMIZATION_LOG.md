@@ -312,3 +312,185 @@ enter a replay/Hybrid barrier unless every peer agreed to proceed. The C070
 route corruption test intentionally mutates a field that passes safe host
 bounds and is then rejected by the device protocol; it does not replace this
 host-preflight consensus requirement.
+
+## Architecture decision O013 — isolate force from the old Hybrid JIT graph
+
+The first Hybrid integration will not add an enable template parameter to the
+existing dispatch/combine kernels and will not modify their transitive layout
+header. The compiler cache key includes generated code plus recursive DeepEP
+include hashes, and each `LaunchRuntime` derived type caches one include hash.
+Consequently, even a compile-time false branch in an edited old header would
+change the default path's cache identity.
+
+C080 will use independent rail-balance layout, dispatch, combine, launcher, and
+runtime files. `off` continues to call the original runtime directly. The
+immutable set is the complete recursive include closure, not only the two root
+kernels and `layout.cuh`; it also includes `combine_utils.cuh` and common
+comm/handle/exception/ptx/compiled/math headers. The force-only registered
+arena is appended after the aligned legacy maximum; `WorkspaceLayout` is not
+expanded. This makes unchanged default buffer bytes, old JIT source/hash, old
+kernel arguments, and old result semantics executable acceptance criteria
+rather than assumptions.
+
+Identity tooling must also avoid mutating the state it measures. The old
+`LaunchRuntime` stores one static include hash per derived class, so a process
+that first calls `generate()` for a synthetic Hybrid geometry can poison later
+direct generation. Baselines use `generate_impl()` with explicit include
+parsing, or one-mode subprocesses that exit immediately.
+
+## Architecture decision O014 — materialize production assignments on GPU
+
+C030 proves quota and segment planning, but C040-C070 receive a per-copy
+manifest built by the test oracle. Hybrid dispatch starts with `topk_idx`, so a
+production-shaped path still needs to deduplicate destinations, count by source
+channel, assign a stable owner ordinal, and materialize static egress/channel/
+remote/proxy slots.
+
+C080 makes this a separate gate before persistent-kernel work. The ordinal is
+channel-major because it matches the current scaleout warp traversal. Retained
+and moved copies share the destination forwarder's dense remote prefix; moved
+copies occupy only the remaining per-channel capacity and use compact proxy
+slots. No peer-hotspot per-copy allocation atomic is allowed.
+
+## Reliability decision O015 — force is fail-closed before publication
+
+The experimental API is constructor-fixed `off|force`. Construction performs a
+bounded configuration consensus before symmetric-window creation. Each force
+invocation then has two collective phases: prepare/JIT agreement, followed by
+plan-status/capacity commit. The planner is not allowed to publish payload or
+remote tail state.
+
+`force` is an observability mode: when a move is required it must run the new
+path. Insufficient capacity or an unsupported semantic combination produces the
+same bounded error on every rank before publication. Silent fallback and
+partial balancing are reserved for future `auto`; otherwise a test could pass
+without proving that rail balancing executed.
+
+## Evidence decision O016 — vnode, codegen, and real Hybrid are distinct
+
+The current 8xH200 node has a real `scaleout=1` logical topology. It can validate
+the GPU materializer, LSA source shuffle, proxy protocol, route persistence,
+and return-unshuffle, and it can compile synthetic 2x4/4x2 Hybrid cubins. It
+cannot truthfully execute Rail Gin teams.
+
+C080 local results must use separate labels:
+
+```text
+DEFAULT_OFF_REGRESSION_PASS
+VNODE_FUNCTIONAL_PASS
+HYBRID_CODEGEN_PASS
+REAL_HYBRID_RUNTIME_UNTESTED
+```
+
+Only a real multi-node run can replace the last label with a runtime pass. A
+single-node launcher must reject public force rather than invent scaleout ranks.
+
+## Rejected candidate O017 — preserve TokenLayout with a slot sidecar
+
+The initial plan proposed a force-specific TokenLayout containing two proxy
+fields. Independent review found that this would require a complete parallel
+dispatch buffer calculator and copy epilogue: the additional bytes cross the
+32-byte component and 128-byte metadata boundaries for some top-k values, so
+they are not reliably free padding.
+
+C080 still keeps the legacy transmitted TokenLayout byte-identical. The first
+corrected draft proposed one registered same-slot 32-byte route sidecar per
+remote copy. It was semantically valid, but a second hot-path review rejected
+it before implementation: it adds wire bytes, a second Gin request, registered
+send/receive arrays, more flush/QP pressure, and a return-header staging problem
+for data that the restricted staged path can derive.
+
+The failed draft remains recorded because it is a valid fallback if future
+cached/ring overlap removes the free metadata lifetime used by O020.
+
+## Superseded reliability draft O018 — full slot-generation state machine
+
+The sidecar/ready draft proposed instance cookies, arena epochs, uint64 slot
+generations, and a multi-state publication machine. Those mechanisms are
+appropriate for a reusable overlapping ring but redundant for force-v1's
+one-shot staged epoch. O021 replaces them with one live-handle id, two barriers,
+and one aggregate device status. The public capability still remains disabled
+until dispatch and combine both exist.
+
+## Validation decision O019 — exhaust and optimize locally before networking
+
+The active Goal includes C090 exhaustive correctness/fault/sanitizer coverage,
+C100 controlled local performance optimization, and C105 network-ready scripts
+and metrics after C080 closes locally. Shared-core planner, assignment, LSA
+shuffle, publication, and unshuffle decisions will be selected from idle
+8xH200 measurements. Gin-specific fusion is not selected from vnode timing;
+the local output is instead compiled and instrumented so real-network testing
+can begin with A/B correctness and useful counters immediately.
+
+## Hot-path decision O020 — reuse four transit bytes, not a network sidecar
+
+Source Hybrid dispatch defines top-k, weights, and src_token_global_idx but does
+not assign business meaning to the transported linked-list array. Destination
+forwarding later overwrites every linked-list entry before the existing copy
+epilogue reads it. Two independent source audits verified this exact lifetime.
+
+Restricted non-cached force-v1 therefore stores compact proxy slot p in
+linked_list_idx[0] only for moved copies. The destination forwarder derives
+moved state by comparing the original owner local rank from src_token_global_idx
+with its current ingress local rank, snapshots p before the overwrite, and adds
+one int to force-only forward metadata.
+
+Compared with O017 this removes, per moved copy:
+
+    32 route bytes on the network
+    one Gin request
+    one registered send sidecar slot
+    one registered receive sidecar slot
+    one return header and its registered staging
+
+The TokenLayout stride and legacy copy epilogue remain unchanged. The decision
+is valid only for non-cached force-v1; cached replay may require another design.
+
+## Hot-path decision O021 — grouped static epoch removes per-copy protocol
+
+Proxy slot p is contiguous within an (egress, channel, destination) group.
+Group prefix/count implies channel, destination, remote slot, and the egress
+that owns p. The retained dispatch payload kept through combine contains
+src_token_global_idx, so unshuffle also derives owner and token without a route
+table. Force-v1 restricts num_scaleout_ranks<=num_topk with multiple reduction,
+making the final reduce row equal to destination.
+
+The staged schedule is:
+
+    source shuffle and TMA completion
+    -> LSA barrier
+    -> Hybrid dispatch/forward
+    -> Hybrid combine and Gin completion
+    -> return unshuffle and TMA completion
+    -> LSA barrier
+    -> legacy reduce epilogue
+
+Because every producer completes before its consumer epoch starts, the first
+force path needs no per-slot descriptor, ready flag, generation, or return
+header. It reserves only dispatch/return payload arenas plus O(G*C*D) count and
+prefix state. If later measurement requires producer/consumer overlap, C050's
+generation protocol remains a tested candidate rather than being paid
+unconditionally now.
+
+## Hot-path decision O022 — reuse Hybrid dispatch Tag0 as the epoch barrier
+
+The first minimal draft placed a standalone scaleup barrier after source
+shuffle and then entered force Hybrid dispatch. Source audit showed that the
+legacy Hybrid dispatch already begins with Tag0, a combined scaleup/scaleout
+release-acquire barrier. With source TMA stores waited before shuffle-kernel
+completion and both kernels ordered on the same comm stream, Tag0 is the needed
+proxy epoch boundary. A separate barrier would synchronize the node twice and
+was removed before implementation.
+
+The post-unshuffle scaleup barrier is not redundant. The legacy reduce epilogue
+only has a same-GPU programmatic dependency wait and cannot observe completion
+of peer egress writes by itself.
+
+## Reliability decision O023 — allocate combine outputs before commit
+
+Legacy host flow allocates final combine outputs after launching the main
+combine. Force-v1 inserts peer return-unshuffle plus a local-team barrier, so an
+OOM in that gap could strand other local GPUs. Force combine therefore catches
+and world-consenses handle/output allocation before launching its uninterrupted
+combine -> unshuffle -> barrier -> epilogue sequence. This changes only the
+correctness-first force control path; default off retains legacy overlap.
