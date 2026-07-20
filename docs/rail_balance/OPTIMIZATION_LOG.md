@@ -556,3 +556,19 @@ padding. The initial implementation intentionally launches eight transparent
 D2D copies. Nsys must first attribute a material launch/copy gap and NCU must
 show that a replacement gather is worthwhile before introducing another
 kernel. No B2 timing is treated as performance evidence yet.
+
+## Hot-path decision O029 — stage each token once, serialize only its moved copies
+
+The manifest-free source kernel is one warp per source channel. It first
+resolves all destination copies for the current token. If none move, it performs
+no hidden load and no LSA write. If one or more move, hidden and ordinary
+metadata enter shared memory once; only the four-byte transit key changes
+between destination copies. Each key change is followed by a full TokenLayout
+TMA store/commit/wait before the key can change again.
+
+Serializing a token's moved stores is the smallest provably correct baseline:
+an asynchronous TMA may otherwise observe the next destination's key. It also
+preserves payload reuse while limiting replication exactly to the planner's
+moved-copy count. C100 will use NCU/Nsys to decide whether safe batching or
+another staging form is worthwhile; the initial implementation will not add a
+second scratch buffer or a per-copy work list without measured evidence.

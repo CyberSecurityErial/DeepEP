@@ -1813,3 +1813,44 @@ the next state-machine checkpoint:
 3. Gloo object collectives are test scaffolding and the physical topology is
    one node. They prove local barrier/snapshot convergence, not production
    fixed-tensor WORLD gates or rank-aware multi-node consensus.
+
+## 2026-07-21 — D030: C080-D direct-final shuffle implementation freeze
+
+Two independent read-only audits reduced the next shared-core slice to one
+force-only kernel. A source channel owns one warp and visits tokens in the same
+`channel, channel+C, ...` order as Hybrid dispatch. Destination lanes keep
+their own channel-local ordinals, deduplicate a token's remote servers, and call
+the existing compact `resolve_hybrid_copy`. Retained copies stay on the legacy
+path; only moved copies enter this kernel.
+
+Each moved token is staged once as the unmodified legacy BF16 dispatch
+`TokenLayout`: hidden, top-k ids, weights, original global source token, and
+linked-list scratch. For each moved destination, the kernel sets only
+`linked_list_idx[0]=p`, leaves the remaining linked-list entries at `-1`, and
+performs a complete TMA store plus wait directly into the selected egress's
+symmetric `HybridArenaLayout::proxy_dispatch[p]`. The wait precedes changing
+`p` for another destination of the same token. Normal execution has no CPU or
+GPU manifest, `ProxyDescriptor`, ready/generation state, queue, ring, route
+sidecar, or data-path atomic.
+
+The production sequence adds no standalone post-shuffle barrier. Source
+shuffle and the future force Hybrid dispatch are ordered on the same DeepEP
+communication stream, and the existing Hybrid Tag0 barrier is the cross-GPU
+visibility epoch. The isolated 8x1 verification may use one all-rank local
+barrier before readback; that barrier is test scaffolding and is not part of
+the production source-shuffle kernel.
+
+Runtime defenses still check `p < proxy_required[egress] <= Pcap`, target
+channel/remote-slot capacity, owner/egress ranges, and resolver success before
+forming a peer address. A rare error may atomically publish status; successful
+copies perform no atomic. All ranks launch the same prebuilt kernel even when
+their local N or moved count is zero. JIT build and every allocation remain on
+the pre-Gate1 side of the pending transaction.
+
+The first acceptance slice is true 8-GPU 8x1: reconstruct expected moved copies
+only in the test oracle, parse raw pure-`TokenLayout` proxy slots, and compare
+BF16 hidden bytes, FP32 weights, top-k ids, original source token, four-byte
+transit key, slot uniqueness, unused poison, and repeated reuse. Only after
+this passes will a test-only adapter feed the same descriptor-free payloads
+into the existing 4x2/2x4 functional emulator; old vnode record/protocol ABIs
+are not production dependencies.
