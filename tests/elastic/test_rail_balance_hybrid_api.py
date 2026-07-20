@@ -181,17 +181,35 @@ def test_force_capability_rejects_before_group_cuda_or_collectives():
             rail_balance='force',
             rail_balance_proxy_slots_per_rank=32))
 
-    # An old extension has no capability symbol; a partially upgraded
-    # extension may claim device support before the Python round trip exists.
-    # Both states must remain unavailable.
-    assert not elastic_module._rail_balance_force_available()
+    # A partially upgraded extension must remain unavailable while the host
+    # path is disabled, without even calling its capability symbol.
     capability_name = '_rail_balance_force_available'
     had_capability = hasattr(elastic_module._C, capability_name)
     old_capability = getattr(elastic_module._C, capability_name, None)
+    old_host_capability = elastic_module._RAIL_BALANCE_FORCE_HOST_AVAILABLE
+    called = []
     try:
+        setattr(elastic_module._C, capability_name,
+                lambda: called.append(True) or True)
+        assert not elastic_module._rail_balance_force_available()
+        assert called == []
+
+        elastic_module._RAIL_BALANCE_FORCE_HOST_AVAILABLE = True
+        delattr(elastic_module._C, capability_name)
+        assert not elastic_module._rail_balance_force_available()
+
+        setattr(elastic_module._C, capability_name, lambda: False)
+        assert not elastic_module._rail_balance_force_available()
         setattr(elastic_module._C, capability_name, lambda: True)
+        assert elastic_module._rail_balance_force_available()
+
+        def broken_capability():
+            raise RuntimeError('partial extension failure')
+
+        setattr(elastic_module._C, capability_name, broken_capability)
         assert not elastic_module._rail_balance_force_available()
     finally:
+        elastic_module._RAIL_BALANCE_FORCE_HOST_AVAILABLE = old_host_capability
         if had_capability:
             setattr(elastic_module._C, capability_name, old_capability)
         else:

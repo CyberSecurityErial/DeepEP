@@ -87,10 +87,15 @@ def _validate_rail_balance_force_constructor(
 
 def _rail_balance_force_available() -> bool:
     """Fail closed across old extensions and partial Python/C++ installations."""
+    if not _RAIL_BALANCE_FORCE_HOST_AVAILABLE:
+        return False
     compiled_capability = getattr(_C, '_rail_balance_force_available', None)
-    compiled_available = (callable(compiled_capability) and
-                          compiled_capability() is True)
-    return _RAIL_BALANCE_FORCE_HOST_AVAILABLE and compiled_available
+    if not callable(compiled_capability):
+        return False
+    try:
+        return compiled_capability() is True
+    except Exception:
+        return False
 
 
 class EPHandle:
