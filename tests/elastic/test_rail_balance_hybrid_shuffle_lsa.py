@@ -728,6 +728,10 @@ def _worker(local_rank: int, num_local_ranks: int,
     clean_shutdown = False
     try:
         cases = _assert_shuffle_oracle()
+        if args.case_name is not None:
+            cases = tuple(
+                spec for spec in cases if spec.plan.name == args.case_name)
+            assert len(cases) == 1
         layouts = []
         for spec in cases:
             layout = tuple(int(value) for value in
@@ -825,6 +829,8 @@ def _run_watchdog(arguments: argparse.Namespace) -> None:
         "--master-port", str(arguments.master_port),
         "--watchdog-seconds", str(arguments.watchdog_seconds),
     ]
+    if arguments.case_name is not None:
+        command.extend(("--case-name", arguments.case_name))
     process = subprocess.Popen(command, start_new_session=True)
     try:
         return_code = process.wait(timeout=arguments.watchdog_seconds)
@@ -854,6 +860,10 @@ def main() -> None:
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--master-port", type=int, default=29883)
     parser.add_argument("--watchdog-seconds", type=int, default=900)
+    parser.add_argument(
+        "--case-name",
+        help="run one named GPU case while retaining the full CPU oracle",
+    )
     arguments = parser.parse_args()
     if arguments.num_processes != _WORLD_SIZE:
         parser.error("C080-D requires exactly 8 processes")
@@ -862,6 +872,10 @@ def main() -> None:
 
     cases = _assert_shuffle_oracle()
     by_name = {spec.plan.name: spec for spec in cases}
+    if arguments.case_name is not None and arguments.case_name not in by_name:
+        parser.error(
+            "unknown --case-name; expected one of "
+            + ", ".join(sorted(by_name)))
     first = by_name["c061_source_shuffle_seed62"].plan
     second = by_name["c061_source_shuffle_reuse_seed63"].plan
     wide = by_name["all_owner_c1024_d32_k4"].plan
