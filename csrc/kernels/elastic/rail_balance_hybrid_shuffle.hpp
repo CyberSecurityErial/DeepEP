@@ -122,6 +122,12 @@ static void launch_prepared_rail_balance_hybrid_source_shuffle(
         hidden * sizeof(__nv_bfloat16), 0, num_topk, true);
     const int num_smem_bytes = token_layout.get_num_bytes<false>() +
         ptx::kNumTMAAlignBytes;
+    // Channel c is empty when c >= num_tokens because token traversal starts
+    // at c and advances by num_channels.  The shuffle has no device
+    // collective, so empty tail channels need no block.  Keep one block for
+    // N=0 to preserve launch/error coverage in the strict path.
+    const int num_active_channels = num_tokens <= 0 ? 1 :
+        (num_tokens < num_channels ? num_tokens : num_channels);
     const RailBalanceHybridSourceShuffleRuntime::Args args = {
         .hidden = hidden,
         .num_topk = num_topk,
@@ -151,7 +157,7 @@ static void launch_prepared_rail_balance_hybrid_source_shuffle(
         .rank_idx = rank_idx,
         .proxy_capacity = proxy_capacity,
         .launch_args = jit::LaunchArgs(
-            num_channels, 32, num_smem_bytes),
+            num_active_channels, 32, num_smem_bytes),
     };
     RailBalanceHybridSourceShuffleRuntime::launch(runtime, args, stream);
 }
