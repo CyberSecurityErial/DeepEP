@@ -541,3 +541,18 @@ This deliberately favors a transparent correctness baseline over an extra
 gather kernel. C100 will compare the copies with a batched copy or acquire-load
 gather only on idle GPUs and only if NCU/Nsys attributes meaningful time or
 visibility cost to this stage.
+
+## Reliability decision O028 — publish compact counts, keep barrier state separate
+
+The count kernel now ends each active compact count with `st.release.sys`.
+Peers do not poll those values: they first complete the existing monotonic
+NVLink barrier, then copy only `C*D*sizeof(int)` bytes from each symmetric LSA
+pointer on the same communication stream. The force arena's control header is
+never reused as barrier state; the barrier continues to use the first legacy
+workspace words whose phase protocol is already exercised by DeepEP.
+
+This adds no descriptor, ready flag, ring, per-copy atomic, or full-stride count
+padding. The initial implementation intentionally launches eight transparent
+D2D copies. Nsys must first attribute a material launch/copy gap and NCU must
+show that a replacement gather is worthwhile before introducing another
+kernel. No B2 timing is treated as performance evidence yet.

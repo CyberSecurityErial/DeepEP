@@ -1706,3 +1706,110 @@ Final independent plan review reports 0 Blocker / 0 High. Local profiling tool
 inventory is available for later controlled stages: NCU 2025.1.1, Nsys
 2024.6.2, Compute Sanitizer 2025.1, and CUDA/NVCC 12.8. No timing was taken as
 evidence during this plan checkpoint.
+
+## 2026-07-21 — D028: C080-B2 real local-LSA count snapshot
+
+The private Hybrid planner now has a production-shaped, two-phase C++
+transaction. `prepare` validates the local route, allocates all fourteen plan
+outputs, builds count/plan/prefix plus a uniquely keyed local barrier cubin,
+orders the caller stream before the communication stream, and publishes the
+compact local `[C,D]` count into the symmetric force arena. Only status zero
+creates pending state. `finish` consumes one synthetic `(scaleout=1,
+scaleup=G)` LSA barrier epoch over the legacy workspace, copies each peer's
+active prefix into local `[G,C,D]`, and runs the unchanged B1 plan/prefix.
+Matching explicit `abort` releases the pending transaction without clearing or
+rolling back the shared barrier phase. Public force capability remains false.
+
+The final count store uses system-scope release semantics. The barrier cubin is
+specialized exactly as
+`barrier_impl<true,1,512,1,8,356400000000,true>` and exports one kernel symbol.
+Arena bounds are checked before pointer arithmetic; the runtime asserts a real
+NVLink scaleup team and treats peer indices only as LSA-local ranks. All device
+work after prepare is on the DeepEP communication stream, and the final status
+copy synchronizes it before host inspection.
+
+Strict fresh-cache 8-GPU evidence:
+
+```text
+cache: /tmp/deepep-c080b2-lsa.HjWFtF
+port:  29884
+PASS C080-B2 CPU oracle: C061-like 8-rail skew, moved=21, Pcap=5/4,
+     boundary C=1024/D=32
+PASS C080-B2 local LSA plan transaction: variable/zero N, exact fourteen
+     tensors, identical eight-rank snapshot digest, reusable barrier phase,
+     Gate1 route/config abort recovery, Gate2 capacity recovery,
+     C1024/D32, int64 seed, non-default stream
+PASS independent fresh-cache rerun at /tmp/deepep-c080b2-rerun.TqGFH7,
+     port 29885
+PASS fresh-cache B1 full matrix: 69 exact CUDA cases at
+     /tmp/deepep-c080b2-b1full.HJikws
+PASS extension build, CPU/reference/API/layout/legacy gates, diff check
+```
+
+The exact accepted launch was:
+
+```bash
+EP_JIT_CACHE_DIR=/tmp/deepep-c080b2-lsa.HjWFtF \
+EP_DISABLE_GIN=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=. \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+/home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/test_rail_balance_hybrid_plan_lsa.py \
+  --timeout 180 --watchdog-seconds 900 --master-port 29884
+```
+
+### Failed attempts retained
+
+1. The first 8-GPU harness run completed the first LSA transaction and abort,
+   then its Gloo helper rejected a gathered `None`. `None` was the legitimate
+   no-error payload, not an unfilled slot. The invalid non-`None` assertion was
+   removed; the outer watchdog contained the failure and the expected explicit
+   buffer-leak warnings were limited to those aborted workers.
+2. The second run reached the exact comparison, but `init_dist()` had installed
+   the rank-local CUDA device as PyTorch's default. Oracle constructors that did
+   not name a device therefore created CUDA expected tensors. Every oracle
+   tensor now explicitly uses CPU; the next fresh-cache run passed.
+3. Bare `python` remains absent and system `python3` remains outside the verified
+   PyTorch/NCCL environment. All accepted evidence uses the pinned project
+   interpreter shown above.
+
+This checkpoint proves local LSA visibility, phase reuse, compact snapshot
+identity, and private fault convergence. It does not prove production WORLD
+gate behavior, source payload shuffle, Hybrid dispatch/combine, Gin, QP, NIC,
+fabric, or speedup. Those labels remain reserved for C080-C/D onward and the
+real multi-node gate.
+
+### Focused Compute Sanitizer evidence
+
+With all GPUs idle and no Megatron/MGT process present, Compute Sanitizer
+2025.1 ran the smallest B1 materializer matrix against fresh JIT caches:
+
+```text
+memcheck cache /tmp/deepep-c080-b2-memcheck.t0zGypsK
+  exit 0; ERROR SUMMARY: 0 errors
+synccheck cache /tmp/deepep-c080-b2-synccheck.VQZ3wIrz
+  exit 0; ERROR SUMMARY: 0 errors
+```
+
+Both runs passed six exact CUDA cases, route/seed/C1025/D33 rejection, and the
+non-default-stream case. This evidence covers the single-GPU count/plan/prefix
+kernels only. It does not validate cross-GPU system-scope ordering, the B2 LSA
+barrier, or peer D2D copies; those require a separately bounded multi-process
+tool run after the shared-core data path exists.
+
+### Independent implementation audit
+
+Final result is 0 Blocker / 0 High. Three Medium boundaries are retained for
+the next state-machine checkpoint:
+
+1. Private pending state rejects a second private prepare but does not yet gate
+   unrelated legacy dispatch/combine/barrier calls on the same `ElasticBuffer`.
+   Rank-inconsistent interleaving could advance the shared workspace phase
+   differently. The private harness is serial and public force is disabled;
+   the public transaction must install one unified buffer state machine.
+2. The true-LSA harness covers route status 2, capacity status 1, configuration
+   mismatch, and recovery, but not duplicate-route status 3, busy prepare,
+   stale abort, double finish, or a single-rank host-prepare exception. These
+   fault cases are required before C080-D/public state integration closes.
+3. Gloo object collectives are test scaffolding and the physical topology is
+   one node. They prove local barrier/snapshot convergence, not production
+   fixed-tensor WORLD gates or rank-aware multi-node consensus.

@@ -381,3 +381,14 @@ Out of scope until evidence expands the project:
   local tests may use a short-timeout Gloo control group but cannot claim that
   object exchange is the final error path. Mixed off/force construction remains
   an explicit public-enable blocker, not a private B2 blocker.
+- C080-B2 now executes that private transaction on all eight local GPUs. Each
+  rank publishes only its active `[C,D]` count prefix into the symmetric force
+  arena; the synthetic `(1,8)` barrier over the legacy workspace precedes eight
+  peer D2D snapshot copies and the unchanged B1 plan/prefix kernels. Exact
+  comparison of all fourteen outputs passes for variable/zero local N, capacity
+  failure, route/config Gate1 aborts, maximum C/D, int64 seed, non-default
+  streams, and repeated monotonic barrier phases.
+- The B2 test uses Gloo object exchange only as an explicitly private watchdog
+  and consensus oracle. It is not evidence that production WORLD Gate1/Gate2
+  exists; public `force` remains disabled until the fixed-tensor gate and the
+  dispatch/combine transaction are integrated.
