@@ -658,3 +658,25 @@ The two-buffer snapshot copies are intentionally outside this decision. They
 exist only because separate virtual communicators own separate symmetric
 windows; they are never candidates for the production data path and no Nsys or
 NCU number containing them will be reported as operator performance.
+
+## Reliability/performance decision O034 — keep strict checks outside the hot path
+
+The vnode adapter deliberately revalidates descriptor, canary, ready, route,
+dispatch metadata, contribution metadata, and every empty nonmatching lane.
+That work is too expensive for the eventual persistent Hybrid kernel, but this
+adapter is a single-node correctness oracle rather than a production path.
+Deleting its checks would weaken the exact evidence while producing no user
+performance gain, so they remain.
+
+The accepted data mapping still adds no prefix array, copy manifest, queue,
+ring, or success-path global atomic. Its only slot arithmetic is the existing
+retained prefix plus incoming moved prefix. Post-audit safety checks increased
+the H7168 pack instance from 90 to 92 registers; all four static instances
+remain spill-free. No speedup is inferred from those compiler resources.
+
+NCU/Nsys profiling is intentionally deferred until the two-buffer functional
+round trip passes and the GPUs are idle. Profiles containing the owning tensor
+copies between independent NCCL windows are evidence about test scaffolding,
+not production operator performance. Later profiling must isolate adapter,
+source shuffle, return-unshuffle, and legacy epilogue ranges and retain noisy
+or negative results in this log.

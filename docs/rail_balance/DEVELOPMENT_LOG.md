@@ -2144,3 +2144,68 @@ The only environment fact still unproved is that a newly created source NCCL
 subgroup exposes the expected `(1,G)` LSA topology on this installation. The
 first GPU harness asserts it before publication. Public force remains
 disabled.
+
+## 2026-07-21 — D035: implement and audit the two-kernel vnode adapter
+
+The frozen bridge now has concrete device and JIT wrappers. `pack_vnode_base`
+materializes retained source records and actual moved proxy-dispatch records
+into one dense old-vnode prefix per `(egress,destination)`. `return_demux`
+validates the returned base/contribution/route state, applies the existing
+`compute_topk_slots` plus `combine_reduce` semantics, and emits either a
+retained legacy-reduce seed or a moved proxy-return record. A separate private
+wrapper prepares the exact unchanged legacy combine epilogue specialization;
+`combine.hpp` remains untouched.
+
+An independent device audit initially found one High retained-path identity
+hole. The demux read `owner_token` from the vnode descriptor and validated the
+descriptor's `src_token_global_idx` against that same field. Corrupting both to
+another token in the same channel could therefore redirect a correct payload
+to the wrong reduce slot without setting status. The fix independently reads
+the base TokenLayout `src_token_global_idx` and compares it, with int64
+arithmetic, against `expected_owner*M+owner_token`. Moved records already had
+an independent proxy-dispatch identity check.
+
+The same audit found that an accidentally oversized launch grid could report
+an argument error through `status[blockIdx.x]` after the valid status extent.
+Both adapters now return without writing for an out-of-range block or extra
+warp. The real launchers still use the exact `C` and `(D-1)*M` grids. The host
+bridge must allocate and zero those two status ranges separately; it may not
+reuse the plan's one-element status tensor.
+
+Post-fix production-JIT-like non-RDC `sm_90a` compilation passed:
+
+```text
+pack  H256/K4:   REG=90,  STACK=72 B, LOCAL=0, spill=0
+pack  H7168/K8:  REG=92,  STACK=72 B, LOCAL=0, spill=0
+demux H256/K4:   REG=64,  STACK=72 B, LOCAL=0, spill=0
+demux H7168/K8:  REG=163, STACK=72 B, LOCAL=0, spill=0
+SASS: no global ATOM. or RED. instruction
+```
+
+`REDUX.OR` remains, correctly, for warp voting; it is not a global atomic and
+must not be filtered as one. The temporary static compile source was removed;
+the cubin is `/tmp/c080_vnode_post_audit.cubin`. The H7168 demux register count
+is accepted only because this is a correctness adapter outside the production
+Hybrid hot path.
+
+The remote-only CPU structural fixtures now pass 6/6 and the legacy Hybrid
+identity goldens pass 4/4. They cover 4x2 `D<=K`, 2x4 `D>K`, variable source N,
+retained/moved routes, dense old-vnode slots, p0/p1, and the highest matching
+lane. A second independent fixture audit retained two evidence gaps before GPU
+acceptance: the chosen numeric values are not yet rounding-sensitive, and all
+moved target-channel/group prefixes are still zero. Those are test gaps, not
+accepted CUDA evidence, and the next checkpoint strengthens the fixtures
+before the 8-GPU round trip.
+
+### Failed attempts retained
+
+1. A baseline command named the nonexistent
+   `tests/elastic/test_rail_balance_hybrid_jit_identity.py`; the correct legacy
+   identity test is `test_rail_balance_hybrid_legacy_golden.py` and passes.
+2. An environment-discovery snippet tried `from deep_ep import envs`, but this
+   source-tree package does not export generated build-time env metadata. The
+   static compiler instead used the pinned environment's NCCL include path.
+3. A broad SASS search for `ATOM|RED` falsely matched `REDUX.OR`. The accepted
+   check searches only global `ATOM.` and `RED.` opcodes.
+
+No GPU execution is claimed at this checkpoint. Public force remains disabled.
