@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <climits>
+#include <memory>
 #include <tuple>
 
 #include <c10/cuda/CUDAGuard.h>
@@ -17,6 +18,8 @@
 #include "../../jit/launch_runtime.hpp"
 
 namespace deep_ep::elastic {
+
+struct PreparedRailBalanceHybridCombineEpilogue;
 
 // Private C080-B1 oracle ABI.  All schedule tensors are CUDA int32 tensors;
 // the input keeps the compile-time topk_idx_t selected by EP_NUM_TOPK_IDX_BITS.
@@ -334,6 +337,7 @@ struct RailBalanceHybridPlanPending {
     bool finished;
     bool shuffled;
     bool return_unshuffle_tested;
+    bool combine_epilogue_tested;
     int plan_status;
     int num_rails;
     int num_channels;
@@ -354,6 +358,8 @@ struct RailBalanceHybridPlanPending {
     std::shared_ptr<jit::KernelRuntime> local_barrier;
     std::shared_ptr<jit::KernelRuntime> source_shuffle;
     std::shared_ptr<jit::KernelRuntime> return_unshuffle;
+    std::shared_ptr<PreparedRailBalanceHybridCombineEpilogue>
+        combine_epilogue;
     RailBalanceHybridPlanOutputs outputs;
 };
 

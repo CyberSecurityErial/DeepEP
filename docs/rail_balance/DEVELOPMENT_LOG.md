@@ -2209,3 +2209,54 @@ before the 8-GPU round trip.
    check searches only global `ATOM.` and `RED.` opcodes.
 
 No GPU execution is claimed at this checkpoint. Public force remains disabled.
+
+## 2026-07-21 — D036: preserve the legacy epilogue and strengthen its oracle
+
+The source-side test transaction now prebuilds the exact existing
+`combine_reduce_epilogue` specialization before its first arena write. After
+the proved return-unshuffle has populated the legacy reduce buffer, a private
+one-shot hook launches that same runtime with the original JIT key, generated
+template arguments, shared-memory/thread configuration, and PDL setting. It
+uses the pending original top-k ids as the epilogue's routing input and returns
+owning BF16 output plus FP32 combined weights. The public dispatch/combine API,
+default capability gates, and `combine.hpp` remain unchanged.
+
+An independent host-state audit found a pre-existing handoff hole while
+reviewing the new epilogue guard. `return_unshuffle_tested` was set before its
+committed copies and barriers, but an exception in that interval could leave
+`plan_status==0`; a caller that caught the exception could then invoke the new
+epilogue on partial data. The complete committed return interval is now inside
+a try/catch that makes `InvalidSchedule` sticky. The epilogue launch/sync has
+the same one-shot sticky failure rule, so neither partial stage can be retried
+or consumed.
+
+The CPU vnode oracle was also strengthened in commit `27dcb4c`. A full
+roundtrip now distinguishes the correct two-level legacy BF16 result `1.0`
+(`0x3f80`) from an incorrect flat three-slot result `1.0078125` (`0x3f81`).
+The 2x4 fixture now exercises target channel one, nonzero incoming moved
+prefix, nonzero group prefix, and dense proxy slots p0 through p3. Flat
+reduction remains diagnostic only; the destination reduction followed by the
+legacy epilogue is authoritative.
+
+Accepted static/CPU evidence:
+
+```text
+PASS full extension build_ext --inplace after the final sticky-state fix
+PASS C080-A private API/off checks 6/6
+PASS legacy Hybrid identity goldens 4/4
+PASS private hook is bound on deep_ep._C.ElasticBuffer
+PASS vnode CPU oracle 7/7 plus Torch BF16 bit cross-check
+PASS independent epilogue host audit: Blocker/High/Medium = 0/0/0
+```
+
+### Failed attempts retained
+
+1. A binding check incorrectly looked on `deep_ep.Buffer`, which is the legacy
+   Python wrapper and intentionally does not expose Elastic private hooks. The
+   correct object is `deep_ep._C.ElasticBuffer`; the rebuilt binding is present.
+2. An optional `python -m pytest` run failed because the pinned environment has
+   no pytest package. The dependency-free direct runner is canonical and
+   passes 7/7; this was an environment failure, not a test failure.
+
+Runtime PDL behavior for `D<=K`, `D>K`, and `N=0` remains part of the upcoming
+8-GPU bridge acceptance. Public force remains disabled.

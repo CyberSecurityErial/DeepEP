@@ -680,3 +680,18 @@ copies between independent NCCL windows are evidence about test scaffolding,
 not production operator performance. Later profiling must isolate adapter,
 source shuffle, return-unshuffle, and legacy epilogue ranges and retain noisy
 or negative results in this log.
+
+## Identity decision O035 — reuse the exact legacy epilogue cache entry
+
+The force-only source hook does not add a new reduction kernel. Its prepared
+runtime generates the same `CombineReduceEpilogueRuntime` source under the same
+`combine_reduce_epilogue` key and keeps the original rank/top-k layout choice,
+SM count, shared-memory-derived warp count, and PDL launch flag. This makes the
+single-node bridge exercise the production reduction semantics without
+forking another implementation or changing `combine.hpp`.
+
+Preparation happens once before the private transaction publishes count state;
+the committed return-to-epilogue interval performs no JIT build or allocation.
+The explicit comm-stream synchronize is correctness-test overhead and is not a
+production optimization. NCU/Nsys will profile the epilogue only after the
+full vnode loop passes; no standalone timing claim is made here.

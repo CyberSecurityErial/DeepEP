@@ -367,6 +367,11 @@ public:
             prepare_rail_balance_hybrid_source_shuffle(hidden, num_topk);
         auto return_unshuffle =
             prepare_rail_balance_hybrid_return_unshuffle(hidden, num_topk);
+        auto combine_epilogue =
+            std::make_shared<PreparedRailBalanceHybridCombineEpilogue>(
+                prepare_rail_balance_hybrid_combine_epilogue(
+                    hidden, num_max_tokens_per_rank, num_experts, num_topk,
+                    num_scaleout_ranks, num_rails));
 
         // topk_idx and the zeros/full tensor initializers above belong to the
         // caller's current stream. Count and all later B2 work use comm_stream.
@@ -397,6 +402,7 @@ public:
                 .finished = false,
                 .shuffled = false,
                 .return_unshuffle_tested = false,
+                .combine_epilogue_tested = false,
                 .plan_status = -1,
                 .num_rails = num_rails,
                 .num_channels = num_channels,
@@ -417,6 +423,7 @@ public:
                 .local_barrier = std::move(local_barrier),
                 .source_shuffle = std::move(source_shuffle),
                 .return_unshuffle = std::move(return_unshuffle),
+                .combine_epilogue = std::move(combine_epilogue),
                 .outputs = std::move(outputs),
             });
         return 0;
@@ -652,54 +659,60 @@ public:
         // replayed. Device status is deliberately not observed until both
         // local barriers have completed on every rank.
         pending.return_unshuffle_tested = true;
-        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
-            arena_layout.get_proxy_return_layout(0).get_base_ptr(),
-            proxy_return_bytes.data_ptr(),
-            static_cast<size_t>(proxy_return_num_bytes),
-            cudaMemcpyDeviceToDevice, comm_stream));
-        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
-            buffer, reduce_seed_bytes.data_ptr(),
-            static_cast<size_t>(reduce_num_bytes),
-            cudaMemcpyDeviceToDevice, comm_stream));
-
-        // B1: all local proxy-return and reduce seeds are visible before any
-        // egress starts peer writes.
-        launch_prepared_rail_balance_hybrid_local_barrier(
-            pending.local_barrier,
-            nccl_context->dev_comm, nccl_context->window,
-            workspace,
-            pending.num_rails, nccl_context->nvl_rank_idx,
-            num_gpu_timeout_cycles, comm_stream);
-
-        launch_prepared_rail_balance_hybrid_return_unshuffle(
-            pending.return_unshuffle,
-            nccl_context->dev_comm, nccl_context->window,
-            pending.arena, buffer, pending.outputs,
-            pending.hidden, pending.num_topk, pending.num_experts,
-            pending.num_destinations, pending.num_rails,
-            nccl_context->nvl_rank_idx, nccl_context->rank_idx,
-            pending.num_channels, pending.num_max_tokens_per_rank,
-            pending.proxy_capacity_per_egress, comm_stream);
-
-        // B4: even a rank whose kernel published a sticky error participates;
-        // only after this cross-GPU visibility point may any host inspect it.
-        launch_prepared_rail_balance_hybrid_local_barrier(
-            pending.local_barrier,
-            nccl_context->dev_comm, nccl_context->window,
-            workspace,
-            pending.num_rails, nccl_context->nvl_rank_idx,
-            num_gpu_timeout_cycles, comm_stream);
-
-        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
-            reduce_snapshot.data_ptr(), buffer,
-            static_cast<size_t>(reduce_num_bytes),
-            cudaMemcpyDeviceToDevice, comm_stream));
-
         int host_status = 0;
-        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
-            &host_status, pending.outputs.status.data_ptr<int>(),
-            sizeof(host_status), cudaMemcpyDeviceToHost, comm_stream));
-        CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
+        try {
+            CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+                arena_layout.get_proxy_return_layout(0).get_base_ptr(),
+                proxy_return_bytes.data_ptr(),
+                static_cast<size_t>(proxy_return_num_bytes),
+                cudaMemcpyDeviceToDevice, comm_stream));
+            CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+                buffer, reduce_seed_bytes.data_ptr(),
+                static_cast<size_t>(reduce_num_bytes),
+                cudaMemcpyDeviceToDevice, comm_stream));
+
+            // B1: all local proxy-return and reduce seeds are visible before
+            // any egress starts peer writes.
+            launch_prepared_rail_balance_hybrid_local_barrier(
+                pending.local_barrier,
+                nccl_context->dev_comm, nccl_context->window,
+                workspace,
+                pending.num_rails, nccl_context->nvl_rank_idx,
+                num_gpu_timeout_cycles, comm_stream);
+
+            launch_prepared_rail_balance_hybrid_return_unshuffle(
+                pending.return_unshuffle,
+                nccl_context->dev_comm, nccl_context->window,
+                pending.arena, buffer, pending.outputs,
+                pending.hidden, pending.num_topk, pending.num_experts,
+                pending.num_destinations, pending.num_rails,
+                nccl_context->nvl_rank_idx, nccl_context->rank_idx,
+                pending.num_channels, pending.num_max_tokens_per_rank,
+                pending.proxy_capacity_per_egress, comm_stream);
+
+            // B4: even a rank whose kernel published a sticky error
+            // participates; only after this cross-GPU visibility point may
+            // any host inspect it.
+            launch_prepared_rail_balance_hybrid_local_barrier(
+                pending.local_barrier,
+                nccl_context->dev_comm, nccl_context->window,
+                workspace,
+                pending.num_rails, nccl_context->nvl_rank_idx,
+                num_gpu_timeout_cycles, comm_stream);
+
+            CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+                reduce_snapshot.data_ptr(), buffer,
+                static_cast<size_t>(reduce_num_bytes),
+                cudaMemcpyDeviceToDevice, comm_stream));
+            CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+                &host_status, pending.outputs.status.data_ptr<int>(),
+                sizeof(host_status), cudaMemcpyDeviceToHost, comm_stream));
+            CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
+        } catch (...) {
+            pending.plan_status = static_cast<int>(
+                rail_balance::HybridPlanError::InvalidSchedule);
+            throw;
+        }
         if (host_status != 0 and host_status != 1 and host_status != 2 and
             host_status != 3 and host_status != 4) {
             pending.plan_status = static_cast<int>(
@@ -719,6 +732,52 @@ public:
                     "preserved dispatch or compact schedule is invalid");
         }
         return reduce_snapshot;
+    }
+
+    std::tuple<torch::Tensor, torch::Tensor>
+    rail_balance_hybrid_combine_epilogue_test(
+        const int& invocation_id) {
+        EP_HOST_ASSERT(not destroyed);
+        EP_HOST_ASSERT(rail_balance_hybrid_plan_pending.has_value());
+        auto& pending = rail_balance_hybrid_plan_pending.value();
+        EP_HOST_ASSERT(pending.invocation_id == invocation_id);
+        EP_HOST_ASSERT(pending.finished);
+        EP_HOST_ASSERT(pending.plan_status == 0);
+        EP_HOST_ASSERT(pending.shuffled);
+        EP_HOST_ASSERT(pending.return_unshuffle_tested);
+        EP_HOST_ASSERT(not pending.combine_epilogue_tested);
+        EP_HOST_ASSERT(pending.combine_epilogue != nullptr);
+
+        const c10::cuda::CUDAGuard device_guard(device_index);
+        const auto compute_stream =
+            at::cuda::getCurrentCUDAStream(device_index);
+        auto combined_x = torch::empty(
+            {pending.num_tokens, pending.hidden},
+            pending.topk_idx.options().dtype(torch::kBFloat16));
+        auto combined_topk_weights = torch::empty(
+            pending.topk_idx.sizes(),
+            pending.topk_idx.options().dtype(torch::kFloat32));
+        if (comm_stream.id() != compute_stream.id())
+            stream_wait(comm_stream, compute_stream);
+
+        // This hook is intentionally one-shot. A launch failure may leave a
+        // partial output, so retrying the same transaction is not supported.
+        pending.combine_epilogue_tested = true;
+        try {
+            launch_prepared_rail_balance_hybrid_combine_epilogue(
+                *pending.combine_epilogue,
+                combined_x.data_ptr<c10::BFloat16>(),
+                combined_topk_weights.data_ptr<float>(),
+                pending.topk_idx.data_ptr<topk_idx_t>(),
+                buffer, pending.num_tokens,
+                0, nccl_context->nvl_rank_idx, comm_stream);
+            CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
+        } catch (...) {
+            pending.plan_status = static_cast<int>(
+                rail_balance::HybridPlanError::InvalidSchedule);
+            throw;
+        }
+        return {combined_x, combined_topk_weights};
     }
 
     torch::Tensor rail_balance_hybrid_proxy_dispatch_snapshot(
@@ -3492,6 +3551,10 @@ static void register_apis(pybind11::module_& m) {
             &ElasticBuffer::rail_balance_hybrid_return_unshuffle_test,
             pybind11::arg("proxy_return_bytes"),
             pybind11::arg("reduce_seed_bytes"),
+            pybind11::arg("invocation_id"))
+        .def(
+            "_rail_balance_hybrid_combine_epilogue_test",
+            &ElasticBuffer::rail_balance_hybrid_combine_epilogue_test,
             pybind11::arg("invocation_id"))
         .def(
             "_rail_balance_hybrid_proxy_dispatch_snapshot",
