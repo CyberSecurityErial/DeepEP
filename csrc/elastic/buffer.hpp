@@ -10,6 +10,7 @@
 #include <deep_ep/common/layout.cuh>
 #include <deep_ep/common/compiled.cuh>
 #include <deep_ep/common/rail_balance_layout.cuh>
+#include <deep_ep/common/rail_balance_hybrid_layout.cuh>
 #include <deep_ep/common/rail_balance_protocol_layout.cuh>
 #include <deep_ep/common/rail_balance_vnode_layout.cuh>
 
@@ -205,6 +206,49 @@ public:
 
     std::tuple<int, int> get_logical_domain_size() const {
         return {nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks};
+    }
+
+    static std::tuple<
+        int64_t, int64_t, int64_t, int64_t, int64_t,
+        int64_t, int64_t, int64_t, int64_t, int64_t>
+    get_rail_balance_hybrid_layout(
+        const int& hidden,
+        const int& num_topk,
+        const int& proxy_capacity) {
+        EP_STATIC_ASSERT(
+            rail_balance::kNumHybridMaxChannels == deep_ep::kNumMaxChannels,
+            "Hybrid rail-balance channel capacity must match legacy workspace");
+        const auto layout = rail_balance::HybridArenaLayout(
+            hidden, num_topk, proxy_capacity);
+        return {
+            layout.control_offset,
+            sizeof(rail_balance::HybridControl),
+            layout.channel_count_offset,
+            layout.channel_count_bytes,
+            layout.proxy_dispatch_offset,
+            layout.dispatch_token_bytes,
+            layout.proxy_return_offset,
+            layout.combine_token_bytes,
+            layout.raw_bytes,
+            layout.arena_bytes,
+        };
+    }
+
+    static int64_t calculate_rail_balance_hybrid_buffer_size(
+        const int64_t& nccl_comm,
+        const int& num_max_tokens_per_rank,
+        const int& hidden,
+        const int& num_topk,
+        const int& proxy_capacity) {
+        const auto legacy_bytes = calculate_buffer_size(
+            nccl_comm,
+            num_max_tokens_per_rank, hidden, num_topk,
+            false, true, true);
+        const auto layout = rail_balance::HybridArenaLayout(
+            hidden, num_topk, proxy_capacity);
+        EP_HOST_ASSERT(
+            legacy_bytes % rail_balance::kNumHybridBufferAlignmentBytes == 0);
+        return rail_balance::checked_add_i64(legacy_bytes, layout.arena_bytes);
     }
 
     static std::tuple<int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t>
@@ -2933,6 +2977,10 @@ static void register_apis(pybind11::module_& m) {
         .def("combine", &ElasticBuffer::combine);
     m.def("create_cpu_handle", &ElasticBuffer::create_cpu_handle);
     m.def("calculate_elastic_buffer_size", &ElasticBuffer::calculate_buffer_size);
+    m.def("_calculate_rail_balance_hybrid_buffer_size",
+          &ElasticBuffer::calculate_rail_balance_hybrid_buffer_size);
+    m.def("_get_rail_balance_hybrid_layout",
+          &ElasticBuffer::get_rail_balance_hybrid_layout);
     m.def("_get_rail_balance_source_shuffle_layout",
           &ElasticBuffer::get_rail_balance_source_shuffle_layout);
     m.def("_get_rail_balance_protocol_layout",
