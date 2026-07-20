@@ -1850,7 +1850,9 @@ the pre-Gate1 side of the pending transaction.
 The first acceptance slice is true 8-GPU 8x1: reconstruct expected moved copies
 only in the test oracle, parse raw pure-`TokenLayout` proxy slots, and compare
 BF16 hidden bytes, FP32 weights, top-k ids, original source token, four-byte
-transit key, slot uniqueness, unused poison, and repeated reuse. Only after
+transit key, slot uniqueness, byte-unchanged unused slots, and repeated reuse.
+The test snapshots the arena before shuffle; production does not pay a full
+Pcap poison or memset. Only after
 this passes will a test-only adapter feed the same descriptor-free payloads
 into the existing 4x2/2x4 functional emulator; old vnode record/protocol ABIs
 are not production dependencies.
