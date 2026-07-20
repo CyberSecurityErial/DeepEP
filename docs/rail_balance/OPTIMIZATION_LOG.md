@@ -759,3 +759,24 @@ The tradeoff is an explicit private-harness read-only contract. Since the
 harness controls every call and compares digests immediately before B0, the
 extra copies would provide no production safety or performance evidence and
 are not justified.
+
+## Test-cost decision O038 — tile a compact exact oracle, keep full GPU bytes
+
+The first Hybrid vnode harness expanded Python `Fraction` vectors to all 7,168
+columns in every spawned worker. Routing and the synthetic expert transform
+are column-independent, and the source pattern has period eight. The accepted
+harness therefore computes an exact eight-column oracle (three columns for the
+rounding counterexample) and tiles the resulting BF16 pattern to H256/H7168
+when constructing expected payloads and outputs.
+
+Measured per-worker CPU oracle cost fell from about 4.408 s to 0.0054 s for
+4x2/H7168 and from 2.954 s to 0.0049 s for 2x4/H7168. The full H7168 CUDA
+payload, record bytes, reduce buffer, and final output are still compared, so
+this removes Python object overhead rather than weakening device evidence.
+
+Three redundant host checks were removed after their stronger supersets had
+already passed: global coverage tuples after byte-exact proxy comparison,
+global coverage tuples after complete world-array comparison, and a separate
+channel-count hash after the full fourteen-tensor plan digest. Manual layout,
+descriptor, route, and expected-record packing remain because they are the
+independent evidence that prevents a C++ getter from validating itself.

@@ -2346,3 +2346,66 @@ cross-rank digest comparison. This is an accepted test-contract boundary, not
 a public API. A failure after B0 remains process-level: all ranks must converge
 before pending state is released. No 8-GPU vnode runtime result is claimed at
 this checkpoint, and public force remains disabled.
+
+## 2026-07-21 — D039: pass the first production-shaped Hybrid vnode loop
+
+The new `test_rail_balance_hybrid_vnode.py` creates two real NCCL
+communicators and two independent `ElasticBuffer` windows in every worker.
+The prefix source group runs the production-shaped GPU plan and direct-final
+LSA source shuffle. Only owning proxy/count tensors cross to the eight-rank
+world buffer, which independently rebuilds the same fourteen-tensor plan
+before entering the fixed vnode stages. The returned owning tensors then feed
+the production-shared return-unshuffle and the exact legacy combine epilogue
+on the source group.
+
+Five separate watchdog subprocesses passed on eight GPUs:
+
+```text
+4x2 H256:   G=4 D=2 K=4 N=(4,2,1,1) moved=2
+4x2 H7168:  G=4 D=2 K=4 N=(4,2,1,1) moved=2
+2x4 H256:   G=2 D=4 K=2 N=(6,6)     moved=6
+2x4 H7168:  G=2 D=4 K=2 N=(6,6)     moved=6
+2x4 H256:   G=2 D=4 K=3 N=(1,0)     moved=0, rounding-sensitive
+```
+
+The 2x4 case exercises `D>K`, target channel one, nonzero incoming-moved and
+group prefixes, repeated-destination lanes, and proxy p0 through p3. Both
+H7168 cases compare complete raw TokenLayout/record/route bytes. The rounding
+case proves the authoritative two-level legacy BF16 result is `1.0`
+(`0x3f80`); an incorrectly flattened reduction would produce `129/128`
+(`0x3f81`). The zero-token source rank returns exact empty `[0,H]` and `[0,K]`
+outputs.
+
+The harness also verifies all fourteen source/world plan tensors, compact
+quota, active proxy records, unchanged proxy tail, vnode base/contribution and
+expert records, route sidecars, ready values, six exact status extents, the
+4-KiB world guard, the complete legacy reduce buffer, immutable source inputs,
+combined BF16 output, and combined FP32 weights. The main thread independently
+reran 4x2/H256 after all fixes and observed exit zero.
+
+### Audit findings fixed before acceptance
+
+1. The first harness draft performed rank-zero count D2H, Gloo broadcast, and
+   per-rank CUDA materialization outside fail-close phases. A one-rank OOM
+   could therefore send that rank to abort while peers entered world prepare
+   or B0. The three operations and world status/type validation now each
+   converge through the control group before the next phase.
+2. The first post-shuffle generic source barrier could cold-JIT after proxy
+   publication. It is now warmed before any transaction, then retained after
+   shuffle as the explicit device/system-scope LSA visibility boundary.
+3. Initial exact-proxy validation omitted unused `[required,Pcap)` rows. A
+   pre-shuffle owning snapshot now proves those bytes remain unchanged.
+4. A minimality refactor temporarily left two deleted coverage return values
+   and three new `hidden` parameters at stale call sites. Static review caught
+   them before acceptance; all were removed/fixed and GPU regressions reran.
+
+Final evidence is py-compile PASS, direct five-case CPU oracle PASS, all five
+GPU cases PASS, main-thread 4x2/H256 PASS, diff check PASS, and independent
+harness audit Blocker/High = 0/0. The audited file SHA256 is
+`955b1c27d733e62360bf94f943a07c7776c1de2f486b415040b54c688f7de0de`.
+
+Two nonblocking local gaps remain explicit: a zero-token owner has not yet
+acted as a deficit egress receiving moved copies, and the complete two-buffer
+loop has not yet produced its inputs/calls on a non-default stream. These move
+to the boundary/reuse checkpoint together with an all-zero fixture. Public
+force remains disabled; real Gin/RDMA execution remains unclaimed.
