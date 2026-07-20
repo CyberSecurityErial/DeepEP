@@ -321,7 +321,7 @@ Out of scope until evidence expands the project:
   unshuffle derives owner/token from `src_token_global_idx`.
 - Force-v1 requires `allow_multiple_reduction=true`. The planner/source path
   accepts up to 32 destinations even when `D>K`. Return unshuffle follows the
-  legacy layout: row `destination` when `D<=K`, otherwise the first top-k lane
+  legacy layout: row `destination` when `D<=K`, otherwise the highest top-k lane
   targeting that destination, derived from the preserved dispatch payload.
   No extra transmitted route state is needed.
 - A moved combine result must return to its source egress's unique proxy slot

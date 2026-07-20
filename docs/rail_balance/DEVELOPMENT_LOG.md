@@ -1881,7 +1881,7 @@ The second audit found an artificial `D<=K` host restriction. It was inherited
 from the first combine simplification, not from planner/source mechanics. The
 restriction was removed from the private planner, CPU oracle, and source path.
 For future unshuffle, legacy layout selection is still derivable without new
-metadata: row=destination for D<=K, otherwise row=the first top-k lane targeting
+metadata: row=destination for D<=K, otherwise row=the highest top-k lane targeting
 that destination. The preserved dispatch TokenLayout contains the required
 expert ids.
 

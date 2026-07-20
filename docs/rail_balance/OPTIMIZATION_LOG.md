@@ -586,7 +586,7 @@ with all eight owners active.
 
 This does not require a sidecar for combine. Legacy multiple-reduction already
 selects its receive row statically: destination rank when `D<=K`, otherwise the
-first top-k lane targeting that destination. The preserved proxy-dispatch
+highest top-k lane targeting that destination. The preserved proxy-dispatch
 payload contains those top-k ids, so standalone return-unshuffle can derive the
 same row locally. This adds no Gin bytes and no branch to the persistent
 dispatch/combine hot path.

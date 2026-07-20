@@ -414,7 +414,7 @@ The final row follows the legacy compile-time layout choice:
     if num_scaleout_ranks <= num_topk:
         final_reduce_row = destination
     else:
-        final_reduce_row = first top-k lane targeting destination
+        final_reduce_row = highest top-k lane targeting destination
 
 The second value is derived by scanning the preserved dispatch top-k ids in
 the standalone unshuffle.  It adds no transmitted route state and no branch to
