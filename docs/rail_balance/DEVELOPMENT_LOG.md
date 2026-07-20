@@ -1926,3 +1926,85 @@ This checkpoint is only the 8x1 source data slice. It does not prove H7168,
 corrupt-plan fail-closed behavior, 4x2/2x4 round trip, return-unshuffle, force
 Hybrid dispatch/combine, Gin/QP/NIC behavior, or speedup. C080-D remains
 IN_PROGRESS.
+
+## 2026-07-21 — D032: source-shuffle boundary, sanitizer, and profiler closure
+
+The descriptor-free source slice now passes the remaining local 8x1 boundary
+matrix. A single max-hidden arena was reused in both directions across
+H256 -> H7168 -> H256 transactions. The H7168 case publishes 21 complete
+legacy TokenLayouts; the C1024/D32/K4 case gives every owner four input tokens
+and moves three copies per owner. Balanced input and a single global token both
+publish zero bytes. Exact-capacity, source immutability, metadata padding,
+inactive-slot poison, zero-N owners, and a delayed non-default producer stream
+remain checked.
+
+Three corrupt compact-plan variants (`num_segments`, `group_prefix`, and
+`proxy_required`) report sticky status 4 on every moved owner before an invalid
+peer write. A capacity-disabled plan reports status 1, a duplicate expert
+reports status 3, every second source-shuffle call is rejected, and a complete
+transaction after every abort proves barrier-phase recovery. The host launch
+now uses `max(1,min(C,N))` blocks: channel c owns only tokens
+`c,c+C,...`, so every omitted c>=N is empty; N=0 keeps one validation block.
+
+Focused tool evidence on otherwise idle 8xH200:
+
+```text
+Nsys /tmp/deepep-c080d-final-T2v33l/c080d_final.nsys-rep
+  C1024/N4 launches grid=4 on all ranks; moved-owner source kernels remain
+  about 127 us, statistically unchanged from the earlier grid=1024 baseline
+  at /tmp/deepep-c080d-nsys-baseline.nsys-rep (about 125 us).
+
+NCU /tmp/deepep-c080d-ncu-basic-moved.ncu-rep
+  grid=4, block=32, REG=74, dynamic shared=608 B, duration=130.3 us;
+  achieved occupancy=1.56%, DRAM throughput rounds to 0%, L1=2.73%.
+NCU /tmp/deepep-c080d-ncu-nvlink-moved.ncu-rep
+  transmitted user bytes=1728 B, exactly 3 * 576-B dispatch records;
+  transmitted overhead=1248 B, peak link utilization=0.02%.
+NCU /tmp/deepep-c080d-ncu-stalls-moved.ncu-rep
+  scheduler no-eligible=92.07%, active warps/scheduler=0.99.
+NCU /tmp/deepep-c080d-ncu-pmsampling-moved.ncu-rep
+  dominant sampled state is long scoreboard (33.58 average warps), followed
+  by wait (13.75) and short scoreboard (6.85); no samples were dropped.
+
+Compute Sanitizer source/fault transaction:
+  filtered memcheck: ERROR SUMMARY 0
+  filtered synccheck: ERROR SUMMARY 0
+  device-side initcheck with API-memory checking disabled: ERROR SUMMARY 0
+  filtered racecheck: 0 errors, 6 WAW warnings
+```
+
+The racecheck warnings map to the intentional shared-metadata sequence: SASS
+`+0xef0` vector-clears aligned metadata, a warp sync separates it from scalar
+top-k/weight/src/linked writes at `+0x1710..+0x1780`. They are retained rather
+than hidden. The unfiltered initcheck also retained five 32-byte host-API
+warnings at the peer-count D2D snapshot. Here C=2,D=4 and the count kernel
+unconditionally release-stores all eight ints; the warnings occur only through
+NCCL imported LSA peer aliases. Compute Sanitizer 2025.1's bundled release
+notes state that initcheck does not support IPC allocations and produces false
+positives. Disabling only API-memory checking leaves device reads checked and
+passes with zero errors; no redundant production memset was added.
+
+### Failed or rejected attempts retained
+
+1. Unfiltered memcheck with API reporting enabled emitted 328
+   `cudaErrorNoKernelImageForDevice` reports from NCCL initialization probes
+   before the JIT kernel, although the full application passed. Filtering the
+   source kernel and disabling API reports produced the valid zero-error run.
+2. Filtering initcheck to the source kernel produced 3701 false uninitialized
+   reports because the excluded planner/fill kernels' writes were not tracked.
+   The valid device-side run includes every kernel and disables only IPC host
+   API shadow checking.
+3. The first NCU launch-count sample selected a zero-token rank and measured
+   only the 3.328-us empty path. A default-preserving `--case-name` test option
+   selected the all-owner moved case for every accepted NCU report above.
+4. Replacing the compact resolver's <=7-entry linear segment scan with binary
+   search passed correctness but measured about 134 us versus about 127 us for
+   the retained linear version. The candidate was reverted before commit.
+5. An audit disproved the planned D>K "first matching top-k lane" rule. Legacy
+   uses `bfind/get_master_lane_idx`, hence the highest matching lane. The CPU
+   oracle, plan, context, and return-unshuffle design now use the legacy rule;
+   `[2,1,2]` for destination 2 is the explicit row-2 counterexample.
+
+This closes the 8x1 source-only evidence. It still does not prove the 4x2/2x4
+round trip, return-unshuffle GPU ordering, force Hybrid dispatch/combine, or
+Gin/QP/NIC behavior. Public force remains disabled.

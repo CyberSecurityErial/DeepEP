@@ -398,4 +398,8 @@ Out of scope until evidence expands the project:
   once, and TMA-stores complete legacy TokenLayouts into peer proxy slots. True
   8-GPU evidence covers multi-destination copies, zero-N owners, exact Pcap,
   all eight owners, C=1024/D=32/K=4, non-default streams, and byte-unchanged
-  inactive slots. Full vnode round trip and return unshuffle remain open.
+  inactive slots. H7168/reverse arena reuse, fail-closed plan corruption, and
+  focused mem/sync/init/race tool runs now pass their stated gates. NCU/Nsys
+  show the tiny moved fixture is peer-TMA latency dominated, so no extra hot
+  path mechanism was added. Full vnode round trip and GPU return unshuffle
+  remain open.

@@ -590,3 +590,27 @@ highest top-k lane targeting that destination. The preserved proxy-dispatch
 payload contains those top-k ids, so standalone return-unshuffle can derive the
 same row locally. This adds no Gin bytes and no branch to the persistent
 dispatch/combine hot path.
+
+## Profiling decision O031 — peer-TMA latency dominates the small source fixture
+
+Nsys first showed that shrinking the launch from 1024 blocks to four removed
+empty CTAs but did not reduce moved-owner latency: approximately 125 us before
+and 127 us after. The smaller grid is retained because the proof is exact and
+it avoids useless work, but it is not claimed as a speedup.
+
+NCU then measured an all-owner C1024/D32/K4 case. One profiled owner moves
+three complete 576-byte records. NVLink reports exactly 1728 user bytes plus
+1248 overhead bytes and only 0.02% peak utilization. The kernel has 74
+registers, 608 bytes dynamic shared memory, 1.56% achieved occupancy, 92.07%
+no-eligible scheduler cycles, and long-scoreboard as the dominant sampled
+stall. The result is a fixed-latency/TMA-completion workload, not a compute,
+HBM, occupancy, or link-bandwidth workload.
+
+Consequently the <=7-entry linear segment resolver remains. A binary-search
+candidate was correct but measured about 134 us and was reverted. Metadata
+initialization is also left simple despite racecheck's deterministic WAW
+warnings: it is warp-ordered, contributes no reported error, and NCU gives no
+evidence that adding ownership branches or another staging form would matter.
+The next meaningful performance comparison must use many moved H7168 records
+or the integrated pipeline; this tiny correctness fixture cannot select a
+payload-throughput optimization.
