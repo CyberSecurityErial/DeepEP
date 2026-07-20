@@ -309,8 +309,7 @@ public:
         EP_HOST_ASSERT(num_tokens <= num_max_tokens_per_rank);
         EP_HOST_ASSERT(num_experts > 0);
         EP_HOST_ASSERT(num_scaleout_ranks >= 2 and
-                       num_scaleout_ranks <= 32 and
-                       num_scaleout_ranks <= num_topk);
+                       num_scaleout_ranks <= 32);
         EP_HOST_ASSERT(local_scaleout_rank >= 0 and
                        local_scaleout_rank < num_scaleout_ranks);
         EP_HOST_ASSERT(proxy_capacity_per_egress > 0);

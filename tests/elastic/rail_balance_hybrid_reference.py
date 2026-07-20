@@ -221,8 +221,6 @@ def map_topk_experts_to_destinations(
         raise ValueError(
             f"num_scaleout_ranks exceeds the force-v1 "
             f"{_MAX_DESTINATIONS} limit")
-    if num_scaleout_ranks > num_topk:
-        raise ValueError("num_scaleout_ranks must not exceed num_topk")
     if local_scaleout_rank >= num_scaleout_ranks:
         raise ValueError("local_scaleout_rank is outside the scaleout range")
     if num_experts % num_scaleout_ranks:

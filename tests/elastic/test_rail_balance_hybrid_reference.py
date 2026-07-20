@@ -599,17 +599,13 @@ def test_strict_expert_mapping_and_force_entry_contract():
             local_scaleout_rank=0,
         ),
     )
-    _assert_raises(
-        ValueError,
-        "must not exceed num_topk",
-        lambda: map_topk_experts_to_destinations(
-            (((0, 1),),),
-            num_topk=2,
-            num_experts=6,
-            num_scaleout_ranks=3,
-            local_scaleout_rank=0,
-        ),
-    )
+    assert map_topk_experts_to_destinations(
+        (((2, 4),),),
+        num_topk=2,
+        num_experts=6,
+        num_scaleout_ranks=3,
+        local_scaleout_rank=0,
+    ) == (((1, 2),),)
     _assert_raises(
         ValueError,
         "at least 1",

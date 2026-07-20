@@ -287,6 +287,30 @@ def _boundary_case() -> PlanCase:
     )
 
 
+def _wide_destination_case() -> PlanCase:
+    destinations = (1, 5, 9, 13, 17, 21, 25, 31)
+    routes = tuple(
+        ((destination,) * 4,) * 4
+        for destination in destinations
+    )
+    topk_idx, num_experts = _encode_destination_routes(
+        routes,
+        num_destinations=32,
+        experts_per_destination=8,
+    )
+    return PlanCase(
+        name="all_owner_c1024_d32_k4",
+        topk_idx=topk_idx,
+        num_channels=1024,
+        num_max_tokens_per_rank=4,
+        num_experts=num_experts,
+        num_scaleout_ranks=32,
+        local_scaleout_rank=0,
+        proxy_capacity_per_egress=4,
+        remainder_seed=17,
+    )
+
+
 def _zero_token_case() -> PlanCase:
     return PlanCase(
         name="zero_tokens",
@@ -368,6 +392,13 @@ def _assert_oracle_contract(num_random_seeds: int) -> tuple[PlanCase, ...]:
     assert boundary_schedule.moved_copies == 2
     assert boundary_schedule.proxy_required == (1, 1)
 
+    wide = _wide_destination_case()
+    wide_schedule = _build_schedule(wide)
+    assert wide.num_scaleout_ranks == 32 > wide.num_topk == 4
+    assert wide_schedule.enabled
+    assert wide_schedule.moved_copies == 24
+    assert wide_schedule.proxy_required == (4, 1, 4, 4, 3, 2, 3, 3)
+
     zero_tokens = _zero_token_case()
     zero_schedule = _build_schedule(zero_tokens)
     assert zero_schedule.enabled
@@ -393,6 +424,7 @@ def _assert_oracle_contract(num_random_seeds: int) -> tuple[PlanCase, ...]:
             _c061_case(proxy_capacity=2),
             zero_tokens,
             large_seed,
+            wide,
             *random_cases,
             boundary)
 
@@ -659,7 +691,7 @@ def main() -> None:
     print(
         f"PASS C080-B1 CPU expected structure: C061 33 copies/6 moves, "
         f"Pcap 3/2, zero tokens, {arguments.random_seeds} random seeds, "
-        f"C1024/D32")
+        f"C1024/D32 including D32>K4")
     print("PASS 4/4 legacy Hybrid identity goldens")
     if arguments.oracle_only:
         return
