@@ -614,3 +614,27 @@ evidence that adding ownership branches or another staging form would matter.
 The next meaningful performance comparison must use many moved H7168 records
 or the integrated pipeline; this tiny correctness fixture cannot select a
 payload-throughput optimization.
+
+## Hot-path decision O032 — derive return routing from frozen payload state
+
+Return-unshuffle reuses the compact group prefix and the dispatch TokenLayout
+that must remain alive through combine. `linked_list_idx[0]` verifies p, while
+`src_token_global_idx` derives source node, owner, and token. D>K scans only the
+K preserved experts because the legacy row cannot otherwise be known; D<=K
+uses destination directly and avoids that scan. A moved record always has
+owner!=egress, so the dead local/peer branch was removed and the LSA symmetric
+pointer is formed unconditionally.
+
+An independent audit considered a separate metadata-only validation phase to
+guarantee zero writes under a deliberately corrupted post-Gate2 plan. It would
+add a launch/global pass solely for an impossible production transition. The
+fused kernel instead publishes sticky INVALID and discards the transaction;
+partial scratch writes are permitted on that failure path. Two cheap semantic
+checks—source node in range and local-destination moved count equal to zero—were
+retained without adding per-record metadata or another synchronization epoch.
+
+Production-like sm_90a cubins for H256/K4 and H7168/K8 both use 60 registers,
+a 72-byte stack frame, zero local memory, and zero spills. Functional GPU runs
+under unrelated load are not timing evidence. Return-unshuffle Nsys/NCU work is
+deferred until GPUs are idle and a larger moved-volume fixture can separate TMA
+payload throughput from fixed barrier/JIT/test-adapter latency.

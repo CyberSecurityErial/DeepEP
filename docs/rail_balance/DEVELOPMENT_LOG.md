@@ -2008,3 +2008,70 @@ passes with zero errors; no redundant production memset was added.
 This closes the 8x1 source-only evidence. It still does not prove the 4x2/2x4
 round trip, return-unshuffle GPU ordering, force Hybrid dispatch/combine, or
 Gin/QP/NIC behavior. Public force remains disabled.
+
+## 2026-07-21 — D033: production-shared return-unshuffle checkpoint
+
+The combine return leg now has a production-shared, descriptor-free kernel.
+One warp owns each `(egress,channel)` sequence, validates its dense static group
+prefix, and visits every local `proxy_return[p]` exactly once. The preserved
+dispatch record supplies `src_token_global_idx` and the four-byte transit key;
+owner, token, source node, and reduce row are derived locally. The kernel TMA
+loads one complete combine TokenLayout into shared memory and TMA stores it
+through LSA to the original owner's existing legacy reduce buffer. It adds no
+return header, route array, ready/generation word, ring, or success-path atomic.
+
+For D<=K the reduce row is the destination. For D>K the kernel validates all K
+preserved experts and uses `get_master_lane_idx`, matching legacy Hybrid's
+highest matching lane. It rejects an out-of-domain source node, a moved record
+for the local destination, a non-moved owner/egress identity, an invalid p key,
+and malformed group/capacity state. An independent audit reports 0 Blocker and
+0 High under the frozen Gate-2 plan contract.
+
+The audit retained an important corruption boundary: validation and movement
+are fused. If a published plan is artificially mutated after Gate 2, another
+block may have completed a peer store before the sticky error is observed.
+Such an error invalidates the whole transaction; it does not promise rollback
+or an unchanged scratch reduce buffer. A metadata-only validation kernel would
+be required for that stronger property and was rejected as unnecessary hot
+path work for the immutable-plan contract.
+
+Accepted evidence:
+
+```text
+PASS production-JIT-like sm_90a static cubin:
+     H256/K4 and H7168/K8, REG=60, STACK=72 B, LOCAL=0, spill=0
+PASS extension build_ext --inplace
+PASS C080-F CPU oracle
+PASS true 8-GPU return-unshuffle:
+     C061 H256 moved=21
+     all-owner C1024/D32>K4 H256 moved=24, legacy row=3
+     C061 H7168 moved=21
+PASS complete raw combine TokenLayout equality, unique fingerprints,
+     collision-free (owner,row,token), all non-target bytes remain 0xA7,
+     one-shot rejection, idempotent abort, and next-transaction recovery
+```
+
+The accepted GPU run completed while unrelated vLLM work occupied GPUs 4-7.
+There was enough memory and functionality passed, but no timing from this run
+is performance evidence. The processes were not Megatron/MGT and were not
+terminated.
+
+### Failed attempts retained
+
+1. The first local command used bare `python`, which is absent; the next command
+   used the pinned interpreter but omitted `PYTHONPATH=.`, producing
+   `ModuleNotFoundError: deep_ep`. The corrected pinned command passed.
+2. The first 8-GPU test already passed the full reduce-snapshot equality, then
+   failed in a redundant poison-mask assertion because `init_dist` had changed
+   PyTorch's default device to CUDA while the snapshot was on CPU. Explicitly
+   constructing the mask and index on CPU fixed only the test; the complete
+   second run passed.
+3. Earlier RDC-object inspection reported STACK=0. Recompiling with the actual
+   non-RDC `sm_90a` production-JIT flags shows the authoritative 72-byte stack
+   frame. The old observation was a relocatable-fatbin reporting limitation,
+   not a resource improvement.
+
+This closes the standalone GPU ordering and layout proof for return-unshuffle.
+It does not yet prove destination-side Hybrid forwarding/combine, the full
+4x2/2x4 round trip, real Rail/Gin completion, or a performance gain. Public
+force remains disabled.

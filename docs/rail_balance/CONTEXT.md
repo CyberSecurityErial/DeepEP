@@ -401,5 +401,12 @@ Out of scope until evidence expands the project:
   inactive slots. H7168/reverse arena reuse, fail-closed plan corruption, and
   focused mem/sync/init/race tool runs now pass their stated gates. NCU/Nsys
   show the tiny moved fixture is peer-TMA latency dominated, so no extra hot
-  path mechanism was added. Full vnode round trip and GPU return unshuffle
-  remain open.
+  path mechanism was added.
+- The production-shared return-unshuffle now consumes the same static
+  `(egress,channel,destination)` groups and preserved dispatch slot `p`.
+  It copies the complete combine TokenLayout from `proxy_return[p]` over LSA to
+  the original owner's legacy reduction row, using row=destination for D<=K
+  and the highest matching top-k lane for D>K. True 8-GPU H256/H7168 and
+  D32>K4 byte-exact tests pass without a return descriptor, ready flag, route
+  sidecar, or success-path atomic. Full 4x2/2x4 vnode round trip and the
+  isolated force Hybrid dispatch/combine specializations remain open.
