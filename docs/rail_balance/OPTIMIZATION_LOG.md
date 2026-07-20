@@ -780,3 +780,21 @@ global coverage tuples after complete world-array comparison, and a separate
 channel-count hash after the full fourteen-tensor plan digest. Manual layout,
 descriptor, route, and expected-record packing remain because they are the
 independent evidence that prevents a C++ getter from validating itself.
+
+## Scope decision O039 — vnode is disposable validation scaffolding
+
+The vnode transport, synthetic expert, descriptors, ready words, canaries,
+and two-window host bridge are not a planned public feature and must never be
+copied into the real Hybrid dispatch/combine hot path. They exist only to
+exercise the complete route and inverse route on one eight-GPU NVSwitch node
+while real Rail/Gin hardware is unavailable.
+
+They remain necessary until the isolated force dispatch/combine codegen and a
+truthful multi-node Gin run cover the same plan, proxy-slot, forward-metadata,
+return-unshuffle, and legacy-epilogue contracts. After that gate, perform an
+explicit deletion audit: remove C080 vnode adapters and host wrappers whose
+coverage is fully superseded, retain only a compact private regression/oracle
+when it still catches failures that the real-cluster suite does not, and
+delete that remainder as well if it is redundant. Vnode-only bytes and
+branches are therefore forbidden from becoming production compatibility
+surface.

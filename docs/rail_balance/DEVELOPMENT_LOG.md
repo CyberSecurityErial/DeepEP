@@ -2409,3 +2409,67 @@ acted as a deficit egress receiving moved copies, and the complete two-buffer
 loop has not yet produced its inputs/calls on a non-default stream. These move
 to the boundary/reuse checkpoint together with an all-zero fixture. Public
 force remains disabled; real Gin/RDMA execution remains unclaimed.
+
+## 2026-07-21 — D040: close vnode zero-work, stream, and reuse boundaries
+
+The production-shaped two-window harness now adds two deliberately small
+fixtures rather than another transport or test framework.
+
+The first is 4x2/H256 with `N=(4,0,0,0)`. Its exact CPU schedule has quota
+`((0,1),(0,1),(0,1),(0,1))`, `proxy_required=(0,1,1,1)`, and three moved
+copies. Source rails 1, 2, and 3 own no tokens yet each receive one direct-final
+proxy record from owner zero and complete the entire B0..B5, return-unshuffle,
+and legacy-epilogue path. This closes the earlier zero-token-owner gap rather
+than merely testing an empty output rank with no incoming proxy work.
+
+That same fixture runs every CUDA input creation and complete transaction on
+one independently created non-default caller stream per rank. The harness
+asserts the current stream identity at entry. It then reuses the same source
+and world `ElasticBuffer` objects and the same arena offsets for two complete
+transactions with generations 806 and 807 and distinct invocation IDs. Every
+generation independently verifies the plan, active and unused proxy bytes,
+world records/routes/readies, guard, complete reduce buffer, and final output,
+then performs the idempotent abort cleanup. No ready, slot, or guard state
+leaks across generations.
+
+The second fixture is a harness-local 2x4/K2/C1/M1/Pcap1 global-zero case with
+`N=(0,0)`. Counts, quota, proxy requirements, routes, and contributions are
+all exactly empty, but the test still executes prepare, all six fixed vnode
+stages, return-unshuffle, and the legacy epilogue. This proves the forced
+zero-work transaction exits every barrier and does not rely on bypassing the
+protocol.
+
+Accepted implementation evidence before final independent audit:
+
+```text
+PASS py_compile and git diff --check
+PASS 7/7 direct CPU oracle cases
+PASS 7/7 separate eight-GPU watchdog cases
+PASS original 4x2/2x4 H256 and H7168 plus BF16 rounding case
+PASS empty-egress H256, non-default stream, two arena generations
+PASS all-zero H256 complete fixed-stage loop
+SHA256 1bc2ca73cf19e44e59388eecac5b28cbcbc0a7346f1c5d944c84f7c2e853cef1
+```
+
+Unrelated MMUnlearner/vLLM jobs occupied parts of GPUs 4 through 7 during
+these runs. They were not Megatron and were not killed. The non-OOM results
+are accepted as correctness evidence only; no timing or bandwidth number is
+recorded.
+
+One documentation-only `apply_patch` attempt used a line-wrapped context that
+did not match `OPTIMIZATION_LOG.md`; it changed no file and was immediately
+retried with the exact context. The successful entry records vnode as
+disposable validation scaffolding, with an explicit post-Gin deletion audit.
+
+Independent final review reports Blocker 0, High 0, Medium 1, and Low 2 and
+accepts the checkpoint. It independently repeated the seven CPU cases and the
+empty-egress/non-default/two-generation GPU case. The Medium records that this
+is a non-default-stream compatibility smoke, not a strict asynchronous
+ordering proof: input copies and private snapshots contain synchronization.
+The real Hybrid caller therefore still needs a delayed producer/event test
+without a global synchronization point. The two Low findings are that both
+reuse generations intentionally use identical payload bytes, so unchanged
+active source slots cannot prove a physical rewrite, and that a one-rank
+constructor/setup failure still relies on the outer watchdog. Neither finding
+is a numerical error or a reason to expand the vnode scaffold before force
+dispatch codegen.

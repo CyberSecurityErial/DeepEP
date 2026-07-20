@@ -53,11 +53,13 @@ from rail_balance_hybrid_vnode_reference import (
     VnodeCopyRoute,
     VnodeRoundTripCase,
     VnodeRoundTripResult,
+    VnodeTopology,
     build_2x4_case,
     build_4x2_case,
     build_rounding_sensitive_case,
     run_vnode_roundtrip,
 )
+from rail_balance_hybrid_reference import build_hybrid_rail_schedule
 from test_rail_balance_hybrid_plan_lsa import (
     _expected_outputs as _expected_plan_outputs,
     _snapshot_digest as _plan_digest,
@@ -81,6 +83,8 @@ class GpuCase:
     fixture: str
     hidden: int
     generation: int
+    non_default_stream: bool = False
+    repetitions: int = 1
 
 
 @dataclass(frozen=True)
@@ -109,12 +113,56 @@ def _specs() -> tuple[GpuCase, ...]:
         GpuCase("hybrid_vnode_2x4_h256", "2x4", 256, 803),
         GpuCase("hybrid_vnode_2x4_h7168", "2x4", 7168, 804),
         GpuCase("hybrid_vnode_rounding_h256", "rounding", 256, 805),
+        GpuCase(
+            "hybrid_vnode_4x2_empty_egress_h256",
+            "4x2_empty_egress",
+            256,
+            806,
+            non_default_stream=True,
+            repetitions=2,
+        ),
+        GpuCase(
+            "hybrid_vnode_all_zero_h256",
+            "all_zero",
+            256,
+            808,
+        ),
+    )
+
+
+def _build_4x2_empty_egress_case() -> VnodeRoundTripCase:
+    base = build_4x2_case()
+    return replace(
+        base,
+        name="hybrid_vnode_4x2_empty_egress",
+        topk_idx=(base.topk_idx[0], (), (), ()),
+        topk_weights=(base.topk_weights[0], (), (), ()),
+        source_values=(base.source_values[0], (), (), ()),
+    )
+
+
+def _build_all_zero_case() -> VnodeRoundTripCase:
+    return VnodeRoundTripCase(
+        name="hybrid_vnode_all_zero",
+        topology=VnodeTopology(rails_per_node=2, num_nodes=4),
+        topk_idx=((), ()),
+        topk_weights=((), ()),
+        source_values=((), ()),
+        num_topk=2,
+        num_channels=1,
+        num_max_tokens_per_rank=1,
+        num_experts=16,
+        experts_per_physical_rank=2,
+        proxy_capacity_per_egress=1,
+        remainder_seed=0,
     )
 
 
 def _base_case(name: str) -> VnodeRoundTripCase:
     builders = {
         "4x2": build_4x2_case,
+        "4x2_empty_egress": _build_4x2_empty_egress_case,
+        "all_zero": _build_all_zero_case,
         "2x4": build_2x4_case,
         "rounding": build_rounding_sensitive_case,
     }
@@ -151,7 +199,31 @@ def _expanded_case(spec: GpuCase) -> VnodeRoundTripCase:
 
 
 def _oracle(spec: GpuCase) -> VnodeRoundTripResult:
-    result = run_vnode_roundtrip(_expanded_case(spec))
+    expanded = _expanded_case(spec)
+    if spec.fixture == "all_zero":
+        schedule = build_hybrid_rail_schedule(
+            expanded.topk_idx,
+            num_topk=expanded.num_topk,
+            num_experts=expanded.num_experts,
+            num_scaleout_ranks=expanded.topology.num_nodes,
+            local_scaleout_rank=expanded.topology.source_node,
+            num_channels=expanded.num_channels,
+            num_max_tokens_per_rank=expanded.num_max_tokens_per_rank,
+            proxy_capacity_per_egress=
+                expanded.proxy_capacity_per_egress,
+            remainder_seed=expanded.remainder_seed,
+        )
+        result = VnodeRoundTripResult(
+            case=expanded,
+            schedule=schedule,
+            routes=(),
+            contributions=(),
+            reduce_rows=((), ()),
+            combined=((), ()),
+            direct=((), ()),
+        )
+    else:
+        result = run_vnode_roundtrip(expanded)
     case = result.case
     g = case.topology.rails_per_node
     d = case.topology.num_nodes
@@ -168,6 +240,20 @@ def _oracle(spec: GpuCase) -> VnodeRoundTripResult:
         assert d <= case.num_topk
         assert case.num_tokens_per_owner == (4, 2, 1, 1)
         assert result.schedule.moved_copies == 2
+    elif spec.fixture == "4x2_empty_egress":
+        assert (g, d, case.num_topk) == (4, 2, 4)
+        assert case.num_tokens_per_owner == (4, 0, 0, 0)
+        assert result.schedule.quota == (
+            (0, 1), (0, 1), (0, 1), (0, 1))
+        assert result.schedule.proxy_required == (0, 1, 1, 1)
+        assert result.schedule.moved_copies == 3
+        assert {
+            route.egress for route in result.routes if route.moved
+        } == {1, 2, 3}
+        assert all(
+            route.owner == 0
+            for route in result.routes if route.moved
+        )
     elif spec.fixture == "2x4":
         assert (g, d, case.num_topk) == (2, 4, 2)
         assert d > case.num_topk
@@ -175,6 +261,15 @@ def _oracle(spec: GpuCase) -> VnodeRoundTripResult:
         assert result.schedule.moved_copies == 6
         assert any(route.target_channel == 1 for route in result.routes)
         assert any(route.proxy_slot == 3 for route in result.routes)
+    elif spec.fixture == "all_zero":
+        assert (g, d, case.num_topk) == (2, 4, 2)
+        assert case.num_tokens_per_owner == (0, 0)
+        assert result.schedule.count == ((0, 0, 0, 0),) * 2
+        assert result.schedule.quota == ((0, 0, 0, 0),) * 2
+        assert result.schedule.proxy_required == (0, 0)
+        assert result.schedule.moved_copies == 0
+        assert not result.routes and not result.contributions
+        assert result.combined == result.direct == ((), ())
     else:
         assert (g, d, case.num_topk) == (2, 4, 3)
         assert case.num_tokens_per_owner == (1, 0)
@@ -786,6 +881,17 @@ def _nvtx(enabled: bool, label: str) -> Iterator[None]:
             torch.cuda.nvtx.range_pop()
 
 
+@contextmanager
+def _caller_stream(
+    stream: torch.cuda.Stream | None,
+) -> Iterator[None]:
+    if stream is None:
+        yield
+        return
+    with torch.cuda.stream(stream):
+        yield
+
+
 def _layout_abis(
     case: VnodeRoundTripCase,
     hidden: int,
@@ -890,12 +996,13 @@ def _run_transaction(
     layout: RecordLayout,
     source_arena_offset: int,
     world_arena_offset: int,
+    generation: int,
 ) -> None:
     case = result.case
     g = case.topology.rails_per_node
     d = case.topology.num_nodes
-    source_invocation = args.generation * 10 + 1
-    world_invocation = args.generation * 10 + 2
+    source_invocation = generation * 10 + 1
+    world_invocation = generation * 10 + 2
     source_runtime = source_buffer.runtime if source_buffer is not None else None
     world_runtime = world_buffer.runtime
     source_plan: tuple[torch.Tensor, ...] | None = None
@@ -1098,7 +1205,7 @@ def _run_transaction(
                         d,
                         g,
                         case.proxy_capacity_per_egress,
-                        args.generation,
+                        generation,
                         world_invocation,
                         case.remainder_seed,
                     ))
@@ -1162,7 +1269,7 @@ def _run_transaction(
                 result=result,
                 source_inputs=source_inputs,
                 layout=layout,
-                generation=args.generation,
+                generation=generation,
             ),
         )
 
@@ -1275,7 +1382,13 @@ def _worker(
     )
     assert rank == local_rank and world_size == _WORLD_SIZE
     result = _oracle(GpuCase(
-        args.case_name, args.fixture, args.hidden, args.generation))
+        args.case_name,
+        args.fixture,
+        args.hidden,
+        args.generation,
+        args.non_default_stream,
+        args.repetitions,
+    ))
     case = result.case
     g = case.topology.rails_per_node
     source_group = dist.new_group(
@@ -1291,8 +1404,13 @@ def _worker(
     clean_shutdown = False
     try:
         source_inputs = _cpu_source_inputs(case, args.hidden)
-        x, topk_idx, topk_weights = _make_cuda_inputs(
-            rank, result, source_inputs, args.hidden)
+        caller_stream = (
+            torch.cuda.Stream(device=local_rank)
+            if args.non_default_stream else None
+        )
+        with _caller_stream(caller_stream):
+            x, topk_idx, topk_weights = _make_cuda_inputs(
+                rank, result, source_inputs, args.hidden)
         layout, hybrid_layout = _layout_abis(case, args.hidden)
         alignment = int(_C.get_elastic_buffer_alignment())
         assert alignment == _ARENA_ALIGNMENT
@@ -1382,6 +1500,8 @@ def _worker(
             args.case_name,
             args.hidden,
             args.generation,
+            args.repetitions,
+            args.non_default_stream,
             g,
             case.topology.num_nodes,
             case.num_topk,
@@ -1399,21 +1519,27 @@ def _worker(
         assert tuple(token_counts[:g]) == case.num_tokens_per_owner
         assert tuple(token_counts[g:]) == (0,) * (_WORLD_SIZE - g)
 
-        _run_transaction(
-            rank=rank,
-            args=args,
-            control_group=control_group,
-            source_buffer=source_buffer,
-            world_buffer=world_buffer,
-            result=result,
-            source_inputs=source_inputs,
-            x=x,
-            topk_idx=topk_idx,
-            topk_weights=topk_weights,
-            layout=layout,
-            source_arena_offset=source_arena_offset,
-            world_arena_offset=world_arena_offset,
-        )
+        for iteration in range(args.repetitions):
+            with _caller_stream(caller_stream):
+                if caller_stream is not None:
+                    assert torch.cuda.current_stream().cuda_stream == \
+                        caller_stream.cuda_stream
+                _run_transaction(
+                    rank=rank,
+                    args=args,
+                    control_group=control_group,
+                    source_buffer=source_buffer,
+                    world_buffer=world_buffer,
+                    result=result,
+                    source_inputs=source_inputs,
+                    x=x,
+                    topk_idx=topk_idx,
+                    topk_weights=topk_weights,
+                    layout=layout,
+                    source_arena_offset=source_arena_offset,
+                    world_arena_offset=world_arena_offset,
+                    generation=args.generation + iteration,
+                )
         _monitored_barrier(control_group, args.timeout)
         clean_shutdown = True
     finally:
@@ -1436,7 +1562,8 @@ def _worker(
                     f"{args.case_name}, G={g}, "
                     f"D={case.topology.num_nodes}, K={case.num_topk}, "
                     f"H={args.hidden}, N={case.num_tokens_per_owner}, "
-                    f"moved={result.schedule.moved_copies}",
+                    f"moved={result.schedule.moved_copies}, "
+                    f"repetitions={args.repetitions}",
                     flush=True,
                 )
             dist.destroy_process_group()
@@ -1456,6 +1583,7 @@ def _run_watchdog(
         "--fixture", spec.fixture,
         "--hidden", str(spec.hidden),
         "--generation", str(spec.generation),
+        "--repetitions", str(spec.repetitions),
         "--num-processes", str(arguments.num_processes),
         "--timeout", str(arguments.timeout),
         "--master-port", str(port),
@@ -1463,6 +1591,8 @@ def _run_watchdog(
     ]
     if arguments.nvtx:
         command.append("--nvtx")
+    if spec.non_default_stream:
+        command.append("--non-default-stream")
     process = subprocess.Popen(command, start_new_session=True)
     try:
         return_code = process.wait(timeout=arguments.watchdog_seconds)
@@ -1493,15 +1623,22 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--master-port", type=int, default=29937)
     parser.add_argument("--watchdog-seconds", type=int, default=1800)
     parser.add_argument("--nvtx", action="store_true")
+    parser.add_argument("--non-default-stream", action="store_true",
+                        help=argparse.SUPPRESS)
     parser.add_argument("--case-name")
-    parser.add_argument("--fixture", choices=("4x2", "2x4", "rounding"),
+    parser.add_argument("--fixture", choices=(
+                            "4x2", "4x2_empty_egress", "2x4", "rounding",
+                            "all_zero"),
                         help=argparse.SUPPRESS)
     parser.add_argument("--hidden", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--generation", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--repetitions", type=int, default=1,
+                        help=argparse.SUPPRESS)
     arguments = parser.parse_args()
     if arguments.num_processes != _WORLD_SIZE:
         parser.error("C080-D Hybrid vnode requires exactly 8 processes")
-    if arguments.timeout <= 0 or arguments.watchdog_seconds <= 0:
+    if arguments.timeout <= 0 or arguments.watchdog_seconds <= 0 or \
+            arguments.repetitions <= 0:
         parser.error("timeouts must be positive")
     return arguments
 
@@ -1525,6 +1662,8 @@ def main() -> None:
         assert arguments.fixture == spec.fixture
         assert arguments.hidden == spec.hidden
         assert arguments.generation == spec.generation
+        assert arguments.non_default_stream == spec.non_default_stream
+        assert arguments.repetitions == spec.repetitions
     _assert_cpu_oracle(selected)
     print(
         "PASS C080-D Hybrid vnode CPU oracle: "
