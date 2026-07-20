@@ -2292,3 +2292,57 @@ forbidden because terminating one profiled child would strand the other seven
 distributed ranks. A full NCU metric set is also rejected as a first pass: it
 would replay thousands of counters before a bottleneck has been localized.
 The exact commands and kernel filters are retained in the optimization log.
+
+## 2026-07-21 — D038: complete the fail-closed two-window vnode bridge
+
+The private world-side half of the C080-D harness now owns a strict
+`prepare/finish/abort` transaction. It accepts only the single-machine world
+topology `(1,8)`, a prefix source node `[0,G)`, and `G*D=8`. No raw pointer is
+allowed to cross from the source-subgroup symmetric window into the world
+window; source payload and count state arrive only as ordinary owning CUDA
+tensors.
+
+`prepare` performs every validation, allocation, JIT build, stream edge, GPU
+plan/prefix rebuild, device-status observation, and arena-bound check before a
+world barrier can be entered. The source plan's `[G,C,D]` count tensor is the
+only schedule input crossing the object boundary. The rebuilt quota is copied
+with `cudaMemcpy2DAsync` into a genuinely contiguous `[G,D-1]` tensor; a
+pointer offset into the pitched `[G,D]` matrix is never exposed to the old
+vnode kernels. `prepare` returns status, the complete fourteen-tensor world
+plan, and compact quota so Python/Gloo can compare them with the source plan
+before B0.
+
+After that gate, `finish` performs no allocation, JIT, host validation, or
+ordinary `ElasticBuffer::barrier()` call. Its fixed sequence is:
+
+```text
+clear + pack -> B0 -> scaleout -> B1 -> forward -> B2
+             -> expert -> B3 -> return -> B4 -> demux -> B5
+```
+
+Six independent zeroed status rows cover the exact launch extents `C`, `P`,
+`P*K`, `G*M*K`, `P*K`, and `P`. Returned proxy data, reduce seeds,
+record/ready/route snapshots, status, guard, compact quota, and nested plan are
+all owning CUDA tensors. The transaction becomes one-shot as soon as `finish`
+may enter B0; `abort(invocation_id)` is idempotent and only releases the
+matching pending state.
+
+Accepted evidence:
+
+```text
+PASS clean python_api.o compile and full device-link/shared-library link
+PASS import and nested pybind ABI for prepare/finish/abort
+PASS C080-A private API/default-off tests 6/6
+PASS legacy Hybrid identity goldens 4/4
+PASS C080 vnode CPU oracle 7/7
+PASS git diff --check
+PASS independent world-bridge audit: Blocker/High = 0/0
+```
+
+The private bridge intentionally returns live owning plan/quota handles rather
+than cloning fifteen tensors. The controlled harness must treat them as
+strictly read-only between prepare and finish and immediately perform the
+cross-rank digest comparison. This is an accepted test-contract boundary, not
+a public API. A failure after B0 remains process-level: all ranks must converge
+before pending state is released. No 8-GPU vnode runtime result is claimed at
+this checkpoint, and public force remains disabled.

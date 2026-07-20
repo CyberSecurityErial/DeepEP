@@ -94,6 +94,12 @@ class ElasticBuffer {
     std::optional<RailBalanceHybridPlanPending>
         rail_balance_hybrid_plan_pending;
 
+    // Private C080-D world-emulator transaction.  It is intentionally
+    // independent from the source-subgroup transaction above because the two
+    // ElasticBuffer instances own different NCCL symmetric windows.
+    std::optional<RailBalanceHybridVNodePending>
+        rail_balance_hybrid_vnode_pending;
+
     // Some Engram storage settings
     int num_engram_entries = 0, engram_hidden = 0;
     std::optional<torch::Tensor> engram_sf;
@@ -816,6 +822,662 @@ public:
         if (rail_balance_hybrid_plan_pending.has_value() and
             rail_balance_hybrid_plan_pending->invocation_id == invocation_id)
             rail_balance_hybrid_plan_pending.reset();
+    }
+
+    RailBalanceHybridVNodePrepareTensors rail_balance_hybrid_vnode_prepare(
+        const torch::Tensor& x,
+        const torch::Tensor& topk_idx,
+        const torch::Tensor& topk_weights,
+        const torch::Tensor& proxy_dispatch,
+        const torch::Tensor& channel_count,
+        const int64_t& arena_offset,
+        const int& num_max_tokens_per_rank,
+        const int& num_experts,
+        const int& num_destinations,
+        const int& num_source_ranks,
+        const int& proxy_capacity,
+        const int& generation,
+        const int& invocation_id,
+        const pybind11::object& remainder_seed) {
+        constexpr int kWorldRanks = 8;
+        constexpr int64_t kArenaGuardBytes = 4096;
+
+        // This bridge is a private, pure-single-node proof.  The real Hybrid
+        // buffer and its public ABI remain untouched.
+        EP_HOST_ASSERT(not destroyed);
+        EP_HOST_ASSERT(not allow_hybrid_mode);
+        EP_HOST_ASSERT(not rail_balance_hybrid_vnode_pending.has_value());
+        EP_HOST_ASSERT(nccl_context->num_ranks == kWorldRanks);
+        EP_HOST_ASSERT(nccl_context->num_scaleout_ranks == 1);
+        EP_HOST_ASSERT(nccl_context->num_scaleup_ranks == kWorldRanks);
+        EP_HOST_ASSERT(nccl_context->num_rdma_ranks == 1);
+        EP_HOST_ASSERT(nccl_context->num_nvl_ranks == kWorldRanks);
+        EP_HOST_ASSERT(nccl_context->is_scaleup_nvlink);
+        EP_HOST_ASSERT(nccl_context->scaleup_rank_idx ==
+                       nccl_context->rank_idx);
+        EP_HOST_ASSERT(nccl_context->nvl_rank_idx == nccl_context->rank_idx);
+
+        EP_HOST_ASSERT(num_source_ranks >= 2 and num_source_ranks <= 32);
+        EP_HOST_ASSERT(num_destinations >= 2 and
+                       num_destinations <=
+                           rail_balance::kNumHybridMaxDestinations);
+        EP_HOST_ASSERT(
+            static_cast<int64_t>(num_source_ranks) * num_destinations ==
+            kWorldRanks);
+        EP_HOST_ASSERT(num_max_tokens_per_rank > 0);
+        EP_HOST_ASSERT(proxy_capacity > 0);
+        EP_HOST_ASSERT(generation > 0);
+        EP_HOST_ASSERT(invocation_id >= 0);
+        EP_HOST_ASSERT(num_experts > 0 and
+                       num_experts %
+                           (num_source_ranks * num_destinations) == 0);
+        EP_HOST_ASSERT(PyLong_CheckExact(remainder_seed.ptr()));
+        const int64_t remainder_seed_i64 = remainder_seed.cast<int64_t>();
+        EP_HOST_ASSERT(remainder_seed_i64 >= 0);
+        const int normalized_remainder_seed = static_cast<int>(
+            remainder_seed_i64 % num_source_ranks);
+
+        const int rank_idx = nccl_context->rank_idx;
+        const bool is_source = rank_idx < num_source_ranks;
+        EP_HOST_ASSERT(x.is_cuda() and x.is_contiguous() and x.dim() == 2);
+        EP_HOST_ASSERT(x.scalar_type() == torch::kBFloat16);
+        EP_HOST_ASSERT(topk_idx.is_cuda() and topk_idx.is_contiguous() and
+                       topk_idx.dim() == 2);
+        EP_HOST_ASSERT(
+            topk_idx.scalar_type() ==
+            c10::CppTypeToScalarType<topk_idx_t>::value);
+        EP_HOST_ASSERT(topk_weights.is_cuda() and
+                       topk_weights.is_contiguous() and
+                       topk_weights.dim() == 2);
+        EP_HOST_ASSERT(topk_weights.scalar_type() == torch::kFloat32);
+        EP_HOST_ASSERT(proxy_dispatch.is_cuda() and
+                       proxy_dispatch.is_contiguous() and
+                       proxy_dispatch.dim() == 2);
+        EP_HOST_ASSERT(proxy_dispatch.scalar_type() == torch::kUInt8);
+        EP_HOST_ASSERT(channel_count.is_cuda() and
+                       channel_count.is_contiguous() and
+                       channel_count.dim() == 3);
+        EP_HOST_ASSERT(channel_count.scalar_type() == torch::kInt32);
+
+        const int64_t num_tokens_i64 = x.size(0);
+        const int64_t hidden_i64 = x.size(1);
+        const int64_t num_topk_i64 = topk_idx.size(1);
+        EP_HOST_ASSERT(num_tokens_i64 >= 0 and
+                       num_tokens_i64 <= num_max_tokens_per_rank);
+        EP_HOST_ASSERT(hidden_i64 > 0 and hidden_i64 <= INT_MAX and
+                       hidden_i64 % 256 == 0);
+        EP_HOST_ASSERT(hidden_i64 <=
+                       INT_MAX / static_cast<int>(sizeof(c10::BFloat16)));
+        EP_HOST_ASSERT(num_topk_i64 >= 1 and num_topk_i64 <= 32);
+        EP_HOST_ASSERT(topk_idx.size(0) == num_tokens_i64);
+        EP_HOST_ASSERT(topk_weights.sizes() == topk_idx.sizes());
+        EP_HOST_ASSERT(channel_count.size(0) == num_source_ranks);
+        EP_HOST_ASSERT(channel_count.size(2) == num_destinations);
+        EP_HOST_ASSERT(channel_count.size(1) >= 1 and
+                       channel_count.size(1) <=
+                           rail_balance::kNumHybridMaxChannels);
+        EP_HOST_ASSERT(is_source or num_tokens_i64 == 0);
+
+        const int hidden = static_cast<int>(hidden_i64);
+        const int num_topk = static_cast<int>(num_topk_i64);
+        const int num_tokens = static_cast<int>(num_tokens_i64);
+        const int num_channels = static_cast<int>(channel_count.size(1));
+        const auto hybrid_layout = rail_balance::HybridArenaLayout(
+            hidden, num_topk, proxy_capacity);
+        const int64_t dispatch_token_bytes =
+            hybrid_layout.dispatch_token_bytes;
+        const int64_t combine_token_bytes = hybrid_layout.combine_token_bytes;
+        EP_HOST_ASSERT(proxy_dispatch.size(1) == dispatch_token_bytes);
+        EP_HOST_ASSERT(proxy_dispatch.size(0) ==
+                       (is_source ? proxy_capacity : 0));
+
+        const int tensor_device = x.get_device();
+        EP_HOST_ASSERT(tensor_device == device_index);
+        EP_HOST_ASSERT(topk_idx.get_device() == tensor_device);
+        EP_HOST_ASSERT(topk_weights.get_device() == tensor_device);
+        EP_HOST_ASSERT(proxy_dispatch.get_device() == tensor_device);
+        EP_HOST_ASSERT(channel_count.get_device() == tensor_device);
+        const c10::cuda::CUDAGuard device_guard(tensor_device);
+        int expected_process_device = -1;
+        if (not rail_balance_hybrid_plan_process_device.compare_exchange_strong(
+                expected_process_device, tensor_device,
+                std::memory_order_relaxed) and
+            expected_process_device != tensor_device)
+            EP_HOST_UNREACHABLE(
+                "Hybrid vnode bridge supports one CUDA device per process");
+
+        // Integer-domain checks precede VNode layout construction, whose
+        // public fields are intentionally compact int values.
+        const int64_t physical_capacity_i64 =
+            rail_balance::checked_mul_i64(
+                num_destinations - 1, num_max_tokens_per_rank);
+        const int64_t rail_capacity_i64 = rail_balance::checked_mul_i64(
+            physical_capacity_i64, num_topk + 1);
+        const int64_t expert_capacity_i64 = rail_balance::checked_mul_i64(
+            rail_balance::checked_mul_i64(
+                num_source_ranks, num_max_tokens_per_rank),
+            num_topk);
+        const int64_t reduce_rows_i64 = rail_balance::checked_mul_i64(
+            std::min(num_destinations, num_topk),
+            num_max_tokens_per_rank);
+        const int64_t source_identity_i64 = rail_balance::checked_mul_i64(
+            num_source_ranks, num_max_tokens_per_rank);
+        EP_HOST_ASSERT(physical_capacity_i64 > 0 and
+                       physical_capacity_i64 <= INT_MAX);
+        EP_HOST_ASSERT(rail_capacity_i64 > 0 and
+                       rail_capacity_i64 <= INT_MAX);
+        EP_HOST_ASSERT(expert_capacity_i64 > 0 and
+                       expert_capacity_i64 <= INT_MAX);
+        EP_HOST_ASSERT(reduce_rows_i64 > 0 and
+                       reduce_rows_i64 <= INT_MAX);
+        EP_HOST_ASSERT(source_identity_i64 > 0 and
+                       source_identity_i64 <= INT_MAX);
+        const int physical_capacity =
+            static_cast<int>(physical_capacity_i64);
+        const int rail_capacity = static_cast<int>(rail_capacity_i64);
+        const int expert_capacity = static_cast<int>(expert_capacity_i64);
+
+        const auto vnode_layout = rail_balance::VNodeRoundTripLayout(
+            hidden * static_cast<int>(sizeof(c10::BFloat16)), num_topk,
+            num_destinations - 1, num_max_tokens_per_rank,
+            num_source_ranks, num_max_tokens_per_rank);
+        validate_rail_balance_hybrid_vnode_layout(
+            hidden, num_topk, num_destinations, num_source_ranks,
+            num_channels, num_max_tokens_per_rank, proxy_capacity);
+        EP_HOST_ASSERT(vnode_layout.rail.records.get_smem_bytes() <=
+                       jit::device_runtime->get_num_smem_bytes());
+        EP_HOST_ASSERT(arena_offset >= 0 and
+                       arena_offset %
+                           rail_balance::kArenaAlignmentBytes == 0);
+        EP_HOST_ASSERT(arena_offset <= num_gpu_buffer_bytes);
+        const int64_t guarded_arena_bytes =
+            rail_balance::checked_add_i64(
+                vnode_layout.arena_bytes, kArenaGuardBytes);
+        EP_HOST_ASSERT(guarded_arena_bytes <=
+                       num_gpu_buffer_bytes - arena_offset);
+        void* arena = math::advance_ptr(buffer, arena_offset);
+        const auto mapped_vnode_layout = rail_balance::VNodeRoundTripLayout(
+            hidden * static_cast<int>(sizeof(c10::BFloat16)), num_topk,
+            num_destinations - 1, num_max_tokens_per_rank,
+            num_source_ranks, num_max_tokens_per_rank, arena);
+
+        // Reject accidental wrapping of any part of this world's symmetric
+        // GPU buffer as an ordinary tensor.  The source-subgroup snapshot may
+        // come from a different allocator, but no raw symmetric pointer is
+        // accepted by this API.
+        const uintptr_t symmetric_begin =
+            reinterpret_cast<uintptr_t>(workspace);
+        const uintptr_t symmetric_end =
+            reinterpret_cast<uintptr_t>(buffer) + num_gpu_buffer_bytes;
+        const auto assert_owning_input = [&](const torch::Tensor& tensor) {
+            if (tensor.nbytes() == 0)
+                return;
+            const uintptr_t begin = reinterpret_cast<uintptr_t>(
+                tensor.data_ptr());
+            const uintptr_t end = begin + tensor.nbytes();
+            EP_HOST_ASSERT(end <= symmetric_begin or begin >= symmetric_end);
+        };
+        assert_owning_input(x);
+        assert_owning_input(topk_idx);
+        assert_owning_input(topk_weights);
+        assert_owning_input(proxy_dispatch);
+        assert_owning_input(channel_count);
+
+        // The common count tensor is the one cross-object bridge input.  A
+        // host snapshot is used only for strict pre-commit validation; the GPU
+        // planner below consumes an owning D2D copy.
+        const auto count_cpu = channel_count.cpu().contiguous();
+        const int* count_ptr = count_cpu.data_ptr<int>();
+        const int channel_capacity =
+            num_max_tokens_per_rank / num_channels +
+            (num_max_tokens_per_rank % num_channels != 0);
+        for (int owner = 0; owner < num_source_ranks; ++owner) {
+            for (int destination = 0;
+                 destination < num_destinations; ++destination) {
+                int64_t owner_total = 0;
+                for (int channel = 0; channel < num_channels; ++channel) {
+                    const auto offset =
+                        (static_cast<int64_t>(owner) * num_channels +
+                         channel) * num_destinations + destination;
+                    const int value = count_ptr[offset];
+                    EP_HOST_ASSERT(value >= 0 and
+                                   value <= channel_capacity);
+                    if (destination == 0)
+                        EP_HOST_ASSERT(value == 0);
+                    owner_total += value;
+                }
+                EP_HOST_ASSERT(owner_total <= num_max_tokens_per_rank);
+            }
+        }
+
+        // Source ranks additionally prove that their ordinary top-k input is
+        // remote-only, unmasked, duplicate-free, and exactly represented by
+        // their owner row of channel_count.  Thus pack cannot discover an
+        // input/count mismatch after it starts publishing into the arena.
+        if (is_source) {
+            const auto topk_cpu = topk_idx.cpu().contiguous();
+            const auto* topk_ptr = topk_cpu.data_ptr<topk_idx_t>();
+            std::vector<int> expected_count(
+                static_cast<size_t>(num_channels) * num_destinations, 0);
+            const int experts_per_destination =
+                num_experts / num_destinations;
+            for (int token = 0; token < num_tokens; ++token) {
+                bool seen_destination[
+                    rail_balance::kNumHybridMaxDestinations] = {};
+                for (int lane = 0; lane < num_topk; ++lane) {
+                    const auto expert_value = topk_ptr[
+                        static_cast<int64_t>(token) * num_topk + lane];
+                    const int64_t expert =
+                        static_cast<int64_t>(expert_value);
+                    EP_HOST_ASSERT(expert >= experts_per_destination and
+                                   expert < num_experts);
+                    for (int prior = 0; prior < lane; ++prior)
+                        EP_HOST_ASSERT(expert_value != topk_ptr[
+                            static_cast<int64_t>(token) * num_topk + prior]);
+                    seen_destination[expert / experts_per_destination] = true;
+                }
+                const int channel = token % num_channels;
+                for (int destination = 1;
+                     destination < num_destinations; ++destination)
+                    if (seen_destination[destination])
+                        ++expected_count[
+                            channel * num_destinations + destination];
+            }
+            for (int channel = 0; channel < num_channels; ++channel)
+                for (int destination = 0;
+                     destination < num_destinations; ++destination) {
+                    const auto global_offset =
+                        (static_cast<int64_t>(rank_idx) * num_channels +
+                         channel) * num_destinations + destination;
+                    EP_HOST_ASSERT(count_ptr[global_offset] ==
+                        expected_count[
+                            channel * num_destinations + destination]);
+                }
+        }
+
+        const auto int_options = channel_count.options();
+        auto plan = allocate_rail_balance_hybrid_plan_outputs(
+            int_options, num_source_ranks, num_channels, num_destinations);
+        auto compact_quota = torch::empty(
+            {num_source_ranks, num_destinations - 1}, int_options);
+        auto proxy_return = torch::zeros(
+            {proxy_capacity, combine_token_bytes},
+            proxy_dispatch.options());
+        auto reduce_seed = torch::zeros(
+            {reduce_rows_i64, combine_token_bytes},
+            proxy_dispatch.options());
+        auto rail_records = torch::empty(
+            {rail_capacity, mapped_vnode_layout.rail.records.record_bytes},
+            proxy_dispatch.options());
+        auto rail_ready = torch::empty({rail_capacity}, int_options);
+        auto rail_routes = torch::empty(
+            {rail_capacity,
+             static_cast<int64_t>(sizeof(rail_balance::VNodeRoute))},
+            proxy_dispatch.options());
+        auto expert_records = torch::empty(
+            {expert_capacity,
+             mapped_vnode_layout.expert.records.record_bytes},
+            proxy_dispatch.options());
+        auto expert_ready = torch::empty({expert_capacity}, int_options);
+        auto expert_routes = torch::empty(
+            {expert_capacity,
+             static_cast<int64_t>(sizeof(rail_balance::VNodeRoute))},
+            proxy_dispatch.options());
+        const int status_stride = std::max({
+            num_channels,
+            physical_capacity * num_topk,
+            expert_capacity,
+        });
+        EP_HOST_ASSERT(status_stride > 0);
+        auto stage_status = torch::zeros(
+            {6, status_stride}, int_options);
+        auto arena_guard = torch::empty(
+            {kArenaGuardBytes}, proxy_dispatch.options());
+        std::vector<int> host_stage_status(
+            static_cast<size_t>(6) * status_stride, 0);
+
+        // Every cold-build failure remains pre-commit.  finish performs no
+        // build, allocation, tensor validation, or quota compaction.
+        auto prepared_plan = prepare_rail_balance_hybrid_plan();
+        auto prepared_adapter = prepare_rail_balance_hybrid_vnode(
+            hidden, num_topk);
+        auto prepared_vnode = prepare_rail_balance_vnode(hidden, num_topk);
+        auto prepared_world_barrier =
+            prepare_rail_balance_hybrid_local_barrier(
+                kWorldRanks, num_gpu_timeout_cycles);
+
+        const auto compute_stream =
+            at::cuda::getCurrentCUDAStream(tensor_device);
+        if (comm_stream.id() != compute_stream.id())
+            stream_wait(comm_stream, compute_stream);
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            plan.channel_count.data_ptr<int>(), channel_count.data_ptr<int>(),
+            channel_count.nbytes(), cudaMemcpyDeviceToDevice, comm_stream));
+        launch_prepared_rail_balance_hybrid_plan(
+            prepared_plan,
+            plan.channel_count.data_ptr<int>(), plan.count.data_ptr<int>(),
+            plan.quota.data_ptr<int>(), plan.keep_count.data_ptr<int>(),
+            plan.segments.data_ptr<int>(),
+            plan.num_segments.data_ptr<int>(),
+            num_source_ranks, num_channels, num_destinations,
+            normalized_remainder_seed, comm_stream);
+        launch_prepared_rail_balance_hybrid_prefix(
+            prepared_plan,
+            plan.channel_count.data_ptr<int>(), plan.quota.data_ptr<int>(),
+            plan.keep_count.data_ptr<int>(),
+            plan.owner_channel_prefix.data_ptr<int>(),
+            plan.retained.data_ptr<int>(), plan.moved.data_ptr<int>(),
+            plan.moved_channel_prefix.data_ptr<int>(),
+            plan.group_prefix.data_ptr<int>(),
+            plan.proxy_required.data_ptr<int>(),
+            plan.moved_copies.data_ptr<int>(), plan.status.data_ptr<int>(),
+            num_source_ranks, num_channels, num_destinations,
+            num_max_tokens_per_rank, proxy_capacity, comm_stream);
+
+        // Dropping destination zero with a pointer offset would retain the D
+        // source-row pitch.  Copy every row into its true contiguous [G,D-1]
+        // representation before the old vnode kernels can observe it.
+        CUDA_RUNTIME_CHECK(cudaMemcpy2DAsync(
+            compact_quota.data_ptr<int>(),
+            static_cast<size_t>(num_destinations - 1) * sizeof(int),
+            plan.quota.data_ptr<int>() + 1,
+            static_cast<size_t>(num_destinations) * sizeof(int),
+            static_cast<size_t>(num_destinations - 1) * sizeof(int),
+            num_source_ranks, cudaMemcpyDeviceToDevice, comm_stream));
+
+        int host_status = 0;
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            &host_status, plan.status.data_ptr<int>(), sizeof(host_status),
+            cudaMemcpyDeviceToHost, comm_stream));
+        CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
+        EP_HOST_ASSERT(host_status == 0 or host_status == 1);
+        if (host_status == 0) {
+            const auto compact_cpu = compact_quota.cpu().contiguous();
+            const int* compact_ptr = compact_cpu.data_ptr<int>();
+            for (int owner = 0; owner < num_source_ranks; ++owner)
+                for (int destination = 0;
+                     destination < num_destinations - 1; ++destination) {
+                    const int value = compact_ptr[
+                        owner * (num_destinations - 1) + destination];
+                    EP_HOST_ASSERT(value >= 0 and
+                                   value <= num_max_tokens_per_rank);
+                }
+        }
+
+        rail_balance_hybrid_vnode_pending.emplace(
+            RailBalanceHybridVNodePending{
+                .invocation_id = invocation_id,
+                .finish_attempted = false,
+                .finished = false,
+                .plan_status = host_status,
+                .num_tokens = num_tokens,
+                .hidden = hidden,
+                .num_topk = num_topk,
+                .num_experts = num_experts,
+                .num_destinations = num_destinations,
+                .num_rails = num_source_ranks,
+                .num_channels = num_channels,
+                .num_max_tokens_per_rank = num_max_tokens_per_rank,
+                .proxy_capacity = proxy_capacity,
+                .generation = generation,
+                .physical_capacity = physical_capacity,
+                .rail_capacity = rail_capacity,
+                .expert_capacity = expert_capacity,
+                .status_stride = status_stride,
+                .arena_offset = arena_offset,
+                .arena_bytes = vnode_layout.arena_bytes,
+                .arena = arena,
+                .x = x,
+                .topk_idx = topk_idx,
+                .topk_weights = topk_weights,
+                .proxy_dispatch = proxy_dispatch,
+                .plan = std::move(plan),
+                .compact_quota = std::move(compact_quota),
+                .proxy_return = std::move(proxy_return),
+                .reduce_seed = std::move(reduce_seed),
+                .rail_records = std::move(rail_records),
+                .rail_ready = std::move(rail_ready),
+                .rail_routes = std::move(rail_routes),
+                .expert_records = std::move(expert_records),
+                .expert_ready = std::move(expert_ready),
+                .expert_routes = std::move(expert_routes),
+                .stage_status = std::move(stage_status),
+                .arena_guard = std::move(arena_guard),
+                .host_stage_status = std::move(host_stage_status),
+                .prepared_plan = std::move(prepared_plan),
+                .prepared_adapter = std::move(prepared_adapter),
+                .prepared_vnode = std::move(prepared_vnode),
+                .prepared_world_barrier =
+                    std::move(prepared_world_barrier),
+            });
+        const auto& pending = rail_balance_hybrid_vnode_pending.value();
+        return {
+            host_status, pending.plan.as_tuple(), pending.compact_quota,
+        };
+    }
+
+    RailBalanceHybridVNodeTensors rail_balance_hybrid_vnode_finish(
+        const int& invocation_id) {
+        constexpr int64_t kArenaGuardBytes = 4096;
+        EP_HOST_ASSERT(not destroyed);
+        EP_HOST_ASSERT(rail_balance_hybrid_vnode_pending.has_value());
+        auto& pending = rail_balance_hybrid_vnode_pending.value();
+        EP_HOST_ASSERT(pending.invocation_id == invocation_id);
+        EP_HOST_ASSERT(pending.plan_status == 0);
+        EP_HOST_ASSERT(not pending.finish_attempted);
+        EP_HOST_ASSERT(not pending.finished);
+
+        const bool is_source =
+            nccl_context->rank_idx < pending.num_rails;
+        const int old_num_destinations = pending.num_destinations - 1;
+        const int expert_begin =
+            pending.num_experts / pending.num_destinations;
+        const int experts_per_rank = pending.num_experts /
+            (pending.num_destinations * pending.num_rails);
+        const auto mapped_layout = rail_balance::VNodeRoundTripLayout(
+            pending.hidden * static_cast<int>(sizeof(c10::BFloat16)),
+            pending.num_topk, old_num_destinations,
+            pending.num_max_tokens_per_rank, pending.num_rails,
+            pending.num_max_tokens_per_rank, pending.arena);
+        const int smem_bytes = static_cast<int>(
+            mapped_layout.rail.records.get_smem_bytes());
+        int* status = pending.stage_status.data_ptr<int>();
+
+        // From this point onward a world barrier may be entered.  Any failure
+        // is sticky and the same invocation can only be released by abort.
+        pending.finish_attempted = true;
+        try {
+            CUDA_RUNTIME_CHECK(cudaMemsetAsync(
+                pending.arena, 0, pending.arena_bytes, comm_stream));
+            CUDA_RUNTIME_CHECK(cudaMemsetAsync(
+                math::advance_ptr(pending.arena, pending.arena_bytes),
+                0xA5, kArenaGuardBytes, comm_stream));
+
+            if (is_source)
+                launch_prepared_rail_balance_hybrid_pack_vnode_base(
+                    pending.prepared_adapter,
+                    pending.x.data_ptr(),
+                    pending.topk_idx.data_ptr<topk_idx_t>(),
+                    pending.topk_weights.data_ptr<float>(),
+                    pending.proxy_dispatch.data_ptr(), pending.arena,
+                    pending.plan, status,
+                    pending.num_tokens, pending.hidden,
+                    pending.num_topk, pending.num_experts,
+                    pending.num_destinations, pending.num_rails,
+                    nccl_context->rank_idx, pending.num_channels,
+                    pending.num_max_tokens_per_rank,
+                    pending.proxy_capacity, pending.generation,
+                    comm_stream);
+            // B0: arena zeroing and every source base publication complete.
+            launch_prepared_rail_balance_hybrid_local_barrier(
+                pending.prepared_world_barrier,
+                nccl_context->dev_comm, nccl_context->window, workspace,
+                8, nccl_context->nvl_rank_idx,
+                num_gpu_timeout_cycles, comm_stream);
+
+            if (is_source)
+                launch_prepared_rail_balance_vnode_peer(
+                    pending.prepared_vnode.scaleout,
+                    nccl_context->dev_comm, nccl_context->window,
+                    pending.arena, status + pending.status_stride,
+                    pending.compact_quota.data_ptr<int>(),
+                    old_num_destinations,
+                    pending.num_max_tokens_per_rank, pending.num_rails,
+                    pending.num_max_tokens_per_rank, pending.generation,
+                    nccl_context->rank_idx, expert_begin, experts_per_rank,
+                    pending.physical_capacity, smem_bytes, comm_stream);
+            // B1: all virtual scaleout writes are visible.
+            launch_prepared_rail_balance_hybrid_local_barrier(
+                pending.prepared_world_barrier,
+                nccl_context->dev_comm, nccl_context->window, workspace,
+                8, nccl_context->nvl_rank_idx,
+                num_gpu_timeout_cycles, comm_stream);
+
+            if (not is_source)
+                launch_prepared_rail_balance_vnode_expert(
+                    pending.prepared_vnode.forward,
+                    nccl_context->dev_comm, nccl_context->window,
+                    pending.arena, status + 2 * pending.status_stride,
+                    pending.compact_quota.data_ptr<int>(),
+                    old_num_destinations,
+                    pending.num_max_tokens_per_rank, pending.num_rails,
+                    pending.num_max_tokens_per_rank, pending.generation,
+                    nccl_context->rank_idx, expert_begin, experts_per_rank,
+                    pending.physical_capacity * pending.num_topk,
+                    smem_bytes, comm_stream);
+            // B2: destination forwarding complete.
+            launch_prepared_rail_balance_hybrid_local_barrier(
+                pending.prepared_world_barrier,
+                nccl_context->dev_comm, nccl_context->window, workspace,
+                8, nccl_context->nvl_rank_idx,
+                num_gpu_timeout_cycles, comm_stream);
+
+            if (not is_source)
+                launch_prepared_rail_balance_vnode_expert(
+                    pending.prepared_vnode.expert,
+                    nccl_context->dev_comm, nccl_context->window,
+                    pending.arena, status + 3 * pending.status_stride,
+                    pending.compact_quota.data_ptr<int>(),
+                    old_num_destinations,
+                    pending.num_max_tokens_per_rank, pending.num_rails,
+                    pending.num_max_tokens_per_rank, pending.generation,
+                    nccl_context->rank_idx, expert_begin, experts_per_rank,
+                    pending.expert_capacity, smem_bytes, comm_stream);
+            // B3: synthetic expert contributions complete.
+            launch_prepared_rail_balance_hybrid_local_barrier(
+                pending.prepared_world_barrier,
+                nccl_context->dev_comm, nccl_context->window, workspace,
+                8, nccl_context->nvl_rank_idx,
+                num_gpu_timeout_cycles, comm_stream);
+
+            if (not is_source)
+                launch_prepared_rail_balance_vnode_peer(
+                    pending.prepared_vnode.return_path,
+                    nccl_context->dev_comm, nccl_context->window,
+                    pending.arena, status + 4 * pending.status_stride,
+                    pending.compact_quota.data_ptr<int>(),
+                    old_num_destinations,
+                    pending.num_max_tokens_per_rank, pending.num_rails,
+                    pending.num_max_tokens_per_rank, pending.generation,
+                    nccl_context->rank_idx, expert_begin, experts_per_rank,
+                    pending.physical_capacity * pending.num_topk,
+                    smem_bytes, comm_stream);
+            // B4: every returned contribution is visible at source egress.
+            launch_prepared_rail_balance_hybrid_local_barrier(
+                pending.prepared_world_barrier,
+                nccl_context->dev_comm, nccl_context->window, workspace,
+                8, nccl_context->nvl_rank_idx,
+                num_gpu_timeout_cycles, comm_stream);
+
+            if (is_source)
+                launch_prepared_rail_balance_hybrid_return_demux(
+                    pending.prepared_adapter,
+                    pending.arena, pending.proxy_dispatch.data_ptr(),
+                    pending.reduce_seed.data_ptr(),
+                    pending.proxy_return.data_ptr(), pending.plan,
+                    status + 5 * pending.status_stride,
+                    pending.hidden, pending.num_topk, pending.num_experts,
+                    pending.num_destinations, pending.num_rails,
+                    nccl_context->rank_idx, pending.num_channels,
+                    pending.num_max_tokens_per_rank,
+                    pending.proxy_capacity, pending.generation,
+                    comm_stream);
+            // B5: demux has completed on every source before host inspection.
+            launch_prepared_rail_balance_hybrid_local_barrier(
+                pending.prepared_world_barrier,
+                nccl_context->dev_comm, nccl_context->window, workspace,
+                8, nccl_context->nvl_rank_idx,
+                num_gpu_timeout_cycles, comm_stream);
+
+            const auto copy_snapshot = [&](void* dst, const void* src,
+                                           const int64_t num_bytes) {
+                CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+                    dst, src, static_cast<size_t>(num_bytes),
+                    cudaMemcpyDeviceToDevice, comm_stream));
+            };
+            copy_snapshot(
+                pending.rail_records.data_ptr(),
+                mapped_layout.rail.records.get_record_ptr(0),
+                static_cast<int64_t>(pending.rail_capacity) *
+                    mapped_layout.rail.records.record_bytes);
+            copy_snapshot(
+                pending.rail_ready.data_ptr<int>(),
+                mapped_layout.rail.records.get_ready_ptr(),
+                static_cast<int64_t>(pending.rail_capacity) * sizeof(int));
+            copy_snapshot(
+                pending.rail_routes.data_ptr(),
+                mapped_layout.rail.get_route_ptr(),
+                static_cast<int64_t>(pending.rail_capacity) *
+                    sizeof(rail_balance::VNodeRoute));
+            copy_snapshot(
+                pending.expert_records.data_ptr(),
+                mapped_layout.expert.records.get_record_ptr(0),
+                static_cast<int64_t>(pending.expert_capacity) *
+                    mapped_layout.expert.records.record_bytes);
+            copy_snapshot(
+                pending.expert_ready.data_ptr<int>(),
+                mapped_layout.expert.records.get_ready_ptr(),
+                static_cast<int64_t>(pending.expert_capacity) * sizeof(int));
+            copy_snapshot(
+                pending.expert_routes.data_ptr(),
+                mapped_layout.expert.get_route_ptr(),
+                static_cast<int64_t>(pending.expert_capacity) *
+                    sizeof(rail_balance::VNodeRoute));
+            copy_snapshot(
+                pending.arena_guard.data_ptr(),
+                math::advance_ptr(pending.arena, pending.arena_bytes),
+                kArenaGuardBytes);
+            CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+                pending.host_stage_status.data(), status,
+                static_cast<size_t>(6) * pending.status_stride * sizeof(int),
+                cudaMemcpyDeviceToHost, comm_stream));
+            CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
+        } catch (...) {
+            pending.plan_status = static_cast<int>(
+                rail_balance::HybridPlanError::InvalidSchedule);
+            throw;
+        }
+
+        for (const int value : pending.host_stage_status) {
+            if (value != 0) {
+                pending.plan_status = value;
+                throw EPExceptionWithLineInfo(
+                    "Rail balance Hybrid vnode finish",
+                    "a fixed vnode stage reported a sticky device error");
+            }
+        }
+        pending.finished = true;
+        return pending.as_tuple();
+    }
+
+    void rail_balance_hybrid_vnode_abort(const int& invocation_id) {
+        // Idempotent and transaction-specific.  After finish starts, scratch
+        // rollback is deliberately not promised, but owning tensor/JIT state
+        // can still be released safely once the Python control plane has
+        // converged all ranks.
+        if (rail_balance_hybrid_vnode_pending.has_value() and
+            rail_balance_hybrid_vnode_pending->invocation_id == invocation_id)
+            rail_balance_hybrid_vnode_pending.reset();
     }
 
     static std::tuple<int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t>
@@ -3563,6 +4225,31 @@ static void register_apis(pybind11::module_& m) {
         .def(
             "_rail_balance_hybrid_plan_abort",
             &ElasticBuffer::rail_balance_hybrid_plan_abort,
+            pybind11::arg("invocation_id"))
+        .def(
+            "_rail_balance_hybrid_vnode_prepare",
+            &ElasticBuffer::rail_balance_hybrid_vnode_prepare,
+            pybind11::arg("x"),
+            pybind11::arg("topk_idx"),
+            pybind11::arg("topk_weights"),
+            pybind11::arg("proxy_dispatch"),
+            pybind11::arg("channel_count"),
+            pybind11::arg("arena_offset"),
+            pybind11::arg("num_max_tokens_per_rank"),
+            pybind11::arg("num_experts"),
+            pybind11::arg("num_destinations"),
+            pybind11::arg("num_source_ranks"),
+            pybind11::arg("proxy_capacity"),
+            pybind11::arg("generation"),
+            pybind11::arg("invocation_id"),
+            pybind11::arg("remainder_seed") = pybind11::int_(0))
+        .def(
+            "_rail_balance_hybrid_vnode_finish",
+            &ElasticBuffer::rail_balance_hybrid_vnode_finish,
+            pybind11::arg("invocation_id"))
+        .def(
+            "_rail_balance_hybrid_vnode_abort",
+            &ElasticBuffer::rail_balance_hybrid_vnode_abort,
             pybind11::arg("invocation_id"))
         .def("_rail_balance_source_shuffle", &ElasticBuffer::rail_balance_source_shuffle)
         .def("_rail_balance_source_shuffle_protocol",

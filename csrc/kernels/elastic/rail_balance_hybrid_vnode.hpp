@@ -1,5 +1,8 @@
 #pragma once
 
+#include <tuple>
+#include <vector>
+
 #include <deep_ep/common/exception.cuh>
 #include <deep_ep/common/rail_balance_hybrid_layout.cuh>
 #include <deep_ep/common/rail_balance_vnode_layout.cuh>
@@ -7,6 +10,7 @@
 #include "../../jit/compiler.hpp"
 #include "../../jit/launch_runtime.hpp"
 #include "rail_balance_hybrid_dispatch.hpp"
+#include "rail_balance_vnode.hpp"
 
 namespace deep_ep::elastic {
 
@@ -146,6 +150,89 @@ static void __instantiate_kernel() {{
 struct PreparedRailBalanceHybridVNode {
     std::shared_ptr<jit::KernelRuntime> pack;
     std::shared_ptr<jit::KernelRuntime> demux;
+};
+
+// Private C080-D result ABI.  The first eleven tensors are owning CUDA
+// snapshots from the world buffer; the nested tuple is the independently
+// rebuilt production-shaped plan.  No pointer into either symmetric window is
+// allowed to escape this entry point.
+using RailBalanceHybridVNodeTensors = std::tuple<
+    torch::Tensor,  // proxy_return       [Pcap, combine_stride]
+    torch::Tensor,  // reduce_seed        [min(D, K) * M, combine_stride]
+    torch::Tensor,  // compact_quota      [G, D - 1]
+    torch::Tensor,  // rail_records       [P * (K + 1), vnode_record_bytes]
+    torch::Tensor,  // rail_ready         [P * (K + 1)]
+    torch::Tensor,  // rail_routes        [P * (K + 1), sizeof(VNodeRoute)]
+    torch::Tensor,  // expert_records     [G * M * K, vnode_record_bytes]
+    torch::Tensor,  // expert_ready       [G * M * K]
+    torch::Tensor,  // expert_routes      [G * M * K, sizeof(VNodeRoute)]
+    torch::Tensor,  // stage_status       [6, status_stride]
+    torch::Tensor,  // arena_guard        [4096]
+    RailBalanceHybridPlanTensors>;
+
+using RailBalanceHybridVNodePrepareTensors = std::tuple<
+    int,                          // device plan status
+    RailBalanceHybridPlanTensors, // owning world plan references
+    torch::Tensor>;               // compact quota [G, D - 1]
+
+// Every allocation and every JIT object needed by the fixed B0..B5 sequence
+// is owned here before prepare returns.  finish_attempted is sticky: once a
+// world barrier may have been entered, replaying the same transaction is
+// forbidden even when CUDA reports an exception.
+struct RailBalanceHybridVNodePending {
+    int invocation_id;
+    bool finish_attempted;
+    bool finished;
+    int plan_status;
+    int num_tokens;
+    int hidden;
+    int num_topk;
+    int num_experts;
+    int num_destinations;
+    int num_rails;
+    int num_channels;
+    int num_max_tokens_per_rank;
+    int proxy_capacity;
+    int generation;
+    int physical_capacity;
+    int rail_capacity;
+    int expert_capacity;
+    int status_stride;
+    int64_t arena_offset;
+    int64_t arena_bytes;
+    void* arena;
+
+    torch::Tensor x;
+    torch::Tensor topk_idx;
+    torch::Tensor topk_weights;
+    torch::Tensor proxy_dispatch;
+    RailBalanceHybridPlanOutputs plan;
+    torch::Tensor compact_quota;
+    torch::Tensor proxy_return;
+    torch::Tensor reduce_seed;
+    torch::Tensor rail_records;
+    torch::Tensor rail_ready;
+    torch::Tensor rail_routes;
+    torch::Tensor expert_records;
+    torch::Tensor expert_ready;
+    torch::Tensor expert_routes;
+    torch::Tensor stage_status;
+    torch::Tensor arena_guard;
+    std::vector<int> host_stage_status;
+
+    PreparedRailBalanceHybridPlan prepared_plan;
+    PreparedRailBalanceHybridVNode prepared_adapter;
+    PreparedRailBalanceVNode prepared_vnode;
+    std::shared_ptr<jit::KernelRuntime> prepared_world_barrier;
+
+    RailBalanceHybridVNodeTensors as_tuple() const {
+        return {
+            proxy_return, reduce_seed, compact_quota,
+            rail_records, rail_ready, rail_routes,
+            expert_records, expert_ready, expert_routes,
+            stage_status, arena_guard, plan.as_tuple(),
+        };
+    }
 };
 
 static void validate_rail_balance_hybrid_vnode_layout(

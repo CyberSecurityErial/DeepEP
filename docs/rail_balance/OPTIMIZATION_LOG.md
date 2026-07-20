@@ -734,3 +734,28 @@ Sanitizer order is memcheck, initcheck, synccheck, then focused racecheck.
 Racecheck is evidence for shared-memory/TMA hazards only and cannot prove LSA
 system-scope ordering. During unrelated GPU occupancy, ordinary non-OOM runs
 remain useful for correctness but no timing or bandwidth number is accepted.
+
+## Scope decision O037 — keep the two-window bridge outside the hot path
+
+The world vnode bridge adds substantial host-side validation and owning
+snapshots because it is a correctness oracle spanning two independent NCCL
+symmetric windows. None of that code is reachable from public dispatch or
+combine, and none of its cross-object copies may be included in an operator
+speedup claim. Refactoring the older vnode emulator or adding a general
+transport abstraction merely to shorten this private method was rejected: it
+would enlarge the changed production-adjacent surface without removing a
+single operation from the eventual Hybrid kernel.
+
+The device mapping remains the two audited one-warp adapters. It still uses
+the existing retained and moved prefixes, no destination-wide prefix, no copy
+manifest, no queue/ring, and no success-path global atomic. The host bridge
+rebuilds the production-shaped plan once before commit and compacts quota with
+one 2D D2D copy. These costs establish functional equivalence only; C100 will
+profile source shuffle, demux, return-unshuffle, and the legacy epilogue in
+isolation after the GPU is idle.
+
+Returning live owning plan references avoids fifteen redundant tensor clones.
+The tradeoff is an explicit private-harness read-only contract. Since the
+harness controls every call and compares digests immediately before B0, the
+extra copies would provide no production safety or performance evidence and
+are not justified.
