@@ -22,6 +22,77 @@ from ..utils.envs import (
 from ..utils.comm import get_nccl_comm_handle
 
 
+_RAIL_BALANCE_MODES = ('off', 'force')
+_RAIL_BALANCE_MAX_PROXY_SLOTS = (1 << 31) - 1
+_RAIL_BALANCE_FORCE_HOST_AVAILABLE = False
+
+
+def _rail_balance_error(code: str, detail: str) -> str:
+    return f'[DeepEP rail_balance:{code}] {detail}'
+
+
+def _parse_rail_balance_config(mode: str, proxy_slots_per_rank: int) -> Tuple[str, int]:
+    """Validate the constructor-fixed rail-balance mode without touching CUDA or collectives."""
+    if type(mode) is not str or mode not in _RAIL_BALANCE_MODES:
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            f"rail_balance must be exactly one of {_RAIL_BALANCE_MODES}, got {mode!r}"))
+    if type(proxy_slots_per_rank) is not int or not (
+            0 <= proxy_slots_per_rank <= _RAIL_BALANCE_MAX_PROXY_SLOTS):
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            'rail_balance_proxy_slots_per_rank must be an integer in '
+            f'[0, {_RAIL_BALANCE_MAX_PROXY_SLOTS}]'))
+    if mode == 'off' and proxy_slots_per_rank != 0:
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            "rail_balance_proxy_slots_per_rank must be 0 when rail_balance='off'"))
+    if mode == 'force' and proxy_slots_per_rank == 0:
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            "rail_balance_proxy_slots_per_rank must be positive when rail_balance='force'"))
+    return mode, proxy_slots_per_rank
+
+
+def _validate_rail_balance_force_constructor(
+        num_bytes: Optional[int], num_cpu_bytes: int,
+        num_max_tokens_per_rank: int, hidden: int, num_topk: int,
+        use_fp8_dispatch: bool, deterministic: bool,
+        allow_hybrid_mode: bool, allow_multiple_reduction: bool) -> None:
+    """Validate the deliberately narrow force-v1 constructor contract."""
+    invalid_reason = None
+    if num_bytes is not None:
+        invalid_reason = 'manual num_bytes is not supported'
+    elif type(num_cpu_bytes) is not int or num_cpu_bytes != 0:
+        invalid_reason = 'num_cpu_bytes must be 0'
+    elif type(num_max_tokens_per_rank) is not int or num_max_tokens_per_rank <= 0:
+        invalid_reason = 'num_max_tokens_per_rank must be a positive integer'
+    elif type(hidden) is not int or hidden <= 0 or hidden % 256 != 0:
+        invalid_reason = 'hidden must be a positive multiple of 256'
+    elif type(num_topk) is not int or not (1 <= num_topk <= 32):
+        invalid_reason = 'num_topk must be an integer in [1, 32]'
+    elif use_fp8_dispatch:
+        invalid_reason = 'FP8 dispatch is not supported'
+    elif deterministic:
+        invalid_reason = 'deterministic mode is not supported'
+    elif not allow_hybrid_mode:
+        invalid_reason = 'allow_hybrid_mode must be true'
+    elif not allow_multiple_reduction:
+        invalid_reason = 'allow_multiple_reduction must be true'
+
+    if invalid_reason is not None:
+        raise ValueError(_rail_balance_error(
+            'UnsupportedConfiguration', f'force-v1: {invalid_reason}'))
+
+
+def _rail_balance_force_available() -> bool:
+    """Fail closed across old extensions and partial Python/C++ installations."""
+    compiled_capability = getattr(_C, '_rail_balance_force_available', None)
+    compiled_available = (callable(compiled_capability) and
+                          compiled_capability() is True)
+    return _RAIL_BALANCE_FORCE_HOST_AVAILABLE and compiled_available
+
+
 class EPHandle:
     """
     Communication handle returned by `ElasticBuffer.dispatch`.
@@ -243,7 +314,10 @@ class ElasticBuffer:
                  sl_idx: int = 3,
                  num_allocated_qps: int = 0,
                  num_cpu_timeout_secs: int = 300, num_gpu_timeout_secs: int = 100,
-                 explicitly_destroy: bool = False):
+                 explicitly_destroy: bool = False,
+                 *,
+                 rail_balance: str = 'off',
+                 rail_balance_proxy_slots_per_rank: int = 0):
         """
         Initialize the elastic communication buffer.
 
@@ -266,7 +340,24 @@ class ElasticBuffer:
             num_gpu_timeout_secs: GPU-side timeout in seconds for GPU operations.
             explicitly_destroy: If this flag is set to True, you need to explicitly call `destroy()` to release resources;
                 otherwise, the resources will be released by the destructor.
+            rail_balance: experimental source-side rail-balancing mode, either ``'off'`` or ``'force'``.
+                The default ``'off'`` path is identical to the legacy ElasticBuffer path.
+            rail_balance_proxy_slots_per_rank: moved-copy capacity reserved on each egress rank.
+                Must be zero for ``'off'`` and positive for ``'force'``.
         """
+        rail_balance, rail_balance_proxy_slots_per_rank = _parse_rail_balance_config(
+            rail_balance, rail_balance_proxy_slots_per_rank)
+        if rail_balance == 'force':
+            _validate_rail_balance_force_constructor(
+                num_bytes, num_cpu_bytes,
+                num_max_tokens_per_rank, hidden, num_topk,
+                use_fp8_dispatch, deterministic,
+                allow_hybrid_mode, allow_multiple_reduction)
+            if not _rail_balance_force_available():
+                raise RuntimeError(_rail_balance_error(
+                    'FeatureUnavailable',
+                    'force-v1 is disabled until both Hybrid dispatch and combine are installed'))
+
         # Some useful utilities
         self.group = group
         self.rank_idx = group.rank()
