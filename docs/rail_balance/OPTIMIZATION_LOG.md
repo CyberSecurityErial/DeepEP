@@ -695,3 +695,42 @@ the committed return-to-epilogue interval performs no JIT build or allocation.
 The explicit comm-stream synchronize is correctness-test overhead and is not a
 production optimization. NCU/Nsys will profile the epilogue only after the
 full vnode loop passes; no standalone timing claim is made here.
+
+## Profiling decision O036 — isolate one warmed kernel before optimizing
+
+The installed tools support the required focused workflow: NCU 2025.1.1,
+Nsight Systems 2024.6.2, and Compute Sanitizer 2025.1. Production kernels will
+not gain NVTX or profiling branches. The new test harness may place one outer
+`c080_profile` range around a warmed transaction and nested host-phase ranges;
+all ranks use control-plane gates around that range so rank-zero capture does
+not silently omit peer work.
+
+The first Nsys pass uses CUDA/NVTX/OSRT without GPU metrics; metrics are a
+separate run so sampling does not perturb the timeline used for launch-gap and
+overlap decisions. The first NCU pass selects one device, one named kernel,
+and one launch with application replay. It starts with `--set basic`; only a
+measured bottleneck justifies LaunchStats, Occupancy, SpeedOfLight,
+MemoryWorkloadAnalysis, SchedulerStats, WarpStateStats, or the dedicated
+NVLink set. `--set full` is not an acceptable discovery pass.
+
+Canonical filters are:
+
+```text
+rail_balance_hybrid_count_impl
+rail_balance_hybrid_plan_impl
+rail_balance_hybrid_prefix_impl
+rail_balance_hybrid_source_shuffle_impl
+rail_balance_hybrid_pack_vnode_base_impl
+rail_balance_vnode_scaleout_impl
+rail_balance_vnode_forward_impl
+rail_balance_vnode_expert_impl
+rail_balance_vnode_return_impl
+rail_balance_hybrid_return_demux_impl
+rail_balance_hybrid_return_unshuffle_impl
+combine_reduce_epilogue_impl
+```
+
+Sanitizer order is memcheck, initcheck, synccheck, then focused racecheck.
+Racecheck is evidence for shared-memory/TMA hazards only and cannot prove LSA
+system-scope ordering. During unrelated GPU occupancy, ordinary non-OOM runs
+remain useful for correctness but no timing or bandwidth number is accepted.

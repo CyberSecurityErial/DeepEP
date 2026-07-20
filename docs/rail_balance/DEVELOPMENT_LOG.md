@@ -2260,3 +2260,35 @@ PASS independent epilogue host audit: Blocker/High/Medium = 0/0/0
 
 Runtime PDL behavior for `D<=K`, `D>K`, and `N=0` remains part of the upcoming
 8-GPU bridge acceptance. Public force remains disabled.
+
+## 2026-07-21 — D037: freeze the local profiling toolchain and evidence policy
+
+The local profiling tools were audited before the full Hybrid vnode harness
+was launched. The installed versions are NCU 2025.1.1, Nsight Systems 2024.6.2,
+and Compute Sanitizer 2025.1. All required multi-process, kernel-filter, NVTX,
+and focused sanitizer controls are available. The source plan/shuffle,
+pack/demux, vnode transport stages, return-unshuffle, and unchanged combine
+epilogue can each be selected by their concrete kernel names.
+
+The current GPU processes are `mmunlearner_merger` and vLLM workloads. No
+process was positively identified as Megatron or standalone MGT, so nothing
+was terminated. While those workloads remain, a non-OOM run may count as
+functional evidence only; latency, bandwidth, overlap, sanitizer memory
+pressure, and throughput measurements are deferred to an idle window.
+
+The accepted profiling order is intentionally narrow:
+
+1. run ordinary H256 correctness without timing claims;
+2. run focused memcheck, initcheck, synccheck, then racecheck, one new kernel
+   at a time;
+3. add NVTX ranges only to the test harness and capture one warmed transaction
+   with Nsys;
+4. use NCU on one GPU, one kernel, and one launch, starting with the basic set;
+5. request detailed scheduler/memory/NVLink sections only after the first
+   profile identifies a real bottleneck.
+
+Application replay is preferred for peer-memory kernels. `--kill 1` is
+forbidden because terminating one profiled child would strand the other seven
+distributed ranks. A full NCU metric set is also rejected as a first pass: it
+would replay thousands of counters before a bottleneck has been localized.
+The exact commands and kernel filters are retained in the optimization log.
