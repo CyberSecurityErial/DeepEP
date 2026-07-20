@@ -333,6 +333,7 @@ struct RailBalanceHybridPlanPending {
     int invocation_id;
     bool finished;
     bool shuffled;
+    bool return_unshuffle_tested;
     int plan_status;
     int num_rails;
     int num_channels;
@@ -345,12 +346,14 @@ struct RailBalanceHybridPlanPending {
     int num_max_tokens_per_rank;
     int proxy_capacity_per_egress;
     int normalized_remainder_seed;
+    int64_t arena_offset;
     void* arena;
     int* local_channel_count;
     torch::Tensor topk_idx;
     PreparedRailBalanceHybridPlan prepared;
     std::shared_ptr<jit::KernelRuntime> local_barrier;
     std::shared_ptr<jit::KernelRuntime> source_shuffle;
+    std::shared_ptr<jit::KernelRuntime> return_unshuffle;
     RailBalanceHybridPlanOutputs outputs;
 };
 

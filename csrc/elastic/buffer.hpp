@@ -355,7 +355,7 @@ public:
         const auto compute_stream = at::cuda::getCurrentCUDAStream(device_index);
         const auto int_options = topk_idx.options().dtype(torch::kInt);
 
-        // Allocate every Gate #2 output and build all four cubins before the
+        // Allocate every Gate #2 output and build every private cubin before the
         // first arena store. Cold JIT/allocation failures therefore remain on
         // the noncollective side of WORLD Gate #1.
         auto outputs = allocate_rail_balance_hybrid_plan_outputs(
@@ -365,6 +365,8 @@ public:
             num_rails, num_gpu_timeout_cycles);
         auto source_shuffle =
             prepare_rail_balance_hybrid_source_shuffle(hidden, num_topk);
+        auto return_unshuffle =
+            prepare_rail_balance_hybrid_return_unshuffle(hidden, num_topk);
 
         // topk_idx and the zeros/full tensor initializers above belong to the
         // caller's current stream. Count and all later B2 work use comm_stream.
@@ -394,6 +396,7 @@ public:
                 .invocation_id = invocation_id,
                 .finished = false,
                 .shuffled = false,
+                .return_unshuffle_tested = false,
                 .plan_status = -1,
                 .num_rails = num_rails,
                 .num_channels = num_channels,
@@ -406,12 +409,14 @@ public:
                 .num_max_tokens_per_rank = num_max_tokens_per_rank,
                 .proxy_capacity_per_egress = proxy_capacity_per_egress,
                 .normalized_remainder_seed = normalized_remainder_seed,
+                .arena_offset = arena_offset,
                 .arena = arena,
                 .local_channel_count = local_channel_count,
                 .topk_idx = topk_idx,
                 .prepared = std::move(prepared),
                 .local_barrier = std::move(local_barrier),
                 .source_shuffle = std::move(source_shuffle),
+                .return_unshuffle = std::move(return_unshuffle),
                 .outputs = std::move(outputs),
             });
         return 0;
@@ -576,6 +581,144 @@ public:
                     "compact plan contains an invalid source-shuffle route");
         }
         pending.shuffled = true;
+    }
+
+    torch::Tensor rail_balance_hybrid_return_unshuffle_test(
+        const torch::Tensor& proxy_return_bytes,
+        const torch::Tensor& reduce_seed_bytes,
+        const int& invocation_id) {
+        EP_HOST_ASSERT(not destroyed);
+        EP_HOST_ASSERT(rail_balance_hybrid_plan_pending.has_value());
+        auto& pending = rail_balance_hybrid_plan_pending.value();
+        EP_HOST_ASSERT(pending.invocation_id == invocation_id);
+        EP_HOST_ASSERT(pending.finished);
+        EP_HOST_ASSERT(pending.plan_status == 0);
+        EP_HOST_ASSERT(pending.shuffled);
+        EP_HOST_ASSERT(not pending.return_unshuffle_tested);
+
+        const auto arena_layout = rail_balance::HybridArenaLayout(
+            pending.hidden, pending.num_topk,
+            pending.proxy_capacity_per_egress, pending.arena);
+        const int num_reduce_rows =
+            pending.num_destinations <= pending.num_topk ?
+                pending.num_destinations : pending.num_topk;
+        const int64_t num_reduce_records = rail_balance::checked_mul_i64(
+            num_reduce_rows, pending.num_max_tokens_per_rank);
+        const int64_t proxy_return_num_bytes =
+            rail_balance::checked_mul_i64(
+                pending.proxy_capacity_per_egress,
+                arena_layout.combine_token_bytes);
+        const int64_t reduce_num_bytes = rail_balance::checked_mul_i64(
+            num_reduce_records, arena_layout.combine_token_bytes);
+
+        EP_HOST_ASSERT(proxy_return_bytes.dim() == 2 and
+                       proxy_return_bytes.is_cuda() and
+                       proxy_return_bytes.is_contiguous());
+        EP_HOST_ASSERT(proxy_return_bytes.get_device() == device_index);
+        EP_HOST_ASSERT(proxy_return_bytes.scalar_type() == torch::kUInt8);
+        EP_HOST_ASSERT(
+            proxy_return_bytes.size(0) ==
+                pending.proxy_capacity_per_egress and
+            proxy_return_bytes.size(1) ==
+                arena_layout.combine_token_bytes);
+        EP_HOST_ASSERT(reduce_seed_bytes.dim() == 2 and
+                       reduce_seed_bytes.is_cuda() and
+                       reduce_seed_bytes.is_contiguous());
+        EP_HOST_ASSERT(reduce_seed_bytes.get_device() == device_index);
+        EP_HOST_ASSERT(reduce_seed_bytes.scalar_type() == torch::kUInt8);
+        EP_HOST_ASSERT(reduce_seed_bytes.size(0) == num_reduce_records and
+                       reduce_seed_bytes.size(1) ==
+                           arena_layout.combine_token_bytes);
+        EP_HOST_ASSERT(proxy_return_bytes.nbytes() == proxy_return_num_bytes);
+        EP_HOST_ASSERT(reduce_seed_bytes.nbytes() == reduce_num_bytes);
+        // This direct single-node harness intentionally treats buffer base as
+        // the legacy scaleout-reduce base. Keep both the seed and its peer
+        // writes strictly before the force arena appended at arena_offset.
+        EP_HOST_ASSERT(reduce_num_bytes <= pending.arena_offset);
+        EP_HOST_ASSERT(reduce_num_bytes <= num_gpu_buffer_bytes);
+
+        const c10::cuda::CUDAGuard device_guard(device_index);
+        const auto compute_stream =
+            at::cuda::getCurrentCUDAStream(device_index);
+
+        // Every allocation and JIT build precedes local barrier B1. The
+        // prepared runtime lives in pending; this is the only snapshot needed.
+        auto reduce_snapshot = torch::empty(
+            reduce_seed_bytes.sizes(), reduce_seed_bytes.options());
+        if (comm_stream.id() != compute_stream.id())
+            stream_wait(comm_stream, compute_stream);
+
+        // Once the copies are queued, the adapter is committed and cannot be
+        // replayed. Device status is deliberately not observed until both
+        // local barriers have completed on every rank.
+        pending.return_unshuffle_tested = true;
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            arena_layout.get_proxy_return_layout(0).get_base_ptr(),
+            proxy_return_bytes.data_ptr(),
+            static_cast<size_t>(proxy_return_num_bytes),
+            cudaMemcpyDeviceToDevice, comm_stream));
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            buffer, reduce_seed_bytes.data_ptr(),
+            static_cast<size_t>(reduce_num_bytes),
+            cudaMemcpyDeviceToDevice, comm_stream));
+
+        // B1: all local proxy-return and reduce seeds are visible before any
+        // egress starts peer writes.
+        launch_prepared_rail_balance_hybrid_local_barrier(
+            pending.local_barrier,
+            nccl_context->dev_comm, nccl_context->window,
+            workspace,
+            pending.num_rails, nccl_context->nvl_rank_idx,
+            num_gpu_timeout_cycles, comm_stream);
+
+        launch_prepared_rail_balance_hybrid_return_unshuffle(
+            pending.return_unshuffle,
+            nccl_context->dev_comm, nccl_context->window,
+            pending.arena, buffer, pending.outputs,
+            pending.hidden, pending.num_topk, pending.num_experts,
+            pending.num_destinations, pending.num_rails,
+            nccl_context->nvl_rank_idx, nccl_context->rank_idx,
+            pending.num_channels, pending.num_max_tokens_per_rank,
+            pending.proxy_capacity_per_egress, comm_stream);
+
+        // B4: even a rank whose kernel published a sticky error participates;
+        // only after this cross-GPU visibility point may any host inspect it.
+        launch_prepared_rail_balance_hybrid_local_barrier(
+            pending.local_barrier,
+            nccl_context->dev_comm, nccl_context->window,
+            workspace,
+            pending.num_rails, nccl_context->nvl_rank_idx,
+            num_gpu_timeout_cycles, comm_stream);
+
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            reduce_snapshot.data_ptr(), buffer,
+            static_cast<size_t>(reduce_num_bytes),
+            cudaMemcpyDeviceToDevice, comm_stream));
+
+        int host_status = 0;
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            &host_status, pending.outputs.status.data_ptr<int>(),
+            sizeof(host_status), cudaMemcpyDeviceToHost, comm_stream));
+        CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
+        if (host_status != 0 and host_status != 1 and host_status != 2 and
+            host_status != 3 and host_status != 4) {
+            pending.plan_status = static_cast<int>(
+                rail_balance::HybridPlanError::InvalidSchedule);
+            throw EPExceptionWithLineInfo(
+                "Rail balance Hybrid return unshuffle",
+                "device returned an unknown return-unshuffle status");
+        }
+        if (host_status != 0) {
+            pending.plan_status = host_status;
+            throw EPExceptionWithLineInfo(
+                "Rail balance Hybrid return unshuffle",
+                host_status == 1 ?
+                    "proxy-return capacity is invalid" :
+                host_status == 2 ?
+                    "preserved dispatch contains an out-of-range expert id" :
+                    "preserved dispatch or compact schedule is invalid");
+        }
+        return reduce_snapshot;
     }
 
     torch::Tensor rail_balance_hybrid_proxy_dispatch_snapshot(
@@ -3343,6 +3486,12 @@ static void register_apis(pybind11::module_& m) {
             &ElasticBuffer::rail_balance_hybrid_source_shuffle,
             pybind11::arg("x"),
             pybind11::arg("topk_weights"),
+            pybind11::arg("invocation_id"))
+        .def(
+            "_rail_balance_hybrid_return_unshuffle_test",
+            &ElasticBuffer::rail_balance_hybrid_return_unshuffle_test,
+            pybind11::arg("proxy_return_bytes"),
+            pybind11::arg("reduce_seed_bytes"),
             pybind11::arg("invocation_id"))
         .def(
             "_rail_balance_hybrid_proxy_dispatch_snapshot",
