@@ -529,3 +529,15 @@ optimizing metadata work before source-shuffle cost is known. C100 must profile
 with NCU/Nsys on idle GPUs before parallelizing/fusing it. Negative or noisy
 profiling results, register/spill changes, launch gaps, and rejected variants
 remain part of this log rather than being discarded.
+
+## Hot-path decision O027 — one local barrier and G prefix copies for B2
+
+The first production-shaped count snapshot reuses NCCL symmetric memory and the
+existing barrier algorithm but not the actual Hybrid topology. A force-only
+`(1,G)` specialization avoids an unnecessary Rail barrier. After it completes,
+G `cudaMemcpyAsync` D2D copies gather only active `C*D*sizeof(int)` prefixes.
+
+This deliberately favors a transparent correctness baseline over an extra
+gather kernel. C100 will compare the copies with a batched copy or acquire-load
+gather only on idle GPUs and only if NCU/Nsys attributes meaningful time or
+visibility cost to this stage.

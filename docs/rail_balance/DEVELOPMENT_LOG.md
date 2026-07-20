@@ -1633,3 +1633,76 @@ Performance conclusions are deliberately deferred. Current GPU occupancy and
 timing are correctness evidence only; C100 will use idle GPUs plus NCU/Nsys to
 measure the serial plan CTA, prefix kernel, launch gaps, memory traffic, and
 later LSA shuffle/unshuffle before changing the simple implementation.
+
+## 2026-07-21 — D027: C080-B2/C local snapshot and gate plan freeze
+
+A read-only audit froze the smallest safe bridge from B1 to the real symmetric
+arena. Each rank runs the existing count core with one owner and writes compact
+`[C,D]` into its own registered force arena. After WORLD Gate #1, an independent
+force-only barrier specialized as `(scaleout=1, scaleup=G)` performs only LSA
+synchronization; G active-prefix peer D2D copies form local `[G,C,D]`, which is
+fed to the unchanged B1 plan and prefix kernels. No sidecar, descriptor, ready
+state, queue, fixed-stride count layout, or gather protocol is added.
+
+The audit caught three control boundaries before implementation:
+
+- C++ `ElasticBuffer` has no ProcessGroup, so a monolithic method cannot safely
+  put WORLD Gate #1 between local validation and the device LSA barrier. Force
+  needs private prepare/finish-plan/abort phases behind one Python dispatch.
+- The local barrier cubin must be built before Gate #1. A cold-JIT failure after
+  another rank enters the barrier would deadlock.
+- Calling the existing full Hybrid barrier for the count snapshot would enter
+  Rail on a real multi-node topology. The new barrier runtime must compile a
+  local-only synthetic topology and use the physical LSA rank.
+- The synthetic barrier receives the existing legacy `workspace` barrier state,
+  not the force arena base. Passing the force arena would reinterpret and
+  overwrite the first four `HybridControl` fields as barrier counters/signals.
+  Its exact specialization is scaleup-NVLink, sequential, `(1,G)`, rank
+  `(0,nvl_rank)`, with no concurrent force operation using the workspace.
+- The shared legacy barrier phase is never cleared or rolled back. Gate1
+  failure consumes no phase; Gate1 success consumes one phase on all local
+  ranks even when Gate2 fails, and abort clears only pending force state. The
+  concurrency ban covers every operation on the same buffer that uses the
+  workspace barrier, not only another force call.
+
+A second review found four protocol requirements and the plan now freezes them:
+
+- Gate payloads include operation/phase/epoch/state plus a fixed configuration,
+  topology/rank, arena, SM/QP, and force-flag fingerprint. They do not require
+  per-rank token count N to match.
+- Force branches before legacy Python dispatch performs rank-local argument or
+  handle work; the entire force normalization and C++ prepare region converts
+  local exceptions into Gate1 status.
+- All output tensors and the barrier/count/plan/prefix runtimes exist before
+  Gate1. Returnable errors after the local barrier convert into Gate2 status;
+  context/barrier failure is explicitly fatal rather than falsely recoverable.
+- Each peer copy uses an LSA-local symmetric pointer, a local snapshot
+  destination, checked active-prefix bytes, `cudaMemcpyDeviceToDevice`, and the
+  DeepEP comm stream. LSA rank is never interpreted as CUDA device/global rank.
+- Production Gate1/Gate2 use fixed tensors allocated and collectively warmed
+  before a dispatch can fail. The error path cannot allocate or call an object
+  collective. Short-timeout Gloo object exchange remains private test
+  scaffolding only; failure of the warmed production gate is fatal.
+- Prepare is transactional and only IDLE enters PREPARING. Busy on a second
+  dispatch does not touch the old DISPATCH_LIVE handle or arena; abort restores
+  the transaction's recorded entry state rather than unconditionally clearing
+  the buffer to IDLE.
+
+An additional constructor contract conflict remains explicit: detecting a
+mixed off/force configuration before NCCL symmetric-window creation requires
+all modes to join one initialization consensus, while absolute off-mode
+zero-new-collective identity forbids it. Public capability remains false while
+B2 is private. Before force is enabled, safety wins: either a one-time
+constructor control consensus is accepted and documented, or the public
+supported contract is narrowed and rereviewed. It will not be hidden in the
+data path.
+
+The local machine can prove LSA addresses, barrier reuse, snapshot equality,
+zero/different token counts, Gate1/Gate2 fault convergence, and prefix
+correctness with virtual destinations. It still cannot label this real Hybrid
+runtime because physical scaleout is one.
+
+Final independent plan review reports 0 Blocker / 0 High. Local profiling tool
+inventory is available for later controlled stages: NCU 2025.1.1, Nsys
+2024.6.2, Compute Sanitizer 2025.1, and CUDA/NVCC 12.8. No timing was taken as
+evidence during this plan checkpoint.

@@ -351,9 +351,9 @@ uninitialized scratch without zeroing or copying the large hidden payload twice.
 The first dispatch schedule is:
 
     prepare/build/allocate all round-trip force resources
-    -> route-validation kernel writes status without derived indexing
+    -> route-validation plus local [C,D] count writes symmetric arena
     -> WORLD GATE #1: every EP rank valid and ready
-    -> count plus source-node count exchange/barrier
+    -> source-node-only LSA barrier and [G,C,D] count snapshot
     -> plan/prefix build
     -> WORLD GATE #2: every EP rank plan/capacity valid
     -> source shuffle of moved TokenLayouts
@@ -457,14 +457,21 @@ The force handle adds one private aggregate state containing:
 Default EPHandle objects are unchanged.  Force handles cannot be used for
 cached dispatch and can be consumed by combine once. The normal state is:
 
-    IDLE -> DISPATCH_LIVE -> IDLE
+    IDLE -> PREPARING -> PLAN_READY -> DISPATCH_LIVE -> IDLE
+
+Prepare is a transaction that records its entry state. Only IDLE may enter
+PREPARING. A second dispatch while DISPATCH_LIVE reports Busy in Gate #1 without
+writing `HybridControl`, counts, or proxy payload; abort preserves the original
+live handle and arena. A failure from PREPARING restores IDLE, while a combine
+entry-gate failure preserves DISPATCH_LIVE.
 
 One terminal invalid bit handles the exceptional path:
 
     any post-publication device error -> INVALID
 
 INVALID cannot return to IDLE or reuse the arena; destruction/reconstruction is
-required. A pre-publication dispatch failure returns to IDLE. A combine-entry
+required. A pre-publication dispatch transaction restores its recorded entry
+state; only a transaction that entered from IDLE returns there. A combine-entry
 gate failure leaves the same DISPATCH_LIVE handle unconsumed so all ranks may
 retry or destroy it consistently.
 
@@ -485,22 +492,86 @@ collective. Dispatch receive-output size is known only after its completed
 count/communication stage; its copy epilogue is local and contains no later
 force barrier in that call. Combine outputs are different: they are known at
 combine entry and must be allocated, caught, and accepted by WORLD COMBINE GATE
-#1 before the main combine is launched. There is no public prepare API; tests
-and cluster scripts provide explicit subprocess warmup and timeout.
+#1 before the main combine is launched. There is no public prepare API.
+Internally, however, force dispatch is split at WORLD GATE #1 because the C++
+buffer does not own a PyTorch ProcessGroup:
+
+    private prepare
+        host validation, all allocations/JIT, local route count/status
+    Python WORLD GATE #1
+    private finish-plan
+        prebuilt local LSA barrier, G peer-prefix copies, plan/prefix/status
+    Python WORLD GATE #2
+
+The user still makes one dispatch call. Python catches any prepare exception,
+participates in Gate #1 with a fixed error code, and invokes an idempotent abort
+on every rank if consensus fails. `finish-plan` contains no allocation, JIT,
+shape validation, or callback. Force branches into its private Python path
+before legacy dispatch performs rank-local shape/default/handle/SM/QP work; all
+force normalization plus C++ prepare is inside one catch-to-Gate #1 region.
+
+Gate #1 does not merely reduce an error code. Its fixed payload identifies the
+operation and phase, invocation epoch and one-live state, arena ABI, topology
+and rank mapping, `G/D/C/E/K/hidden/M/Pcap`, SM/QP choices, seed, and force
+flags. Every fixed field must agree world-wide; local token count N may differ.
+Gate #2 carries the operation/phase/epoch plus finish status and capacity
+decision. This prevents valid-but-different calls from entering the same
+collective sequence with different shapes or meanings.
+
+Production gates use constructor/warmup-preallocated fixed-shape input/output
+tensors and a warmed fixed-field tensor collective. The catch path must not
+allocate a tensor, serialize an object, or cold-start a ProcessGroup operation;
+otherwise an allocation failure could prevent the failure consensus itself.
+Private single-node harnesses may use a short-timeout Gloo object gate, but that
+is test scaffolding and not the force runtime protocol. Failure of the warmed
+gate collective itself is process-fatal.
+
+The LSA barrier uses an independent force-only runtime specialized as a
+synthetic `(scaleout=1, scaleup=G)` topology. Calling the full actual Hybrid
+barrier here would also enter Rail on a real multi-node job and is forbidden.
+It receives the existing `ElasticBuffer::workspace`, whose first 16 bytes are
+the shared `WorkspaceLayout` NVLink barrier phase/signals; it must never receive
+the force arena base, where offset zero is `HybridControl`. The exact runtime is
+`is_scaleup_nvlink=true`, `sequential=true`, scaleout rank zero, and physical
+NCCL LSA rank as scaleup rank. No force operation may concurrently reuse the
+workspace barrier state. More strongly, the same `ElasticBuffer` may not run
+any other EP operation that uses this workspace barrier concurrently.
+
+The legacy 16-byte barrier state is a monotonic cross-operation epoch and is
+never cleared or rolled back by force prepare/abort. Gate #1 failure consumes
+no local barrier. Gate #1 success consumes exactly one barrier on every local
+rank even if Gate #2 later rejects capacity; abort then drops pending tensors
+and force control only. Failure inside that barrier is fatal/INVALID.
+After that barrier, the correctness-first implementation forms the local
+snapshot with G active-prefix peer D2D copies on the DeepEP comm stream. For
+LSA-local owner `o`, source is
+`nccl_context->get_sym_ptr(local_count_base, o)` and destination is the local
+snapshot offset `o*C*D`; the checked byte count is `C*D*sizeof(int)` and the
+kind is `cudaMemcpyDeviceToDevice`. An LSA rank is never passed as a CUDA device
+or global EP rank. The snapshot and every plan output are allocated before
+Gate #1. C100 may replace those copies
+only after NCU/Nsys evidence; B2 does not add a gather protocol. Tests and
+cluster scripts provide explicit subprocess warmup and timeout.
 
 Every consensus in force-v1 is world-wide over the full EP process group, even
 though count exchange and the two data-visibility barriers are local
 scaleup-team operations. One server may not continue because its own node plan
 is valid while another server has failed.
 
-Before count, destination, expert, or proxy arrays are indexed, a validation
-kernel range-checks all top-k entries, rejects masking and duplicate expert ids,
-and writes one aggregate status. It never derives an index or bit shift from an
-invalid value. Every rank completes this kernel, then WORLD GATE #1 decides
-whether any rank may enter count and its source-node barrier. After GPU
+Within the local count pass, every token range-checks all top-k entries before
+deriving a destination index or bit shift. The pass rejects masking and
+duplicate expert ids and writes one aggregate status. Every rank completes this
+noncollective pass, then WORLD GATE #1 decides whether any rank may enter its
+source-node barrier. After GPU
 planning, WORLD GATE #2 performs the status/capacity decision before source
 shuffle. A failed gate makes every rank return the same error; no rank skips
 into or around a device barrier.
+
+An unexpected returnable D2D/plan/prefix launch error after the local barrier is
+caught into the fixed finish status so healthy ranks still reach Gate #2. A
+CUDA-context failure, process crash, or failure inside the committed LSA
+barrier is fatal and relies on GPU/ProcessGroup timeout; force does not pretend
+it can recover a poisoned context.
 
 A post-publication device error marks the force arena invalid; it is not reused
 silently.  This is one status word and one host state, not a per-slot protocol.
@@ -551,11 +622,16 @@ compatibility test and is not reused as the production schedule golden.
 ### C080-C — minimal arena and collective gate
 
 - Append the two payload arenas and symmetric count/control.
-- Add the two pre-publication status consensuses and one-live-handle gate.
+- Add private prepare/finish-plan/abort around the two pre-publication status
+  consensuses and one-live-handle gate.
+- Prebuild the force-only local LSA barrier before Gate #1; after Gate #1 it is
+  the only barrier used for the compact count snapshot.
 - Reject physical scaleout=1 in the public force path.
 
-Go: mismatched config, unsupported flags, JIT failure, and capacity failure all
-exit every rank before publication; default off bytes remain exact.
+Go: per-call mismatched config, unsupported flags, JIT failure, and capacity
+failure all exit every rank before publication; default off bytes remain exact.
+Mixed constructor off/force configuration must be closed separately before the
+public capability becomes true.
 
 ### C080-D — shared-core single-node path
 

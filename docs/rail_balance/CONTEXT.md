@@ -371,3 +371,13 @@ Out of scope until evidence expands the project:
   under non-OOM contention, but timing under other workloads is not evidence.
   Controlled C100 work must use NCU, Nsys, and byte/cycle counters and retain
   tool failures and negative variants.
+- The reviewed B2/C bridge is private prepare, fixed Gate1, local-only
+  `(scaleout=1, scaleup=G)` LSA barrier over the legacy workspace state, G
+  active-prefix peer D2D copies, unchanged B1 plan/prefix, then fixed Gate2.
+  Every output/runtime exists before Gate1; barrier epochs never roll back; the
+  force arena is never passed as barrier workspace. Final plan review is
+  0 Blocker / 0 High.
+- Production gate tensors/collectives must be preallocated and warmed. Private
+  local tests may use a short-timeout Gloo control group but cannot claim that
+  object exchange is the final error path. Mixed off/force construction remains
+  an explicit public-enable blocker, not a private B2 blocker.
