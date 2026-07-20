@@ -314,6 +314,7 @@ public:
         EP_HOST_ASSERT(local_scaleout_rank >= 0 and
                        local_scaleout_rank < num_scaleout_ranks);
         EP_HOST_ASSERT(proxy_capacity_per_egress > 0);
+        EP_HOST_ASSERT(hidden > 0 and hidden % 256 == 0);
         EP_HOST_ASSERT(
             num_experts % (num_scaleout_ranks * num_rails) == 0);
         EP_HOST_ASSERT(
@@ -336,6 +337,20 @@ public:
             hidden, num_topk, proxy_capacity_per_egress, arena);
         EP_HOST_ASSERT(arena_layout.arena_bytes <=
                        num_gpu_buffer_bytes - arena_offset);
+        const auto dispatch_layout = layout::TokenLayout(
+            hidden * sizeof(__nv_bfloat16), 0, num_topk, true);
+        const int shuffle_smem_bytes =
+            dispatch_layout.get_num_bytes<false>() +
+            ptx::kNumTMAAlignBytes;
+        cudaDeviceProp device_prop{};
+        CUDA_RUNTIME_CHECK(cudaGetDeviceProperties(
+            &device_prop, device_index));
+        EP_HOST_ASSERT(
+            shuffle_smem_bytes <= device_prop.sharedMemPerBlockOptin);
+        EP_HOST_ASSERT(
+            static_cast<int64_t>(nccl_context->rank_idx) *
+                    num_max_tokens_per_rank +
+                (num_tokens > 0 ? num_tokens - 1 : 0) <= INT_MAX);
 
         const c10::cuda::CUDAGuard device_guard(topk_idx.device());
         const auto compute_stream = at::cuda::getCurrentCUDAStream(device_index);
@@ -349,6 +364,8 @@ public:
         auto prepared = prepare_rail_balance_hybrid_plan();
         auto local_barrier = prepare_rail_balance_hybrid_local_barrier(
             num_rails, num_gpu_timeout_cycles);
+        auto source_shuffle =
+            prepare_rail_balance_hybrid_source_shuffle(hidden, num_topk);
 
         // topk_idx and the zeros/full tensor initializers above belong to the
         // caller's current stream. Count and all later B2 work use comm_stream.
@@ -377,15 +394,25 @@ public:
             RailBalanceHybridPlanPending{
                 .invocation_id = invocation_id,
                 .finished = false,
+                .shuffled = false,
+                .plan_status = -1,
                 .num_rails = num_rails,
                 .num_channels = num_channels,
                 .num_destinations = num_scaleout_ranks,
+                .local_destination = local_scaleout_rank,
+                .num_tokens = num_tokens,
+                .num_topk = num_topk,
+                .hidden = hidden,
+                .num_experts = num_experts,
                 .num_max_tokens_per_rank = num_max_tokens_per_rank,
                 .proxy_capacity_per_egress = proxy_capacity_per_egress,
                 .normalized_remainder_seed = normalized_remainder_seed,
+                .arena = arena,
                 .local_channel_count = local_channel_count,
+                .topk_idx = topk_idx,
                 .prepared = std::move(prepared),
                 .local_barrier = std::move(local_barrier),
+                .source_shuffle = std::move(source_shuffle),
                 .outputs = std::move(outputs),
             });
         return 0;
@@ -463,8 +490,122 @@ public:
             sizeof(host_status), cudaMemcpyDeviceToHost, comm_stream));
         CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
         EP_HOST_ASSERT(host_status == 0 or host_status == 1);
+        pending.plan_status = host_status;
         pending.finished = true;
         return pending.outputs.as_tuple();
+    }
+
+    void rail_balance_hybrid_source_shuffle(
+        const torch::Tensor& x,
+        const torch::Tensor& topk_weights,
+        const int& invocation_id) {
+        EP_HOST_ASSERT(not destroyed);
+        EP_HOST_ASSERT(rail_balance_hybrid_plan_pending.has_value());
+        auto& pending = rail_balance_hybrid_plan_pending.value();
+        EP_HOST_ASSERT(pending.invocation_id == invocation_id);
+        EP_HOST_ASSERT(pending.finished);
+        EP_HOST_ASSERT(pending.plan_status == 0);
+        EP_HOST_ASSERT(not pending.shuffled);
+
+        EP_HOST_ASSERT(x.dim() == 2 and x.is_cuda() and x.is_contiguous());
+        EP_HOST_ASSERT(x.get_device() == device_index);
+        EP_HOST_ASSERT(x.scalar_type() == torch::kBFloat16);
+        EP_HOST_ASSERT(x.size(0) == pending.num_tokens and
+                       x.size(1) == pending.hidden);
+        EP_HOST_ASSERT(topk_weights.dim() == 2 and
+                       topk_weights.is_cuda() and
+                       topk_weights.is_contiguous());
+        EP_HOST_ASSERT(topk_weights.get_device() == device_index);
+        EP_HOST_ASSERT(topk_weights.scalar_type() == torch::kFloat);
+        EP_HOST_ASSERT(topk_weights.size(0) == pending.num_tokens and
+                       topk_weights.size(1) == pending.num_topk);
+        EP_HOST_ASSERT(pending.topk_idx.defined() and
+                       pending.topk_idx.is_cuda() and
+                       pending.topk_idx.is_contiguous());
+        EP_HOST_ASSERT(pending.topk_idx.get_device() == device_index);
+        EP_HOST_ASSERT(pending.topk_idx.size(0) == pending.num_tokens and
+                       pending.topk_idx.size(1) == pending.num_topk);
+
+        const c10::cuda::CUDAGuard device_guard(device_index);
+        const auto compute_stream =
+            at::cuda::getCurrentCUDAStream(device_index);
+        if (comm_stream.id() != compute_stream.id())
+            stream_wait(comm_stream, compute_stream);
+
+        int host_status = 0;
+        try {
+            launch_prepared_rail_balance_hybrid_source_shuffle(
+                pending.source_shuffle,
+                nccl_context->dev_comm, nccl_context->window,
+                x.data_ptr(), pending.topk_idx.data_ptr<topk_idx_t>(),
+                topk_weights.data_ptr<float>(), pending.arena,
+                pending.outputs, pending.hidden, pending.num_topk,
+                pending.num_tokens, pending.num_experts,
+                pending.num_destinations, pending.local_destination,
+                pending.num_rails, nccl_context->nvl_rank_idx,
+                pending.num_channels, pending.num_max_tokens_per_rank,
+                nccl_context->rank_idx,
+                pending.proxy_capacity_per_egress, comm_stream);
+            CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+                &host_status, pending.outputs.status.data_ptr<int>(),
+                sizeof(host_status), cudaMemcpyDeviceToHost, comm_stream));
+            CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
+        } catch (...) {
+            // A launch/synchronization failure may follow partial peer
+            // publication. Keep the transaction for explicit abort, but make
+            // a second shuffle impossible.
+            pending.plan_status = static_cast<int>(
+                rail_balance::HybridPlanError::InvalidSchedule);
+            throw;
+        }
+        if (host_status != 0 and host_status != 2 and host_status != 3 and
+            host_status != 4) {
+            pending.plan_status = static_cast<int>(
+                rail_balance::HybridPlanError::InvalidSchedule);
+            throw EPExceptionWithLineInfo(
+                "Rail balance Hybrid source shuffle",
+                "device returned an unknown source-shuffle status");
+        }
+        if (host_status != 0) {
+            pending.plan_status = host_status;
+            throw EPExceptionWithLineInfo(
+                "Rail balance Hybrid source shuffle",
+                host_status == 2 ?
+                    "topk_idx contains an out-of-range expert id" :
+                host_status == 3 ?
+                    "topk_idx contains duplicate expert ids within one token" :
+                    "compact plan contains an invalid source-shuffle route");
+        }
+        pending.shuffled = true;
+    }
+
+    torch::Tensor rail_balance_hybrid_proxy_dispatch_snapshot(
+        const int& invocation_id) {
+        EP_HOST_ASSERT(not destroyed);
+        EP_HOST_ASSERT(rail_balance_hybrid_plan_pending.has_value());
+        auto& pending = rail_balance_hybrid_plan_pending.value();
+        EP_HOST_ASSERT(pending.invocation_id == invocation_id);
+        EP_HOST_ASSERT(pending.finished);
+        EP_HOST_ASSERT(pending.plan_status == 0);
+
+        const c10::cuda::CUDAGuard device_guard(device_index);
+        const auto stream = at::cuda::getCurrentCUDAStream(device_index);
+        const auto arena_layout = rail_balance::HybridArenaLayout(
+            pending.hidden, pending.num_topk,
+            pending.proxy_capacity_per_egress, pending.arena);
+        auto snapshot = torch::empty(
+            {pending.proxy_capacity_per_egress,
+             arena_layout.dispatch_token_bytes},
+            pending.topk_idx.options().dtype(torch::kUInt8));
+        const auto num_bytes = rail_balance::checked_mul_i64(
+            pending.proxy_capacity_per_egress,
+            arena_layout.dispatch_token_bytes);
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            snapshot.data_ptr(),
+            arena_layout.get_proxy_dispatch_layout(0).get_base_ptr(),
+            static_cast<size_t>(num_bytes),
+            cudaMemcpyDeviceToDevice, stream));
+        return snapshot;
     }
 
     void rail_balance_hybrid_plan_abort(const int& invocation_id) {
@@ -3197,6 +3338,16 @@ static void register_apis(pybind11::module_& m) {
         .def(
             "_rail_balance_hybrid_plan_finish",
             &ElasticBuffer::rail_balance_hybrid_plan_finish,
+            pybind11::arg("invocation_id"))
+        .def(
+            "_rail_balance_hybrid_source_shuffle",
+            &ElasticBuffer::rail_balance_hybrid_source_shuffle,
+            pybind11::arg("x"),
+            pybind11::arg("topk_weights"),
+            pybind11::arg("invocation_id"))
+        .def(
+            "_rail_balance_hybrid_proxy_dispatch_snapshot",
+            &ElasticBuffer::rail_balance_hybrid_proxy_dispatch_snapshot,
             pybind11::arg("invocation_id"))
         .def(
             "_rail_balance_hybrid_plan_abort",

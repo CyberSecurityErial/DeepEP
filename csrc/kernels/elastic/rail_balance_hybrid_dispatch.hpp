@@ -332,15 +332,25 @@ static RailBalanceHybridPlanOutputs allocate_rail_balance_hybrid_plan_outputs(
 struct RailBalanceHybridPlanPending {
     int invocation_id;
     bool finished;
+    bool shuffled;
+    int plan_status;
     int num_rails;
     int num_channels;
     int num_destinations;
+    int local_destination;
+    int num_tokens;
+    int num_topk;
+    int hidden;
+    int num_experts;
     int num_max_tokens_per_rank;
     int proxy_capacity_per_egress;
     int normalized_remainder_seed;
+    void* arena;
     int* local_channel_count;
+    torch::Tensor topk_idx;
     PreparedRailBalanceHybridPlan prepared;
     std::shared_ptr<jit::KernelRuntime> local_barrier;
+    std::shared_ptr<jit::KernelRuntime> source_shuffle;
     RailBalanceHybridPlanOutputs outputs;
 };
 

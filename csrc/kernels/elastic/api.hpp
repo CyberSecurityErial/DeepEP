@@ -4,6 +4,7 @@
 
 #include "barrier.hpp"
 #include "rail_balance_hybrid_dispatch.hpp"
+#include "rail_balance_hybrid_shuffle.hpp"
 #include "dispatch.hpp"
 #include "combine.hpp"
 #include "engram.hpp"

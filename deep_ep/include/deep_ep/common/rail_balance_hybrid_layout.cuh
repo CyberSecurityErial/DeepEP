@@ -14,6 +14,16 @@ static constexpr int kNumHybridMaxChannels = deep_ep::kNumMaxChannels;
 static constexpr int kNumHybridMaxDestinations = 32;
 static constexpr int64_t kNumHybridBufferAlignmentBytes = 2 * 1024 * 1024;
 
+// Stable force-v1 device status shared by host transaction code and the JIT
+// planner/shuffle kernels.
+enum class HybridPlanError : int {
+    Success = 0,
+    CapacityExceeded = 1,
+    ExpertOutOfRange = 2,
+    DuplicateExpert = 3,
+    InvalidSchedule = 4,
+};
+
 struct alignas(ptx::kNumTMAAlignBytes) HybridControl {
     int32_t invocation_id;
     int32_t state;

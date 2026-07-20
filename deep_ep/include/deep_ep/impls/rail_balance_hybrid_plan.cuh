@@ -8,16 +8,6 @@
 
 namespace deep_ep::elastic::rail_balance {
 
-// Stable C080-B device status. Route failures are reported by the count
-// kernel before a destination index is derived. Capacity is reported only by
-// the prefix kernel. The host must initialize status to Success before launch.
-enum class HybridPlanError : int {
-    Success = 0,
-    CapacityExceeded = 1,
-    ExpertOutOfRange = 2,
-    DuplicateExpert = 3,
-};
-
 static constexpr int kNumHybridSegmentFields = 5;
 
 enum HybridSegmentField : int {
