@@ -359,3 +359,15 @@ Out of scope until evidence expands the project:
   C040-C070 may supply algorithmic and vnode evidence, but their CPU manifest,
   descriptor/ready protocol, and replay snapshot are not production C080
   dependencies.
+- C080-B1 now has that isolated materializer. Fresh-cache H200 execution matches
+  the CPU oracle in 69 exact cases, including zero tokens, signed-int64 seed
+  normalization, capacity failure, strict route rejection, maximum C/D, and a
+  non-default stream. The three JIT cubins each export one kernel symbol.
+- B1 still uses a stacked single-GPU `[G,N,K]` fixture. Production B2 must run
+  the same count core with one local owner per rank, publish compact counts into
+  the force arena, establish the node-consistent snapshot with the real LSA
+  team/barrier, and only then launch the unchanged plan/prefix semantics.
+- Performance work is conditional on idle GPUs. Functional work may continue
+  under non-OOM contention, but timing under other workloads is not evidence.
+  Controlled C100 work must use NCU, Nsys, and byte/cycle counters and retain
+  tool failures and negative variants.

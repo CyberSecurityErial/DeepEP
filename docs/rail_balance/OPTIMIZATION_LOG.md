@@ -514,3 +514,18 @@ shape. Destination is now implied by the outer bucket:
 The production resolver scans only one destination bucket. No per-copy
 assignment is materialized. Strict expert validation and server mapping stay
 outside the hot resolver, before the first collective.
+
+## Hot-path decision O026 — materialize compact prefixes, not copy assignments
+
+C080-B1 proves the production schedule can be generated entirely on device as
+three small stages: deduplicated channel counts, destination quota/segments,
+and inverse grouped prefixes. The data path resolves one copy with a scan of at
+most `G-1` segments and the target channel prefix; it performs no global atomic
+and reads no full copy manifest.
+
+The first implementation intentionally keeps the per-destination plan serial
+and the ABI explicit. This is the smallest correctness baseline and avoids
+optimizing metadata work before source-shuffle cost is known. C100 must profile
+with NCU/Nsys on idle GPUs before parallelizing/fusing it. Negative or noisy
+profiling results, register/spill changes, launch gaps, and rejected variants
+remain part of this log rather than being discarded.

@@ -9,11 +9,12 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 - C000 through C070 remain complete for the agreed single-node PoC scope.
 - C080-A is complete: default-off identity, strict constructor config, disabled
   capability gate, checked force arena ABI, and EP8 size agreement pass.
-- C080-B has a reviewed strict CPU oracle and is now implementing the isolated
-  GPU count/plan/prefix materializer. C080-C has the arena formula but not yet
-  cross-rank preflight/status.
-- Latest pushed checkpoints are `bb47ad0` (arena layout) and `3676193` (compact
-  schedule oracle) on `fork/feat/rail-balance-prototype`.
+- C080-B1 is complete: the private stacked-owner GPU count/plan/prefix
+  materializer matches 69 exact H200 cases and final independent review reports
+  0 Blocker/High. C080-B2 still needs the per-rank LSA count snapshot; C080-C
+  still needs cross-rank preflight/status.
+- Latest pushed checkpoints are `87cfcc5` (GPU materializer) and `e46b701`
+  (strict CUDA tests) on `fork/feat/rail-balance-prototype`.
 - Public force still fails closed and no result claims real Gin/RDMA behavior.
 - Resume from the working tree and the newest entries in `DEVELOPMENT_LOG.md`;
   do not restore the obsolete sidecar/descriptor/ring draft.
@@ -47,6 +48,13 @@ the exact file snapshots without inventing commit identity.
   in-place extension build pass after C070.
 - C070 final independent review: 0 Blocker, 0 High, 1 Medium, 0 Low. The trusted
   snapshot PoC is accepted.
+- C080-B1 fresh-cache H200 materializer: PASS.
+  - C061 remains 33 destination copies and six moves.
+  - Pcap 3 succeeds and Pcap 2 preserves the candidate with capacity status.
+  - Zero tokens, 64 random seeds, C1024/D32, signed-int64 seed, invalid routes,
+    invalid seeds, and a non-default stream pass exact CPU comparison.
+  - Each count/plan/prefix cubin exports exactly one kernel symbol.
+  - Independent audit after fixes: 0 Blocker / 0 High.
 
 ## Mandatory retained boundary
 
@@ -66,19 +74,18 @@ No C070 timing is performance evidence.
 2. Verify branch and state with `git status --short --branch` and run
    `git diff --cached --check`.
 3. Do not redo C061/C070 unless the relevant code changes.
-4. Start C080 with a read-only audit of:
-   - `deep_ep/buffers/elastic.py` dispatch/combine and handle flow;
-   - Hybrid JIT specs/launchers and their cache keys;
-   - `hybrid_dispatch.cuh`, `hybrid_combine.cuh`, and buffer layout anchors.
-5. Freeze the minimum interface before editing:
-   - `rail_balance="off|force"` only for the first integration;
-   - default `off` must remain behavior-identical;
-   - `force` may use the verified private virtual transport for the first
-     single-node functional gate;
-   - `auto`, production fusion, expanded/cached/backward matrices, and real Gin
-     remain later gates unless needed to prove the core path.
-6. Make cross-rank preflight consensus part of the C080 contract, not an
-   undocumented follow-up.
+4. Resume at C080-B2/C, not at the obsolete CPU-manifest or sidecar paths:
+   - count one local owner per rank into the force arena;
+   - establish a real LSA-team barrier and compact `[G,C,D]` snapshot;
+   - feed the existing B1 plan/prefix semantics unchanged.
+5. Keep public force unavailable until dispatch and combine both exist. Add
+   world-consensed Gate1 before any local barrier and Gate2 after capacity
+   status but before payload publication; do not let a rank-local throw strand
+   peers.
+6. Prioritize the direct-final 8x1 skewed source-shuffle path, then 4x2/2x4
+   closure and isolated Hybrid codegen. Performance runs require idle GPUs;
+   controlled C100 profiling uses NCU/Nsys and retains negative/tool-failure
+   evidence.
 
 Pinned runtime for accepted commands:
 

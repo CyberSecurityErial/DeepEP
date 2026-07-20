@@ -1579,3 +1579,57 @@ Evidence:
 
 Checkpoint `3676193 test: freeze hybrid rail schedule oracle` was pushed.
 No force Hybrid data-path source is enabled at this point.
+
+## 2026-07-21 — D026: C080-B1 GPU schedule materializer
+
+- Added a private, single-process CUDA proof entry from stacked real
+  `topk_idx[G,N,K]` to the compact force-v1 schedule. Three isolated JIT
+  kernels perform strict route validation and destination-deduplicated
+  `[G,C,D]` counting, canonical minimum-move quota/segment construction, and
+  retained/moved/group prefix materialization.
+- The returned ABI is fourteen owning, contiguous CUDA int32 tensors. Transfer
+  segments remain destination-bucketed five-int records; no per-copy manifest,
+  descriptor, ready word, ring, or hot-path per-copy atomic was introduced.
+- Capacity exhaustion is the only non-throwing status and preserves the full
+  candidate schedule. Invalid/masked or duplicate expert routes fail before
+  planning. Exact Python integer seeds use the nonnegative signed-int64 host
+  ABI and normalize to the local rail ring.
+- The shared device resolver maps a channel-local destination copy to retained
+  or moved egress/channel/remote/proxy slots from compact prefixes. B1 does not
+  claim LSA count exchange or Hybrid dispatch/combine integration; those remain
+  B2/C080-C onward.
+
+Failures found and retained before checkpoint:
+
+- The first segment two-pointer compared full surplus/deficit after partial
+  consumption. A split segment could therefore compute zero repeatedly and
+  never advance. Remaining counts now subtract per-side consumed cursors and
+  assert every emitted amount is positive.
+- The first JIT form included three non-template `__global__` definitions in
+  every generated cubin. DeepEP correctly rejected the cache because each
+  runtime requires exactly one kernel symbol. Each kernel is now a template
+  and the corresponding runtime explicitly instantiates only `<0>`.
+- Independent audit found that a legal `[G,0,K]` CUDA tensor can have a null
+  data pointer. The count kernel used to return without zeroing
+  `channel_count`; it now requires a non-null input only when `N>0` and writes
+  every compact count as zero for the empty case.
+- Independent audit also found that the CPU oracle rejected seeds above int32
+  while the private host binding deliberately accepted signed int64. The
+  oracle now matches the host ABI; `1<<40` compares exactly and `1<<70` is
+  rejected.
+
+Evidence after these fixes:
+
+    PASS 69 exact H200 CUDA cases
+    PASS C061 33 copies / six moves / Pcap 3 success / Pcap 2 failure
+    PASS zero-token, 64 seeded random, C=1024/D=32 boundary
+    PASS masked/out-of-range/duplicate route and invalid seed rejection
+    PASS non-default CUDA stream
+    PASS 11/11 Hybrid CPU oracle, 38/38 old planner, 4/4 legacy identity
+    PASS one exported kernel symbol in each of the three fresh-cache cubins
+    independent final review: 0 Blocker / 0 High
+
+Performance conclusions are deliberately deferred. Current GPU occupancy and
+timing are correctness evidence only; C100 will use idle GPUs plus NCU/Nsys to
+measure the serial plan CTA, prefix kernel, launch gaps, memory traffic, and
+later LSA shuffle/unshuffle before changing the simple implementation.
