@@ -54,6 +54,7 @@ from rail_balance_hybrid_reference import (
 from test_rail_balance_hybrid_plan_lsa import (
     PlanCase,
     _abort,
+    _encode_destination_rows,
     _finish,
     _gate_signature,
     _gather_objects,
@@ -70,7 +71,7 @@ _WORLD_SIZE = 8
 _HIDDEN = 256
 _NUM_TOPK = 4
 _MAX_TOKENS = 10
-_PROXY_CAPACITY = 8
+_PROXY_CAPACITY = 6
 _TMA_ALIGNMENT = 32
 _OPERATION = "rail_balance_hybrid_source_shuffle"
 _TYPE = TypeVar("_TYPE")
@@ -104,6 +105,31 @@ def _moved_copies(
     )
 
 
+def _wide_destination_case() -> PlanCase:
+    destinations = (1, 5, 9, 13, 17, 21, 25, 31)
+    experts_per_destination = _WORLD_SIZE
+    owners = []
+    for destination in destinations:
+        rows = ((destination,) * _NUM_TOPK,) * 4
+        owners.append(_encode_destination_rows(
+            rows,
+            num_destinations=32,
+            experts_per_destination=experts_per_destination,
+        ))
+    return PlanCase(
+        name="all_owner_c1024_d32_k4",
+        topk_idx=tuple(owners),
+        num_topk=_NUM_TOPK,
+        num_channels=1024,
+        num_max_tokens_per_rank=_MAX_TOKENS,
+        num_experts=32 * experts_per_destination,
+        num_scaleout_ranks=32,
+        local_scaleout_rank=0,
+        proxy_capacity_per_egress=_PROXY_CAPACITY,
+        remainder_seed=17,
+    )
+
+
 def _copies_by_egress(
     records: Sequence[ResolvedHybridDestinationCopy],
 ) -> tuple[dict[int, ResolvedHybridDestinationCopy], ...]:
@@ -118,7 +144,7 @@ def _copies_by_egress(
     return tuple(result)
 
 
-def _assert_shuffle_oracle() -> tuple[PlanCase, PlanCase]:
+def _assert_shuffle_oracle() -> tuple[PlanCase, PlanCase, PlanCase]:
     first = _skew_case(
         capacity=_PROXY_CAPACITY,
         seed=62,
@@ -129,17 +155,18 @@ def _assert_shuffle_oracle() -> tuple[PlanCase, PlanCase]:
         name="c061_source_shuffle_reuse_seed63",
         remainder_seed=63,
     )
+    wide = _wide_destination_case()
     assert first.num_topk == second.num_topk == _NUM_TOPK
     assert first.num_max_tokens_per_rank == _MAX_TOKENS
     assert first.num_tokens_per_rank == (9, 9, 0, 0, 0, 0, 0, 0)
 
-    for case in (first, second):
+    for case in (first, second, wide):
         schedule = _schedule(case)
         records = _moved_copies(case, schedule)
         by_egress = _copies_by_egress(records)
         assert schedule.enabled and schedule.moved_copies == len(records)
         assert schedule.moved_copies > 0
-        assert max(schedule.proxy_required) < case.proxy_capacity_per_egress
+        assert max(schedule.proxy_required) <= case.proxy_capacity_per_egress
         for egress, slots in enumerate(by_egress):
             required = schedule.proxy_required[egress]
             assert set(slots) == set(range(required))
@@ -155,23 +182,32 @@ def _assert_shuffle_oracle() -> tuple[PlanCase, PlanCase]:
                         record.copy.destination][resolution.channel]
                 )
 
-        # The C061 route is not merely one-hot: one physical owner token can
-        # contribute multiple independently balanced destination copies.
-        multiplicity = Counter(
-            (record.copy.owner, record.copy.token) for record in records)
-        assert max(multiplicity.values()) >= 2
-        multi = [
-            key for key, count in multiplicity.items() if count >= 2
-        ]
-        assert any(
-            len({
-                record.copy.destination
-                for record in records
-                if (record.copy.owner, record.copy.token) == key
-            }) >= 2
-            for key in multi
-        )
-    return first, second
+        if case is not wide:
+            # The C061 route is not merely one-hot: one physical owner token
+            # can contribute multiple independently balanced destinations.
+            multiplicity = Counter(
+                (record.copy.owner, record.copy.token) for record in records)
+            assert max(multiplicity.values()) >= 2
+            multi = [
+                key for key, count in multiplicity.items() if count >= 2
+            ]
+            assert any(
+                len({
+                    record.copy.destination
+                    for record in records
+                    if (record.copy.owner, record.copy.token) == key
+                }) >= 2
+                for key in multi
+            )
+
+    wide_schedule = _schedule(wide)
+    assert wide.num_scaleout_ranks == 32 > wide.num_topk == 4
+    assert wide.num_channels == 1024
+    assert wide.num_tokens_per_rank == (4,) * _WORLD_SIZE
+    assert wide_schedule.moved_copies == 24
+    assert wide_schedule.proxy_required == (4, 1, 4, 4, 3, 2, 3, 3)
+    assert max(_schedule(second).proxy_required) == _PROXY_CAPACITY
+    return first, second, wide
 
 
 def _cpu_source_inputs(
@@ -259,7 +295,7 @@ def _verify_local_snapshot(
     by_slot = _copies_by_egress(records)[rank]
     required = schedule.proxy_required[rank]
     assert set(by_slot) == set(range(required))
-    assert required < case.proxy_capacity_per_egress
+    assert required <= case.proxy_capacity_per_egress
     assert torch.equal(snapshot[required:], baseline[required:])
 
     coverage = []
@@ -536,7 +572,7 @@ def _worker(local_rank: int, num_local_ranks: int,
     buffer = None
     clean_shutdown = False
     try:
-        first, second = _assert_shuffle_oracle()
+        first, second, wide = _assert_shuffle_oracle()
         layout = tuple(int(value) for value in
                        _C._get_rail_balance_hybrid_layout(
                            _HIDDEN, _NUM_TOPK, _PROXY_CAPACITY))
@@ -606,6 +642,18 @@ def _worker(local_rank: int, num_local_ranks: int,
             iteration=2,
             nondefault_stream=True,
         )
+        _run_shuffle_transaction(
+            runtime=buffer.runtime,
+            rank=rank,
+            control_group=control_group,
+            timeout=args.timeout,
+            case=wide,
+            arena_offset=arena_offset,
+            arena_bytes=arena_bytes,
+            invocation_id=883,
+            iteration=3,
+            nondefault_stream=True,
+        )
 
         _monitored_barrier(control_group, args.timeout)
         clean_shutdown = True
@@ -617,8 +665,9 @@ def _worker(local_rank: int, num_local_ranks: int,
             if rank == 0:
                 print(
                     "PASS C080-D Hybrid source shuffle: true 8-GPU LSA, "
-                    "C061 skew/zero-N/multi-destination/multi-copy, exact "
-                    "legacy TokenLayout bytes, unused unchanged, reusable "
+                    "C061 skew/zero-N/multi-destination/multi-copy plus "
+                    "all-owner C1024/D32/K4, exact-capacity, exact legacy "
+                    "TokenLayout bytes, unused unchanged, reusable "
                     "transaction, non-default stream",
                     flush=True,
                 )
@@ -671,13 +720,14 @@ def main() -> None:
     if arguments.timeout <= 0 or arguments.watchdog_seconds <= 0:
         parser.error("timeouts must be positive")
 
-    first, second = _assert_shuffle_oracle()
+    first, second, wide = _assert_shuffle_oracle()
     assert _schedule(first).moved_copies == 21
     print(
         "PASS C080-D CPU oracle: C061-like 8-rail source shuffle, "
         "zero-N owners, multi-destination/multi-copy, moved=21, "
         f"Pcap={_PROXY_CAPACITY}, seeds="
-        f"{first.remainder_seed}/{second.remainder_seed}",
+        f"{first.remainder_seed}/{second.remainder_seed}; all-owner "
+        f"C={wide.num_channels}/D={wide.num_scaleout_ranks}/K={wide.num_topk}",
         flush=True,
     )
     if arguments.oracle_only:
