@@ -638,3 +638,23 @@ a 72-byte stack frame, zero local memory, and zero spills. Functional GPU runs
 under unrelated load are not timing evidence. Return-unshuffle Nsys/NCU work is
 deferred until GPUs are idle and a larger moved-volume fixture can separate TMA
 payload throughput from fixed barrier/JIT/test-adapter latency.
+
+## Hot-path decision O033 — bridge with existing prefixes, not another schedule
+
+The vnode adapter does not add a destination-wide prefix tensor or a per-copy
+work list. For channel c, the retained prefix is
+`min(owner_channel_prefix, keep_count)` and the incoming moved prefix is the
+existing `moved_channel_prefix`; their sum is exactly the number of vnode base
+records in earlier channels. An independent 1,920-schedule exhaustion proves
+that these intervals concatenate to `[0,quota)` for every egress/destination.
+
+This matters beyond test code: the same algebra is what the future force
+Hybrid consumer needs to publish dense channel tails. Adding another plan
+array would consume memory bandwidth and enlarge the correctness surface
+without reducing a measured hot-path operation. It remains rejected unless
+NCU later attributes material cost to the small existing prefix lookup.
+
+The two-buffer snapshot copies are intentionally outside this decision. They
+exist only because separate virtual communicators own separate symmetric
+windows; they are never candidates for the production data path and no Nsys or
+NCU number containing them will be reported as operator performance.

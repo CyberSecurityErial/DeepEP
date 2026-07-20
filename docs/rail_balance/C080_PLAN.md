@@ -644,6 +644,133 @@ public capability becomes true.
 - Use the four-byte transit key and descriptor-free grouped schedule.
 - Validate 8x1 source shuffle plus 4x2 and 2x4 full round trips.
 
+#### Frozen vnode bridge
+
+The vnode bridge is test-only evidence plumbing.  It must consume the actual
+GPU plan and source-shuffle bytes while leaving both the production Hybrid ABI
+and the older C060/C061 emulator entry point unchanged.
+
+Virtual 4x2 and 2x4 topologies use two independent buffers:
+
+    source ranks [0,G)       source-subgroup ElasticBuffer
+        physical topology   (scaleout=1, scaleup=G)
+        work                B2 count/plan/prefix and direct-final shuffle
+
+    all eight ranks          world ElasticBuffer
+        physical topology   (scaleout=1, scaleup=8)
+        work                vnode scaleout/forward/expert/return only
+
+The two symmetric windows never expose pointers to one another.  The existing
+owning CUDA proxy-dispatch snapshot crosses from the source buffer to the world
+adapter.  The world adapter returns owning CUDA proxy-return and retained-seed
+tensors to the source buffer.  These extra local copies are correctness-test
+costs and are excluded from production performance evidence.  Ordinary local
+inputs remain normal device allocations.  Explicit producer-to-consumer stream
+edges are required even though the two objects currently happen to share a
+process-global communication stream.
+
+The first full-roundtrip fixtures contain remote-only top-k experts.  The old
+vnode forwarder decodes every lane before deciding whether it belongs to the
+current remote destination, so a local expert lane is an error in that
+emulator.  Production Hybrid continues to support its normal local route; the
+emulator is not generalized merely to test it.  Variable source token counts
+are kept as their real N on each source rank; M is only the route and buffer
+capacity.  No masked padding is fed into the production count kernel.
+
+The source subgroup produces the unchanged fourteen B2 tensors.  Only its
+`channel_count[G,C,D]` crosses the host-object boundary: source ranks first
+compare their complete B2 digests, source rank zero broadcasts that one count
+tensor through the test control plane, and every world rank runs the unchanged
+plan/prefix kernels locally.  This keeps the private API small and makes the
+world adapter's plan independently comparable with the source plan that made
+the proxy bytes.  It also handles variable N without padding or changing the
+production count kernel.  The resulting quota is compacted from `[G,D]` to
+contiguous `[G,D-1]` before the old vnode kernels see it; taking
+`quota.data()+1` is invalid because each source row still has pitch D.  These
+test-only transfers add no production plan field.
+
+Two new one-warp adapter kernels are sufficient.
+
+`pack_vnode_base` runs only on source ranks, with one block per source channel.
+For absolute remote destination `d`, channel `c`, and egress `e`, it derives
+the destination-wide vnode prefix without another O(G*C*D) tensor:
+
+    channel_base(e,c,d) =
+        min(owner_channel_prefix[e,c,d], keep_count[e,d])
+        + moved_channel_prefix[e,d,c]
+
+    dense_slot = channel_base + remote_slot
+    vnode_destination = d - 1
+    vnode_physical_slot = vnode_destination * M + dense_slot
+
+The identity
+
+    channel_base == sum over h<c of
+        (retained[e,h,d] + moved[e,h,d])
+
+makes each `(egress,destination)` image exactly `[0,quota)`, with no atomics,
+holes, or collisions.  Retained records are reconstructed from local
+`x/topk_idx/topk_weights`; moved records are copied byte-for-byte from the
+actual proxy-dispatch snapshot and retain `linked_list_idx[0] == p`.  Only the
+test vnode descriptor, canaries, and ready word are synthesized.  A
+1920-schedule independent CPU exhaustion over G={2,3,4,8}, varied C, and varied
+D validated this mapping.
+
+`return_demux` runs only on source ranks, with one block for each old vnode base
+slot.  With `old_d=d-1`, `P=(D-1)*M`, and dense slot `s`, the old vnode return
+record for top-k lane `l` is:
+
+    base slot          b = old_d*M + s
+    contribution slot u = P + b*K + l
+
+It validates the base record, every matching contribution and route, and every
+nonmatching empty lane.  It then uses the existing `compute_topk_slots` and
+`combine_reduce` semantics to form one complete combine TokenLayout for that
+destination.  Dispatch and combine records are not layout-compatible and are
+never copied as if they were.  All K expert ids and all K weights are copied
+from the base record; aligned metadata padding is deterministic zero.
+
+The demux scans the small retained/moved channel intervals to invert `s`:
+
+    local = s - channel_base
+    local < retained[e,c,d]       -> retained
+    otherwise p = group_prefix[e,c,d]
+                  + local - retained[e,c,d]
+
+Retained output is written to the local legacy-reduce seed.  Moved output is
+written to local `proxy_return[p]` after verifying the preserved dispatch
+record, source owner/token, and transit key.  Static plan injectivity proves
+both destinations are collision-free, so neither path needs an atomic.
+
+The combine row is exactly the legacy choice:
+
+    D <= K    row = absolute destination d
+    D > K     row = highest top-k lane whose expert targets d
+
+After vnode demux, the source buffer copies the two owning tensors into its
+own symmetric reduce/proxy-return areas, launches the production-shared return
+unshuffle, performs the source-G LSA visibility barrier, and invokes the exact
+legacy combine reduce epilogue.  A force-only wrapper may prepare and launch
+`CombineReduceEpilogueRuntime`, but it must retain the name
+`combine_reduce_epilogue`, generated specialization, PDL launch configuration,
+and cache identity.  `csrc/kernels/elastic/combine.hpp` remains unchanged.
+
+All eight processes create the NCCL source subgroup in the same order, but
+only prefix world ranks `[0,G)` construct its ElasticBuffer; nonmembers never
+enter the constructor.  The prefix restriction is part of this harness because
+the production source payload encodes subgroup-local rank and the emulator
+interprets it as world-local owner.  Runtime assertions require source topology
+`(scaleout=1,scaleup=G)` and world topology `(1,8)`.
+
+All adapter JIT builds, allocations, input validation, quota compaction, and
+cross-object stream edges precede the first committed emulator barrier.  The
+world vnode keeps its existing all-rank stage barriers.  Source return
+unshuffle then uses the already proved source-team barrier before the local
+epilogue.  Source-group and world-group NCCL operations are serialized rather
+than overlapped.  Any device error is sticky; all participating ranks finish
+the current fixed barrier sequence before host inspection.  No rollback of
+test-only scratch is promised after publication.
+
 Go: H256/H7168, exact payload/weight/route/output, zero/one/capacity edges,
 repeated reuse, and injected corrupt/missing plan state pass.  Label only
 VNODE_FUNCTIONAL_PASS.

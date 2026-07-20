@@ -2075,3 +2075,72 @@ This closes the standalone GPU ordering and layout proof for return-unshuffle.
 It does not yet prove destination-side Hybrid forwarding/combine, the full
 4x2/2x4 round trip, real Rail/Gin completion, or a performance gain. Public
 force remains disabled.
+
+## 2026-07-21 — D034: freeze the minimal C080-D vnode bridge
+
+Three independent read-only audits froze the bridge between the proved Hybrid
+source/return kernels and the older 8-GPU vnode transport. The bridge uses a
+source-subgroup ElasticBuffer of G ranks and a separate eight-rank world
+ElasticBuffer. Each object owns its own NCCL device communicator, symmetric
+allocation, and window. Passing a symmetric pointer between them is invalid:
+`get_sym_ptr` interprets an address relative to the receiving object's window.
+The accepted bridge therefore uses owning local CUDA snapshots in both
+directions. Those copies are test scaffolding and cannot be included in a
+production data-path timing.
+
+Only `channel_count[G,C,D]` crosses from the source plan to the world adapter.
+Every world rank reuses the existing plan/prefix kernels to reconstruct the
+same quota, segments, retained/moved counts, and compact group prefixes. This
+avoids a fourteen-tensor private ABI, avoids padding variable source N, and
+keeps the production count kernel unchanged. The source and world plan digests
+must match before the vnode stages commit. VNode receives a real contiguous
+remote quota `[G,D-1]`; a pointer offset into `[G,D]` would preserve the wrong
+row pitch.
+
+The accepted adapter has only two one-warp kernels. Pack derives its
+destination-wide dense prefix as
+
+```text
+min(owner_channel_prefix[e,c,d], keep_count[e,d])
+    + moved_channel_prefix[e,d,c]
+```
+
+and materializes retained local records plus actual moved proxy-dispatch
+records into the old vnode base namespace. Return demux validates the old
+base/contribution/route records, reduces matching expert lanes with the legacy
+combine helpers, and reconstructs a complete combine TokenLayout. Retained
+records become a local reduce seed; moved records become proxy-return p. The
+already proved source-buffer return-unshuffle performs the only peer writes,
+then the unchanged legacy epilogue produces the final result.
+
+Independent schedule exhaustion covered 1,920 combinations of G, C, and D and
+found no dense-slot hole, collision, or overflow. The return audit proved the
+old vnode physical formulas, the moved/retained inverse, and the D>K highest
+matching-lane row rule. No Blocker was found in either adapter kernel.
+
+### Rejected alternatives and retained boundaries
+
+1. A new `O(G*C*D)` destination prefix was rejected: existing retained and
+   moved prefixes already give the exact dense base in O(1).
+2. Cross-object raw symmetric pointers were rejected because they belong to
+   different NCCL windows. Exposing uintptr values or adding friend plumbing
+   would make an unsafe test abstraction.
+3. Passing all fourteen plan tensors was rejected. Passing one actual GPU
+   channel-count tensor and rebuilding with shared kernels is smaller and
+   independently checkable.
+4. The old vnode emulator is not generalized for local expert lanes. Its
+   forwarder decodes every lane in a remote-only namespace, so the first GPU
+   fixtures are explicitly remote-only. This is an emulator boundary, not a
+   production Hybrid limitation.
+5. Dispatch records are not copied as combine records. Their metadata layouts
+   differ; demux reconstructs combine metadata and zeroes padding.
+6. `csrc/kernels/elastic/combine.hpp` remains untouched. A force-only wrapper
+   may prepare the exact existing epilogue specialization and JIT key.
+7. The source ranks must be the world prefix `[0,G)`, so subgroup-local source
+   ids equal the emulator's world-local owner ids. A non-prefix virtual source
+   topology is outside this proof.
+
+The only environment fact still unproved is that a newly created source NCCL
+subgroup exposes the expected `(1,G)` LSA topology on this installation. The
+first GPU harness asserts it before publication. Public force remains
+disabled.
