@@ -71,7 +71,6 @@ Force-v1 accepts only:
     topk weights                  required FP32
     expert alignment              1
     allow_multiple_reduction      true
-    num_scaleout_ranks <= num_topk
     do_cpu_sync                   true
     do_handle_copy                true
     previous events               None
@@ -85,7 +84,7 @@ Force-v1 accepts only:
 The first numeric domain is:
 
     1 <= num_topk <= 32
-    2 <= num_scaleout_ranks <= min(num_topk, 32)
+    2 <= num_scaleout_ranks <= 32
     1 <= num_scaleup_ranks <= 32
     num_experts > 0
     num_experts % (num_scaleout_ranks * num_scaleup_ranks) == 0
@@ -410,10 +409,16 @@ The standalone unshuffle iterates the same local groups.  For each p it reads:
     owner_token = src_global % num_max_tokens_per_rank
     final_reduce_row = destination
 
-The final row formula is valid because force-v1 requires
-allow_multiple_reduction=true and num_scaleout_ranks<=num_topk, which selects
-the legacy scaleout-rank layout.  Supporting the alternate top-k-lane layout
-is deferred rather than adding a branch and more route state now.
+The final row follows the legacy compile-time layout choice:
+
+    if num_scaleout_ranks <= num_topk:
+        final_reduce_row = destination
+    else:
+        final_reduce_row = first top-k lane targeting destination
+
+The second value is derived by scanning the preserved dispatch top-k ids in
+the standalone unshuffle.  It adds no transmitted route state and no branch to
+the persistent dispatch/combine hot path.
 
 Unshuffle copies proxy_return[p] over LSA into:
 
@@ -659,7 +664,7 @@ is HYBRID_CODEGEN_PASS only.
 ### C080-F — isolated Hybrid combine and unshuffle
 
 - Return moved records to proxy_return[p].
-- Unshuffle complete records to destination-indexed owner reduce rows.
+- Unshuffle complete records to the legacy layout-selected owner reduce row.
 - Place the mandatory post-unshuffle LSA barrier before the legacy epilogue.
 
 Go: shared-core full loop and matching combine/unshuffle codegen pass; hidden

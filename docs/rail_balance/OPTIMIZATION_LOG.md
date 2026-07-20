@@ -452,8 +452,10 @@ Proxy slot p is contiguous within an (egress, channel, destination) group.
 Group prefix/count implies channel, destination, remote slot, and the egress
 that owns p. The retained dispatch payload kept through combine contains
 src_token_global_idx, so unshuffle also derives owner and token without a route
-table. Force-v1 restricts num_scaleout_ranks<=num_topk with multiple reduction,
-making the final reduce row equal to destination.
+table. The initial force-v1 restricted num_scaleout_ranks<=num_topk with
+multiple reduction, making the final reduce row equal to destination. O030
+later removes that artificial planner/source restriction and derives the
+alternate legacy row locally without adding route metadata.
 
 The staged schedule is:
 
@@ -572,3 +574,19 @@ preserves payload reuse while limiting replication exactly to the planner's
 moved-copy count. C100 will use NCU/Nsys to decide whether safe batching or
 another staging form is worthwhile; the initial implementation will not add a
 second scratch buffer or a per-copy work list without measured evidence.
+
+## Layout decision O030 — support D greater than K without route metadata
+
+An independent C080-D audit found that the private host gate unnecessarily
+required `num_scaleout_ranks<=num_topk`. The planner and source kernel use a
+32-bit destination mask and lane-owned destination ordinals, so their real
+bound is `D<=32`; each token need only touch at most K of those destinations.
+The restriction was removed and true 8-GPU C1024/D32/K4 execution now passes
+with all eight owners active.
+
+This does not require a sidecar for combine. Legacy multiple-reduction already
+selects its receive row statically: destination rank when `D<=K`, otherwise the
+first top-k lane targeting that destination. The preserved proxy-dispatch
+payload contains those top-k ids, so standalone return-unshuffle can derive the
+same row locally. This adds no Gin bytes and no branch to the persistent
+dispatch/combine hot path.

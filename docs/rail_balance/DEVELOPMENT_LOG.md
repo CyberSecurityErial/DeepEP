@@ -1856,3 +1856,73 @@ Pcap poison or memset. Only after
 this passes will a test-only adapter feed the same descriptor-free payloads
 into the existing 4x2/2x4 functional emulator; old vnode record/protocol ABIs
 are not production dependencies.
+
+## 2026-07-21 — D031: C080-D true-LSA source shuffle checkpoint
+
+The frozen direct-final source slice is now implemented behind private APIs and
+public force remains disabled. One 32-thread block owns each source channel,
+reconstructs a deduplicated destination ordinal, resolves the compact
+segments/prefixes, and skips retained copies. A moved token is loaded into one
+shared legacy BF16 `TokenLayout`; each moved destination changes only
+`linked_list_idx[0]=p` and receives a complete TMA store directly into the
+selected peer's final proxy-dispatch slot. Every store commits and waits before
+the next p is written. The success path has no manifest, descriptor, ready
+word, queue, ring, route sidecar, or global atomic.
+
+Two independent audits found 0 Blocker and no confirmed data-path High. One
+audit exposed a non-default-stream evidence race in the test: inputs created on
+the caller stream lacked an explicit edge to the alternate stream, and the
+snapshot was consumed from the default stream before an explicit wait. The
+test now installs both dependencies. It also verifies zeroed metadata padding;
+unknown device status is converted into sticky InvalidSchedule instead of
+asserting before poisoning the transaction.
+
+The second audit found an artificial `D<=K` host restriction. It was inherited
+from the first combine simplification, not from planner/source mechanics. The
+restriction was removed from the private planner, CPU oracle, and source path.
+For future unshuffle, legacy layout selection is still derivable without new
+metadata: row=destination for D<=K, otherwise row=the first top-k lane targeting
+that destination. The preserved dispatch TokenLayout contains the required
+expert ids.
+
+Accepted local evidence on idle 8xH200:
+
+```text
+PASS source oracle: C061 moved=21, Pcap=6, seeds 62/63;
+     all-owner C1024/D32/K4
+PASS true 8-GPU LSA source shuffle: C061 multi-destination/multi-copy,
+     zero-N owners, all eight owners active, D32>K4, exact Pcap,
+     repeated transaction, non-default stream, exact legacy TokenLayout bytes,
+     source immutability, and byte-unchanged inactive slots
+PASS B1: 70 exact CUDA plans including D32>K4, plus route/seed/C1025/D33
+     rejection and non-default stream
+PASS 11/11 CPU reference, 6/6 API, 5/5 layout, 4/4 legacy goldens,
+     extension rebuild, py_compile, and diff check
+```
+
+Static cubin inspection for H256/K4 reports 74 registers, 1024 shared bytes,
+0 local bytes, and a 72-byte stack/parameter allocation. This is only a
+profiling target, not a performance regression claim; NCU/Nsys evidence is
+deferred until the correctness boundary matrix is stronger.
+
+### Failed attempts retained
+
+1. The first local API/layout rerun omitted `PYTHONPATH=.` and both commands
+   failed with `ModuleNotFoundError: deep_ep`; the corrected pinned-interpreter
+   commands passed 6/6 and 5/5.
+2. The first host rebuild after moving `HybridPlanError` into the shared layout
+   failed because the enum was not visible to host code. Moving the common
+   status definition out of the JIT-only plan header fixed the build.
+3. A test worker invoked the raw Conda interpreter and failed on the known
+   `undefined symbol: ncclCommQueryProperties`; all accepted evidence uses
+   `/home/chen/.cache/deepep-sjlgpt/bin/python`.
+4. The first D32>K4 oracle patch forgot to import
+   `_encode_destination_rows`, causing `NameError`; after the import, its first
+   expected proxy distribution assumed uniform `(3,...,3)` but the rotating
+   remainder seed correctly produced `(4,1,4,4,3,2,3,3)`. The independent CPU
+   schedule supplied the corrected exact golden.
+
+This checkpoint is only the 8x1 source data slice. It does not prove H7168,
+corrupt-plan fail-closed behavior, 4x2/2x4 round trip, return-unshuffle, force
+Hybrid dispatch/combine, Gin/QP/NIC behavior, or speedup. C080-D remains
+IN_PROGRESS.

@@ -319,10 +319,11 @@ Out of scope until evidence expands the project:
   remove per-copy descriptors, ready/generation values, network route sidecars,
   and return headers. Dispatch payloads remain alive through combine so
   unshuffle derives owner/token from `src_token_global_idx`.
-- Force-v1 requires `allow_multiple_reduction=true` and
-  `num_scaleout_ranks<=num_topk`; therefore the legacy final reduce row is
-  exactly the destination scaleout rank. This avoids an alternate top-k-lane
-  branch and extra route state.
+- Force-v1 requires `allow_multiple_reduction=true`. The planner/source path
+  accepts up to 32 destinations even when `D>K`. Return unshuffle follows the
+  legacy layout: row `destination` when `D<=K`, otherwise the first top-k lane
+  targeting that destination, derived from the preserved dispatch payload.
+  No extra transmitted route state is needed.
 - A moved combine result must return to its source egress's unique proxy slot
   and then be written over LSA to the original owner's existing reduction row.
   `src_token_idx` alone is collision-prone, and `recv_src_metadata[:,2:]` cannot
@@ -360,7 +361,7 @@ Out of scope until evidence expands the project:
   descriptor/ready protocol, and replay snapshot are not production C080
   dependencies.
 - C080-B1 now has that isolated materializer. Fresh-cache H200 execution matches
-  the CPU oracle in 69 exact cases, including zero tokens, signed-int64 seed
+  the CPU oracle in 70 exact cases, including zero tokens, signed-int64 seed
   normalization, capacity failure, strict route rejection, maximum C/D, and a
   non-default stream. The three JIT cubins each export one kernel symbol.
 - B1 still uses a stacked single-GPU `[G,N,K]` fixture. Production B2 must run
@@ -392,3 +393,9 @@ Out of scope until evidence expands the project:
   and consensus oracle. It is not evidence that production WORLD Gate1/Gate2
   exists; public `force` remains disabled until the fixed-tensor gate and the
   dispatch/combine transaction are integrated.
+- C080-D now has a descriptor-free direct-final source kernel. One warp owns a
+  source channel, resolves only compact plan state, stages each moved token
+  once, and TMA-stores complete legacy TokenLayouts into peer proxy slots. True
+  8-GPU evidence covers multi-destination copies, zero-N owners, exact Pcap,
+  all eight owners, C=1024/D=32/K=4, non-default streams, and byte-unchanged
+  inactive slots. Full vnode round trip and return unshuffle remain open.
