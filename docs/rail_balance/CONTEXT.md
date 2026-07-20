@@ -338,3 +338,24 @@ Out of scope until evidence expands the project:
 - Standing resource authorization: when a process is positively identified as
   Megatron/MGT training, it may be terminated without another prompt. Other GPU
   processes remain out of scope.
+
+## C080 implementation context (2026-07-21)
+
+- Remote branch checkpoints now include `bb47ad0` (force-only Hybrid arena ABI)
+  and `3676193` (strict compact CPU schedule oracle).
+- Public force remains intentionally unavailable. Default off has exact API,
+  buffer, handle, runtime, and recursive-JIT identity coverage.
+- The force arena is tail-only and contains control/count plus dispatch/return
+  payloads. It does not contain the full plan, a manifest, descriptors, ready
+  words, generations, a route sidecar, or a ring.
+- The immutable legacy Hybrid workspace ceiling is 1024 channels even though
+  the generic host heuristic can calculate 1280. Every force entry must reject
+  C > 1024 before an arena write or device collective.
+- The schedule ABI is channel-major with destination-bucketed five-int
+  segments. A strict test adapter maps real expert ids to scaleout servers and
+  enforces the first force support matrix. It passes 11/11 and independently
+  cross-checks the established C030 planner.
+- The next production unit is an isolated GPU count/plan/prefix materializer.
+  C040-C070 may supply algorithmic and vnode evidence, but their CPU manifest,
+  descriptor/ready protocol, and replay snapshot are not production C080
+  dependencies.

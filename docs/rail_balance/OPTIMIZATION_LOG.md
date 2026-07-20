@@ -494,3 +494,23 @@ OOM in that gap could strand other local GPUs. Force combine therefore catches
 and world-consenses handle/output allocation before launching its uninterrupted
 combine -> unshuffle -> barrier -> epilogue sequence. This changes only the
 correctness-first force control path; default off retains legacy overlap.
+
+## ABI decision O024 — inherit the 1024-channel legacy ceiling
+
+The generic host heuristic can select up to 1280 channels, but the immutable
+Hybrid workspace arrays are compiled for 1024. Enlarging the new count arena
+does not make the old tails/counters safe. Force-v1 therefore uses 1024 as a
+hard preflight limit instead of enlarging or rewriting legacy workspace. This
+keeps default-off identity and prevents a hidden out-of-bounds path.
+
+## Hot-path decision O025 — destination-bucketed five-int segments
+
+A correct CPU draft flattened destination into every transfer segment. That
+would spend one redundant integer per segment and diverge from the frozen GPU
+shape. Destination is now implied by the outer bucket:
+
+    segments[d][s] = owner, egress, owner_begin, count, egress_begin
+
+The production resolver scans only one destination bucket. No per-copy
+assignment is materialized. Strict expert validation and server mapping stay
+outside the hot resolver, before the first collective.

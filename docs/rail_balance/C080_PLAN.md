@@ -1,6 +1,6 @@
 # C080 Hybrid Rail-Balance Integration Plan
 
-Status: PLAN_FROZEN / IMPLEMENTATION_NOT_STARTED
+Status: PLAN_FROZEN / IMPLEMENTATION_IN_PROGRESS
 
 This is the correctness-first plan for connecting the proved C030-C070
 components to DeepEP Hybrid dispatch/combine.  It is intentionally narrow.

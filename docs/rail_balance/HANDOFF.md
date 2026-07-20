@@ -1,21 +1,22 @@
 # Rail Balance Session Handoff
 
-Last updated: 2026-07-19 UTC
+Last updated: 2026-07-21 UTC
 Branch: `feat/rail-balance-prototype`
 Repository: `/home/chen/workspace/source_code/DeepEP`
 
 ## Safe pause state
 
-- C000 through C070 are complete for the agreed single-node PoC scope.
-- No C080 source change has started. Only its audit/plan was selected as the
-  next action.
-- All repository changes through C070 are staged. There were no unstaged
-  source changes before this handoff file was added.
-- No test, NVCC, Ninja, build, or sub-agent task remains active.
-- All eight GPUs were released: zero allocated MiB and zero utilization at the
-  final check.
-- A Git commit was intentionally not fabricated because repository-local
-  `user.name` and `user.email` are unset.
+- C000 through C070 remain complete for the agreed single-node PoC scope.
+- C080-A is complete: default-off identity, strict constructor config, disabled
+  capability gate, checked force arena ABI, and EP8 size agreement pass.
+- C080-B has a reviewed strict CPU oracle and is now implementing the isolated
+  GPU count/plan/prefix materializer. C080-C has the arena formula but not yet
+  cross-rank preflight/status.
+- Latest pushed checkpoints are `bb47ad0` (arena layout) and `3676193` (compact
+  schedule oracle) on `fork/feat/rail-balance-prototype`.
+- Public force still fails closed and no result claims real Gin/RDMA behavior.
+- Resume from the working tree and the newest entries in `DEVELOPMENT_LOG.md`;
+  do not restore the obsolete sidecar/descriptor/ring draft.
 
 ## Immutable checkpoints
 

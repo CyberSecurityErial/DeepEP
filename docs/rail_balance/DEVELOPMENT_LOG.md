@@ -1509,3 +1509,73 @@ Executable evidence at freeze:
 Decision: commit and push this plan/golden checkpoint, then begin C080-A
 constructor/config/capability integration. No Hybrid source edit preceded the
 freeze.
+
+## 2026-07-21 — D024: C080-A fail-closed API and arena ABI
+
+- Added keyword-only `rail_balance="off|force"` and
+  `rail_balance_proxy_slots_per_rank` constructor configuration. Off/zero takes
+  the exact old constructor, size calculator, runtime, JIT, instance-field, and
+  EPHandle paths.
+- Added a dual host/extension capability check. It is deliberately false until
+  both force dispatch and combine exist; missing, false, or throwing compiled
+  capability all fail closed before touching process groups, CUDA, or NCCL.
+- Froze a force-only tail arena containing one 32-byte control block, one fixed
+  channel-count array, and exactly `Pcap` legacy BF16 dispatch plus `Pcap`
+  legacy combine payload slots. Every section is 32-byte aligned and the arena
+  is rounded to 2 MiB. No descriptor, ready/generation, route sidecar, or ring
+  was added.
+- Independent audit found a real High before commit: the host channel heuristic
+  can calculate 1280 channels, while the immutable legacy Hybrid workspace is
+  compiled for 1024. The first arena draft copied 1280 and would have permitted
+  legacy OOB access. Force-v1 now inherits `deep_ep::kNumMaxChannels == 1024`;
+  runtime preflight must reject larger C before any arena write or collective.
+- Rebuilt the extension and passed layout 5/5, API 6/6, legacy identity 4/4,
+  and the 8-rank NCCL/all-gather buffer formula.
+
+Failures retained:
+
+- A read-only audit ran the updated 1024 golden while `_C.so` still contained
+  the earlier 1280 build and correctly failed. Rebuilding closed it; this was a
+  stale-extension failure, not a formula failure.
+- Direct test commands without `PYTHONPATH=.` failed with
+  `ModuleNotFoundError`. A guessed legacy identity filename was also wrong.
+  Both commands were corrected without changing code.
+- The first EP8 formula run used default port 8361 and failed `EADDRINUSE`.
+  Re-running with `MASTER_PORT=29881` passed on all eight H200s.
+
+Checkpoint commits, both pushed to the fork branch:
+
+    85b6b48 feat: add fail-closed rail balance config gate
+    9ba9ae8 feat: expose disabled hybrid rail capability
+    bb47ad0 feat: freeze hybrid rail balance arena layout
+
+## 2026-07-21 — D025: C080-B compact CPU oracle freeze
+
+- Added a deliberately slow CPU standard answer for channel-major count,
+  minimum-move quota, retained/moved placement, owner and moved prefixes,
+  channel-major group prefixes, and capacity fail-closed behavior. Exhaustive
+  copy enumeration exists only in tests; it is not stored in the schedule and
+  is not a production manifest.
+- The first review found a Blocker in an otherwise correct result: segments
+  were flattened and included destination, making six integers. The frozen ABI
+  already buckets by destination. It is now `segments[D][<=G-1]`, with each
+  record exactly `(owner, egress, owner_begin, count, egress_begin)`.
+- Added the strict real-input adapter from rectangular top-k expert ids to
+  deduplicated remote destination servers. Force input rejects masks, ragged K,
+  duplicate experts, invalid expert ids, K/D/G/C limit violations, invalid
+  expert divisibility, nonpositive Pcap, and `G*D*T`/prefix int32 overflow.
+- Every schedule test cross-checks count/quota/keep and the first four segment
+  fields against the established C030 oracle; egress_begin and grouped slot
+  namespaces are checked independently.
+- C061 remains the fixed channel-major golden: 33 destination copies, six
+  moved copies, Pcap 3 succeeds and Pcap 2 disables the candidate atomically.
+
+Evidence:
+
+    PASS 11/11 C080-B Hybrid CPU reference tests
+    PASS 38/38 existing rail-balance planner tests
+    PASS py_compile and git diff --check
+    independent rereview: 0 unresolved Blocker / 0 High
+
+Checkpoint `3676193 test: freeze hybrid rail schedule oracle` was pushed.
+No force Hybrid data-path source is enabled at this point.
