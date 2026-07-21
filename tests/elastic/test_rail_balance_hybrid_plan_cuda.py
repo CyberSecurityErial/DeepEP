@@ -102,6 +102,51 @@ _C061_VIRTUAL_ROUTES = (
     ),
 )
 
+# C090 keeps the distribution matrix deliberately small and deterministic.
+# Each row below is one source rail and each column is one *remote*
+# destination (real destination zero remains local).  Route tensors are built
+# from these integer counts, so the fixtures exercise destination
+# deduplication and the complete B1 materializer instead of injecting counts
+# directly into the planner.
+_ROUTE_DISTRIBUTION_CASES = (
+    (
+        "route_level_one_hot",
+        (
+            (24, 0, 0),
+            (0, 0, 0),
+            (0, 0, 0),
+            (0, 0, 0),
+        ),
+        18,
+        (0, 6, 6, 6),
+    ),
+    (
+        "route_level_zipf",
+        (
+            # floor(16 / rank), rotated once per destination.
+            (16, 4, 5),
+            (8, 16, 4),
+            (5, 8, 16),
+            (4, 5, 8),
+        ),
+        21,
+        (7, 4, 3, 7),
+    ),
+    (
+        "route_level_log_normal",
+        (
+            # round(4 * exp(z)) for z=(1.5, .5, -.5, -1.5), then
+            # rotated per destination: the fixed buckets are 18, 7, 2, 1.
+            (18, 1, 2),
+            (7, 18, 1),
+            (2, 7, 18),
+            (1, 2, 7),
+        ),
+        33,
+        (11, 6, 5, 11),
+    ),
+)
+
 
 @dataclass(frozen=True)
 class PlanCase:
@@ -170,6 +215,49 @@ def _encode_destination_routes(
         tuple(encoded_owners),
         num_destinations * experts_per_destination,
     )
+
+
+def _fixed_route_distribution_cases() -> tuple[PlanCase, ...]:
+    """Build the named C090 route fixtures without a stochastic sampler."""
+
+    num_tokens = 32
+    num_topk = 4
+    cases = []
+    for name, remote_counts, _moved_copies, _proxy_required in \
+            _ROUTE_DISTRIBUTION_CASES:
+        assert len(remote_counts) == 4
+        routes = []
+        for owner_counts in remote_counts:
+            assert len(owner_counts) == 3
+            assert all(count >= 0 for count in owner_counts)
+            assert sum(owner_counts) <= num_tokens
+            owner_routes = tuple(
+                (destination,) * num_topk
+                for destination, count in enumerate(owner_counts, start=1)
+                for _ in range(count)
+            )
+            owner_routes += ((0,) * num_topk,) * (
+                num_tokens - len(owner_routes))
+            assert len(owner_routes) == num_tokens
+            routes.append(owner_routes)
+
+        topk_idx, num_experts = _encode_destination_routes(
+            tuple(routes),
+            num_destinations=4,
+            experts_per_destination=8,
+        )
+        cases.append(PlanCase(
+            name=name,
+            topk_idx=topk_idx,
+            num_channels=4,
+            num_max_tokens_per_rank=num_tokens,
+            num_experts=num_experts,
+            num_scaleout_ranks=4,
+            local_scaleout_rank=0,
+            proxy_capacity_per_egress=num_tokens,
+            remainder_seed=90,
+        ))
+    return tuple(cases)
 
 
 def _build_schedule(case: PlanCase) -> HybridRailSchedule:
@@ -415,6 +503,19 @@ def _assert_oracle_contract(num_random_seeds: int) -> tuple[PlanCase, ...]:
     )
     assert _build_schedule(large_seed).remainder_seed == 0
 
+    distribution_cases = _fixed_route_distribution_cases()
+    assert len(distribution_cases) == len(_ROUTE_DISTRIBUTION_CASES)
+    for case, expected in zip(
+            distribution_cases, _ROUTE_DISTRIBUTION_CASES):
+        name, remote_counts, expected_moved, expected_proxy = expected
+        schedule = _build_schedule(case)
+        expected_count = tuple((0, *row) for row in remote_counts)
+        assert case.name == name
+        assert schedule.enabled
+        assert schedule.count == expected_count
+        assert schedule.moved_copies == expected_moved
+        assert schedule.proxy_required == expected_proxy
+
     random_cases = tuple(_random_cases(num_random_seeds))
     assert all(_build_schedule(case).enabled for case in random_cases)
     assert sum(
@@ -425,6 +526,7 @@ def _assert_oracle_contract(num_random_seeds: int) -> tuple[PlanCase, ...]:
             zero_tokens,
             large_seed,
             wide,
+            *distribution_cases,
             *random_cases,
             boundary)
 
@@ -690,8 +792,8 @@ def main() -> None:
     _run_legacy_goldens()
     print(
         f"PASS C080-B1 CPU expected structure: C061 33 copies/6 moves, "
-        f"Pcap 3/2, zero tokens, {arguments.random_seeds} random seeds, "
-        f"C1024/D32 including D32>K4")
+        f"Pcap 3/2, zero tokens, named route-level one-hot/Zipf/log-normal, "
+        f"{arguments.random_seeds} random seeds, C1024/D32 including D32>K4")
     print("PASS 4/4 legacy Hybrid identity goldens")
     if arguments.oracle_only:
         return
