@@ -35,8 +35,11 @@ _RAIL_BALANCE_WORLD_GATE_MAX_ERROR_PRIORITY = (1 << 31) - 1
 _RAIL_BALANCE_PROTOCOL_MAGIC = int.from_bytes(b'RBH6', byteorder='little')
 _RAIL_BALANCE_PROTOCOL_VERSION = 1
 _RAIL_BALANCE_OPERATION_CONSTRUCTOR = 1
+_RAIL_BALANCE_OPERATION_DISPATCH = 2
+_RAIL_BALANCE_OPERATION_COMBINE = 3
 _RAIL_BALANCE_PHASE_PREPARE = 1
 _RAIL_BALANCE_PHASE_SIZING = 2
+_RAIL_BALANCE_PHASE_PLAN = 2
 _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS = 10
 _RAIL_BALANCE_CONSTRUCTOR_MANIFEST_WIDTH = 16 + _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS
 _RAIL_BALANCE_CONSTRUCTOR_SIZING_MANIFEST_WIDTH = 20
@@ -50,6 +53,22 @@ _RAIL_BALANCE_CONSTRUCTOR_SIZING_ERROR = 17
 _RAIL_BALANCE_CONSTRUCTOR_RUNTIME_CONFIG_ERROR = 18
 _RAIL_BALANCE_CONSTRUCTOR_SIZING_MANIFEST_ERROR = 19
 _RAIL_BALANCE_CONSTRUCTOR_SIZING_ENCODE_ERROR = 20
+_RAIL_BALANCE_DISPATCH_COMMON_FIELDS = 19
+_RAIL_BALANCE_DISPATCH_MANIFEST_WIDTH = 7 + \
+    _RAIL_BALANCE_DISPATCH_COMMON_FIELDS
+_RAIL_BALANCE_COMBINE_MANIFEST_WIDTH = 7
+_RAIL_BALANCE_DISPATCH_VALIDATION_ERROR = 30
+_RAIL_BALANCE_DISPATCH_PREPARE_ERROR = 31
+_RAIL_BALANCE_DISPATCH_PREPARE_STATUS_ERROR = 32
+_RAIL_BALANCE_DISPATCH_MANIFEST_ERROR = 33
+_RAIL_BALANCE_DISPATCH_ENCODE_ERROR = 34
+_RAIL_BALANCE_DISPATCH_PLAN_ERROR = 35
+_RAIL_BALANCE_DISPATCH_PLAN_STATUS_ERROR = 36
+_RAIL_BALANCE_DISPATCH_PLAN_ENCODE_ERROR = 37
+_RAIL_BALANCE_COMBINE_VALIDATION_ERROR = 40
+_RAIL_BALANCE_COMBINE_PREPARE_ERROR = 41
+_RAIL_BALANCE_COMBINE_MANIFEST_ERROR = 42
+_RAIL_BALANCE_COMBINE_ENCODE_ERROR = 43
 
 
 def _rail_balance_error(code: str, detail: str) -> str:
@@ -378,6 +397,45 @@ def _make_rail_balance_constructor_sizing_manifest(
     return fields
 
 
+def _make_rail_balance_operation_manifest(
+        operation: int, phase: int, world_size: int, invocation_id: int,
+        common_fields: Sequence[int] = ()) -> Tuple[int, ...]:
+    """Encode one fixed dispatch/combine transaction identity and geometry."""
+    if operation == _RAIL_BALANCE_OPERATION_DISPATCH:
+        expected_common_fields = _RAIL_BALANCE_DISPATCH_COMMON_FIELDS
+        expected_width = _RAIL_BALANCE_DISPATCH_MANIFEST_WIDTH
+        if phase not in (_RAIL_BALANCE_PHASE_PREPARE,
+                         _RAIL_BALANCE_PHASE_PLAN):
+            raise ValueError('rail-balance dispatch phase is invalid')
+    elif operation == _RAIL_BALANCE_OPERATION_COMBINE:
+        expected_common_fields = 0
+        expected_width = _RAIL_BALANCE_COMBINE_MANIFEST_WIDTH
+        if phase != _RAIL_BALANCE_PHASE_PREPARE:
+            raise ValueError('rail-balance combine phase is invalid')
+    else:
+        raise ValueError('rail-balance operation is invalid')
+    if len(common_fields) != expected_common_fields:
+        raise ValueError('rail-balance operation manifest width is invalid')
+
+    fields = (
+        _RAIL_BALANCE_PROTOCOL_MAGIC,
+        _RAIL_BALANCE_PROTOCOL_VERSION,
+        operation,
+        phase,
+        expected_width,
+        world_size,
+        invocation_id,
+        *common_fields,
+    )
+    if len(fields) != expected_width or not all(
+            type(value) is int and
+            0 <= value <= _RAIL_BALANCE_WORLD_GATE_INT64_MAX
+            for value in fields):
+        raise ValueError(
+            'rail-balance operation manifest fields must be nonnegative int64')
+    return fields
+
+
 def _raise_rail_balance_world_gate_failure(
         stage: str, result: Tuple[int, int, int, int]) -> None:
     """Raise the same compact post-consensus error on every participating rank."""
@@ -391,6 +449,20 @@ def _raise_rail_balance_world_gate_failure(
         raise RuntimeError(_rail_balance_error(
             'ConfigurationMismatch',
             f'{stage} field {field} differs across ranks: min={minimum}, max={maximum}'))
+
+
+class _RailBalanceForceTicket:
+    """Shared mutable one-shot state attached dynamically to an EPHandle."""
+    __slots__ = ('owner_token', 'invocation_id', 'state')
+
+    LIVE = 'LIVE'
+    PREPARING = 'PREPARING'
+    CONSUMED = 'CONSUMED'
+
+    def __init__(self, owner_token: object, invocation_id: int):
+        self.owner_token = owner_token
+        self.invocation_id = invocation_id
+        self.state = self.LIVE
 
 
 class EPHandle:
@@ -1503,6 +1575,315 @@ class ElasticBuffer:
 
         return min(num_qps, self.num_allocated_qps)
 
+    def _dispatch_rail_balance_force(
+            self,
+            x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
+            topk_idx: Optional[torch.Tensor],
+            topk_weights: Optional[torch.Tensor],
+            cumulative_local_expert_recv_stats: Optional[torch.Tensor],
+            num_experts: Optional[int],
+            num_max_tokens_per_rank: Optional[int],
+            expert_alignment: Optional[int],
+            num_sms: int, num_qps: int,
+            previous_event: Optional[EventHandle],
+            previous_event_before_epilogue: Optional[EventHandle],
+            async_with_compute_stream: bool,
+            allocate_on_comm_stream: bool,
+            handle: Optional[EPHandle],
+            do_handle_copy: bool,
+            do_cpu_sync: Optional[bool],
+            do_expand: bool,
+            do_zero_padding: bool,
+            use_tma_aligned_col_major_sf: bool):
+        """Run the narrow force-v1 publication transaction."""
+        invocation_id = 0
+        local_error_priority = 0
+        prepare_attempted = False
+        prepare_common_fields = None
+        dispatch_manifest = None
+        ticket = None
+
+        # Reserve the epoch before validating caller inputs. Every attempt,
+        # including a locally invalid one, must rendezvous with its peers.
+        try:
+            invocation_id = self._rail_balance_next_invocation_id
+            if type(invocation_id) is not int or not (
+                    1 <= invocation_id <=
+                    _RAIL_BALANCE_WORLD_GATE_INT32_MAX):
+                raise ValueError('rail-balance invocation is out of range')
+            self._rail_balance_next_invocation_id = invocation_id + 1
+        except BaseException:
+            invocation_id = 0
+            local_error_priority = _RAIL_BALANCE_DISPATCH_VALIDATION_ERROR
+
+        resolved_num_max_tokens = 0
+        resolved_num_experts = 0
+        resolved_num_sms = 0
+        resolved_num_qps = 0
+        if local_error_priority == 0:
+            try:
+                if self._rail_balance_terminal:
+                    raise RuntimeError('rail-balance buffer is terminal')
+                if self._rail_balance_live_ticket is not None:
+                    raise RuntimeError('rail-balance dispatch is already live')
+                if handle is not None:
+                    raise ValueError('cached force dispatch is unsupported')
+                if isinstance(x, tuple):
+                    raise ValueError('FP8 force dispatch is unsupported')
+                if topk_idx is None or topk_weights is None:
+                    raise ValueError(
+                        'force dispatch requires top-k indices and weights')
+                if type(num_experts) is not int or num_experts <= 0:
+                    raise ValueError('force dispatch requires num_experts')
+                resolved_num_experts = num_experts
+                resolved_num_max_tokens = value_or(
+                    num_max_tokens_per_rank,
+                    self.num_max_tokens_per_rank)
+                if type(resolved_num_max_tokens) is not int or \
+                        resolved_num_max_tokens != \
+                        self.num_max_tokens_per_rank:
+                    raise ValueError(
+                        'force dispatch must use the constructor token capacity')
+                resolved_expert_alignment = value_or(expert_alignment, 1)
+                if type(resolved_expert_alignment) is not int or \
+                        resolved_expert_alignment != 1:
+                    raise ValueError(
+                        'force dispatch supports expert_alignment=1 only')
+                resolved_do_cpu_sync = value_or(do_cpu_sync, True)
+                if type(resolved_do_cpu_sync) is not bool or \
+                        not resolved_do_cpu_sync:
+                    raise ValueError(
+                        'force dispatch requires do_cpu_sync=True')
+                if type(do_handle_copy) is not bool or not do_handle_copy:
+                    raise ValueError(
+                        'force dispatch requires do_handle_copy=True')
+                if type(do_expand) is not bool or do_expand or \
+                        type(do_zero_padding) is not bool or do_zero_padding or \
+                        type(use_tma_aligned_col_major_sf) is not bool or \
+                        use_tma_aligned_col_major_sf:
+                    raise ValueError(
+                        'force dispatch does not support expanded/FP8 layouts')
+                if previous_event is not None or \
+                        previous_event_before_epilogue is not None or \
+                        type(async_with_compute_stream) is not bool or \
+                        async_with_compute_stream or \
+                        type(allocate_on_comm_stream) is not bool or \
+                        allocate_on_comm_stream:
+                    raise ValueError(
+                        'force dispatch does not support public event/async options')
+                if self.deterministic:
+                    raise ValueError(
+                        'force dispatch does not support deterministic mode')
+                check_torch_deterministic()
+
+                if type(num_sms) is not int or num_sms < 0:
+                    raise ValueError('force dispatch num_sms is invalid')
+                resolved_num_sms = num_sms
+                if resolved_num_sms == 0:
+                    resolved_num_sms = self.get_theoretical_num_sms(
+                        resolved_num_experts, topk_idx.shape[1])
+                if type(resolved_num_sms) is not int or not (
+                        2 <= resolved_num_sms <=
+                        _RAIL_BALANCE_WORLD_GATE_INT32_MAX):
+                    raise ValueError('force dispatch num_sms is invalid')
+
+                if type(num_qps) is not int or num_qps < 0:
+                    raise ValueError('force dispatch num_qps is invalid')
+                resolved_num_qps = num_qps
+                if resolved_num_qps == 0:
+                    resolved_num_qps = self.get_theoretical_num_qps(
+                        resolved_num_sms)
+                if type(resolved_num_qps) is not int or not (
+                        1 <= resolved_num_qps <= self.num_allocated_qps):
+                    raise ValueError('force dispatch num_qps is invalid')
+                ticket = _RailBalanceForceTicket(
+                    self._rail_balance_owner_token, invocation_id)
+            except BaseException:
+                local_error_priority = \
+                    _RAIL_BALANCE_DISPATCH_VALIDATION_ERROR
+
+        if local_error_priority == 0:
+            prepare_attempted = True
+            try:
+                prepare_result = \
+                    self.runtime._rail_balance_hybrid_dispatch_prepare(
+                        x, topk_idx, topk_weights,
+                        cumulative_local_expert_recv_stats,
+                        resolved_num_max_tokens, resolved_num_experts,
+                        resolved_num_sms, resolved_num_qps,
+                        self._rail_balance_proxy_slots_per_rank,
+                        self._rail_balance_arena_offset,
+                        invocation_id, 0)
+                if type(prepare_result) is not tuple or \
+                        len(prepare_result) != 1 + \
+                        _RAIL_BALANCE_DISPATCH_COMMON_FIELDS or \
+                        type(prepare_result[0]) is not int or \
+                        prepare_result[0] not in (0, 2, 3):
+                    raise ValueError(
+                        'rail-balance dispatch prepare ABI is invalid')
+                if prepare_result[0] != 0:
+                    local_error_priority = \
+                        _RAIL_BALANCE_DISPATCH_PREPARE_STATUS_ERROR
+                else:
+                    prepare_common_fields = tuple(prepare_result[1:])
+            except BaseException:
+                local_error_priority = \
+                    _RAIL_BALANCE_DISPATCH_PREPARE_ERROR
+
+        if local_error_priority == 0:
+            try:
+                dispatch_manifest = _make_rail_balance_operation_manifest(
+                    _RAIL_BALANCE_OPERATION_DISPATCH,
+                    _RAIL_BALANCE_PHASE_PREPARE,
+                    self.num_ranks, invocation_id,
+                    prepare_common_fields)
+            except BaseException:
+                local_error_priority = \
+                    _RAIL_BALANCE_DISPATCH_MANIFEST_ERROR
+        if dispatch_manifest is None:
+            dispatch_manifest = _make_rail_balance_operation_manifest(
+                _RAIL_BALANCE_OPERATION_DISPATCH,
+                _RAIL_BALANCE_PHASE_PREPARE,
+                0, 0,
+                (0,) * _RAIL_BALANCE_DISPATCH_COMMON_FIELDS)
+
+        local_error_key = _make_rail_balance_world_gate_error_key(
+            local_error_priority, self.rank_idx)
+        try:
+            _encode_rail_balance_world_gate(
+                self._rail_balance_world_gate_host_words,
+                local_error_key, dispatch_manifest)
+        except BaseException:
+            local_error_key = _make_rail_balance_world_gate_error_key(
+                _RAIL_BALANCE_DISPATCH_ENCODE_ERROR, self.rank_idx)
+            _encode_rail_balance_world_gate(
+                self._rail_balance_world_gate_host_words,
+                local_error_key,
+                _make_rail_balance_operation_manifest(
+                    _RAIL_BALANCE_OPERATION_DISPATCH,
+                    _RAIL_BALANCE_PHASE_PREPARE,
+                    0, 0,
+                    (0,) * _RAIL_BALANCE_DISPATCH_COMMON_FIELDS))
+
+        try:
+            gate_result = _run_rail_balance_world_gate(
+                self._rail_balance_world_gate_device_words,
+                self._rail_balance_world_gate_host_words,
+                self.group)
+        except BaseException:
+            self._rail_balance_terminal = True
+            raise
+        try:
+            _raise_rail_balance_world_gate_failure(
+                'dispatch-prepare', gate_result)
+        except BaseException:
+            if prepare_attempted:
+                try:
+                    self.runtime._rail_balance_hybrid_plan_abort(
+                        invocation_id)
+                except BaseException:
+                    self._rail_balance_terminal = True
+                    raise
+            raise
+
+        plan_error_priority = 0
+        try:
+            plan_outputs = \
+                self.runtime._rail_balance_hybrid_plan_finish(invocation_id)
+            if type(plan_outputs) is not tuple or len(plan_outputs) != 14:
+                raise ValueError('rail-balance plan result ABI is invalid')
+            plan_status = plan_outputs[-1].item()
+            if type(plan_status) is not int or plan_status not in (0, 1):
+                raise ValueError('rail-balance plan status is invalid')
+            if plan_status != 0:
+                plan_error_priority = \
+                    _RAIL_BALANCE_DISPATCH_PLAN_STATUS_ERROR
+        except BaseException:
+            plan_error_priority = _RAIL_BALANCE_DISPATCH_PLAN_ERROR
+
+        plan_error_key = _make_rail_balance_world_gate_error_key(
+            plan_error_priority, self.rank_idx)
+        try:
+            _patch_rail_balance_world_gate_prevalidated(
+                self._rail_balance_world_gate_host_words,
+                plan_error_key,
+                3, _RAIL_BALANCE_PHASE_PLAN)
+        except BaseException:
+            plan_error_key = _make_rail_balance_world_gate_error_key(
+                _RAIL_BALANCE_DISPATCH_PLAN_ENCODE_ERROR,
+                self.rank_idx)
+            _encode_rail_balance_world_gate(
+                self._rail_balance_world_gate_host_words,
+                plan_error_key,
+                _make_rail_balance_operation_manifest(
+                    _RAIL_BALANCE_OPERATION_DISPATCH,
+                    _RAIL_BALANCE_PHASE_PLAN,
+                    0, 0,
+                    (0,) * _RAIL_BALANCE_DISPATCH_COMMON_FIELDS))
+
+        try:
+            gate_result = _run_rail_balance_world_gate(
+                self._rail_balance_world_gate_device_words,
+                self._rail_balance_world_gate_host_words,
+                self.group)
+        except BaseException:
+            self._rail_balance_terminal = True
+            raise
+        try:
+            _raise_rail_balance_world_gate_failure(
+                'dispatch-plan', gate_result)
+        except BaseException:
+            try:
+                self.runtime._rail_balance_hybrid_plan_abort(invocation_id)
+            except BaseException:
+                self._rail_balance_terminal = True
+                raise
+            raise
+
+        try:
+            self.runtime._rail_balance_hybrid_dispatch_commit(invocation_id)
+            (recv_x, recv_sf,
+             recv_topk_idx, recv_topk_weights,
+             cloned_topk_idx,
+             num_recv_tokens, num_expanded_tokens,
+             num_recv_tokens_per_expert_list,
+             psum_num_recv_tokens_per_scaleup_rank,
+             psum_num_recv_tokens_per_expert,
+             num_unaligned_recv_tokens_per_expert,
+             recv_src_metadata,
+             dst_buffer_slot_idx,
+             token_metadata_at_forward,
+             channel_linked_list,
+             event) = self.runtime._rail_balance_hybrid_dispatch_finish(
+                invocation_id)
+            if recv_sf is not None:
+                raise RuntimeError(
+                    'force-v1 dispatch unexpectedly returned FP8 scales')
+            force_handle = EPHandle(
+                False,
+                resolved_num_experts, 1,
+                resolved_num_max_tokens,
+                resolved_num_sms,
+                cloned_topk_idx,
+                num_recv_tokens, num_expanded_tokens,
+                num_recv_tokens_per_expert_list,
+                psum_num_recv_tokens_per_scaleup_rank,
+                psum_num_recv_tokens_per_expert,
+                num_unaligned_recv_tokens_per_expert,
+                recv_src_metadata,
+                dst_buffer_slot_idx,
+                token_metadata_at_forward,
+                channel_linked_list)
+            force_handle._rail_balance_ticket = ticket
+            event_overlap = EventOverlap(event)
+            self._rail_balance_live_ticket = ticket
+            return (recv_x, recv_topk_idx, recv_topk_weights,
+                    force_handle, event_overlap)
+        except BaseException:
+            self._rail_balance_terminal = True
+            self.runtime._rail_balance_hybrid_plan_abort(invocation_id)
+            raise
+
     def dispatch(self,
                  x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
                  topk_idx: Optional[torch.Tensor] = None,
@@ -1572,6 +1953,23 @@ class ElasticBuffer:
             handle: the returned communication handle.
             event: the event after executing the kernel (valid only if `async_with_compute_stream` is set).
         """
+        if getattr(self, '_rail_balance_mode', 'off') == 'force':
+            return self._dispatch_rail_balance_force(
+                x, topk_idx, topk_weights,
+                cumulative_local_expert_recv_stats,
+                num_experts, num_max_tokens_per_rank, expert_alignment,
+                num_sms, num_qps,
+                previous_event, previous_event_before_epilogue,
+                async_with_compute_stream, allocate_on_comm_stream,
+                handle, do_handle_copy, do_cpu_sync,
+                do_expand, do_zero_padding,
+                use_tma_aligned_col_major_sf)
+        if type(getattr(handle, '_rail_balance_ticket', None)) is \
+                _RailBalanceForceTicket:
+            raise ValueError(_rail_balance_error(
+                'InvalidHandle',
+                'a force dispatch handle cannot be reused by an off buffer'))
+
         check_torch_deterministic()
 
         # Automatic decide SM and QP count
@@ -1694,6 +2092,151 @@ class ElasticBuffer:
             bias_0, bias_1 = bias
         return bias_0, bias_1
 
+    def _combine_rail_balance_force(
+            self,
+            x: torch.Tensor,
+            handle: EPHandle,
+            topk_weights: Optional[torch.Tensor],
+            bias: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
+            num_sms: int, num_qps: int,
+            previous_event: EventHandle,
+            previous_event_before_epilogue: Optional[EventHandle],
+            async_with_compute_stream: bool,
+            allocate_on_comm_stream: bool):
+        """Consume one buffer-owned force ticket through the combine gate."""
+        local_error_priority = 0
+        invocation_id = 0
+        ticket = None
+        prepare_attempted = False
+        combine_manifest = None
+
+        try:
+            ticket = getattr(handle, '_rail_balance_ticket', None)
+            if type(ticket) is not _RailBalanceForceTicket:
+                raise ValueError('combine handle has no force ticket')
+            # Owner identity is checked before operation/state so a foreign
+            # handle can never mutate or abort this buffer's live completion.
+            if ticket.owner_token is not self._rail_balance_owner_token:
+                raise ValueError('combine handle belongs to another buffer')
+            invocation_id = ticket.invocation_id
+            if type(invocation_id) is not int or not (
+                    1 <= invocation_id <=
+                    _RAIL_BALANCE_WORLD_GATE_INT32_MAX):
+                raise ValueError('combine invocation is invalid')
+            if self._rail_balance_terminal:
+                raise RuntimeError('rail-balance buffer is terminal')
+            if self._rail_balance_live_ticket is not ticket:
+                raise ValueError('combine handle is not the live operation')
+            if ticket.state != _RailBalanceForceTicket.LIVE:
+                raise ValueError('combine handle has already been consumed')
+            if topk_weights is None:
+                raise ValueError('force combine requires top-k weights')
+            if bias is not None:
+                raise ValueError('force combine does not support bias')
+            if type(num_qps) is not int or num_qps != 0:
+                raise ValueError('force combine requires num_qps=0')
+            if type(num_sms) is not int or num_sms not in (
+                    0, handle.num_sms):
+                raise ValueError(
+                    'force combine must reuse the dispatch SM count')
+            if previous_event is not None or \
+                    previous_event_before_epilogue is not None or \
+                    type(async_with_compute_stream) is not bool or \
+                    async_with_compute_stream or \
+                    type(allocate_on_comm_stream) is not bool or \
+                    allocate_on_comm_stream:
+                raise ValueError(
+                    'force combine does not support public event/async options')
+            if self.deterministic:
+                raise ValueError(
+                    'force combine does not support deterministic mode')
+            check_torch_deterministic()
+            ticket.state = _RailBalanceForceTicket.PREPARING
+        except BaseException:
+            local_error_priority = \
+                _RAIL_BALANCE_COMBINE_VALIDATION_ERROR
+
+        if local_error_priority == 0:
+            # Once the call starts, Python owns cleanup even if an exception
+            # arrives after C++ has installed the pending completion but
+            # before control returns to the next Python statement.
+            prepare_attempted = True
+            try:
+                self.runtime._rail_balance_hybrid_combine_prepare(
+                    x, topk_weights, invocation_id)
+            except BaseException:
+                local_error_priority = \
+                    _RAIL_BALANCE_COMBINE_PREPARE_ERROR
+
+        if local_error_priority == 0:
+            try:
+                combine_manifest = _make_rail_balance_operation_manifest(
+                    _RAIL_BALANCE_OPERATION_COMBINE,
+                    _RAIL_BALANCE_PHASE_PREPARE,
+                    self.num_ranks, invocation_id)
+            except BaseException:
+                local_error_priority = \
+                    _RAIL_BALANCE_COMBINE_MANIFEST_ERROR
+        if combine_manifest is None:
+            combine_manifest = _make_rail_balance_operation_manifest(
+                _RAIL_BALANCE_OPERATION_COMBINE,
+                _RAIL_BALANCE_PHASE_PREPARE,
+                0, 0)
+
+        local_error_key = _make_rail_balance_world_gate_error_key(
+            local_error_priority, self.rank_idx)
+        try:
+            _encode_rail_balance_world_gate(
+                self._rail_balance_world_gate_host_words,
+                local_error_key, combine_manifest)
+        except BaseException:
+            local_error_key = _make_rail_balance_world_gate_error_key(
+                _RAIL_BALANCE_COMBINE_ENCODE_ERROR, self.rank_idx)
+            _encode_rail_balance_world_gate(
+                self._rail_balance_world_gate_host_words,
+                local_error_key,
+                _make_rail_balance_operation_manifest(
+                    _RAIL_BALANCE_OPERATION_COMBINE,
+                    _RAIL_BALANCE_PHASE_PREPARE,
+                    0, 0))
+
+        try:
+            gate_result = _run_rail_balance_world_gate(
+                self._rail_balance_world_gate_device_words,
+                self._rail_balance_world_gate_host_words,
+                self.group)
+        except BaseException:
+            self._rail_balance_terminal = True
+            raise
+        try:
+            _raise_rail_balance_world_gate_failure(
+                'combine-prepare', gate_result)
+        except BaseException:
+            if prepare_attempted:
+                try:
+                    self.runtime._rail_balance_hybrid_combine_abort(
+                        invocation_id)
+                except BaseException:
+                    self._rail_balance_terminal = True
+                    raise
+            if type(ticket) is _RailBalanceForceTicket and \
+                    ticket.owner_token is self._rail_balance_owner_token and \
+                    ticket.state == _RailBalanceForceTicket.PREPARING:
+                ticket.state = _RailBalanceForceTicket.LIVE
+            raise
+
+        ticket.state = _RailBalanceForceTicket.CONSUMED
+        self._rail_balance_live_ticket = None
+        try:
+            combined_x, combined_topk_weights, event = \
+                self.runtime._rail_balance_hybrid_combine_commit(
+                    invocation_id)
+            return (combined_x, combined_topk_weights,
+                    EventOverlap(event))
+        except BaseException:
+            self._rail_balance_terminal = True
+            raise
+
     def combine(self,
                 x: torch.Tensor,
                 handle: EPHandle,
@@ -1731,6 +2274,18 @@ class ElasticBuffer:
             combined_topk_weights: the reduced top-k weights, with shape `[num_combined_tokens, num_topk]` and type `torch.float`.
             event: the event after executing the kernel (valid only if `async_with_compute_stream` is set).
         """
+        if getattr(self, '_rail_balance_mode', 'off') == 'force':
+            return self._combine_rail_balance_force(
+                x, handle, topk_weights, bias,
+                num_sms, num_qps,
+                previous_event, previous_event_before_epilogue,
+                async_with_compute_stream, allocate_on_comm_stream)
+        if type(getattr(handle, '_rail_balance_ticket', None)) is \
+                _RailBalanceForceTicket:
+            raise ValueError(_rail_balance_error(
+                'InvalidHandle',
+                'a force handle cannot be combined by an off buffer'))
+
         check_torch_deterministic()
 
         # Automatic decide SM and QP count
