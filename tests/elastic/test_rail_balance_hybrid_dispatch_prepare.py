@@ -1,7 +1,9 @@
 """C080-H4b owning Hybrid-dispatch prepare contract.
 
-H4b deliberately does not enable the public ``rail_balance='force'`` path and
-does not submit either source payloads or the force Hybrid dispatch kernel.
+H4b deliberately does not enable the public ``rail_balance='force'``
+capability. H6 may delegate to its public host transaction while the dual
+capability remains false; H4b itself does not submit either source payloads or
+the force Hybrid dispatch kernel.
 This test freezes the complete pre-Gate1 owning bundle and exercises the only
 truthful runtime boundary available on this single-node machine: its physical
 logical topology is ``D=1, G=8``, so production Hybrid prepare must fail before
@@ -317,9 +319,11 @@ def _assert_owning_bundle_contract() -> None:
 def _assert_h4b_public_boundary() -> None:
     python_source = _PYTHON_BUFFER.read_text(encoding="utf-8")
     begin = python_source.index("    def dispatch(self,")
-    end = python_source.index("    def combine(self,", begin)
+    end = python_source.index(
+        "    @staticmethod\n    def _unpack_bias", begin)
     public_dispatch = python_source[begin:end]
     assert "_rail_balance_hybrid" not in public_dispatch
+    assert "_dispatch_rail_balance_force" in public_dispatch
     assert elastic_module._RAIL_BALANCE_FORCE_HOST_AVAILABLE is False
     assert _C._rail_balance_force_available() is False
 
