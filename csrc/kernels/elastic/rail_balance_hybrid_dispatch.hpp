@@ -878,6 +878,24 @@ struct RailBalanceHybridDispatchCompletion {
     RailBalanceHybridDispatchCompletionRawPointers raw;
 };
 
+struct RailBalanceHybridCombineRawPointers {
+    void* x;
+    float* topk_weights;
+    void* combined_x;
+    float* combined_topk_weights;
+};
+
+// Keep both expert outputs consumed by main combine and the final owner
+// outputs alive across the whole committed chain. In particular, a host-side
+// launch failure after main combine must not release any in-flight storage.
+struct RailBalanceHybridCombineCompletion {
+    torch::Tensor x;
+    std::optional<torch::Tensor> topk_weights;
+    torch::Tensor combined_x;
+    std::optional<torch::Tensor> combined_topk_weights;
+    RailBalanceHybridCombineRawPointers raw;
+};
+
 // The first force dispatch prepares the complete round trip.  Receive payload
 // tensors are deliberately absent: their exact leading dimension is only
 // known after the main dispatch publishes CPU counts.  Every other Tensor,
@@ -905,6 +923,8 @@ struct RailBalanceHybridDispatchBundle {
     RailBalanceHybridDispatchRawPointers raw;
     std::optional<RailBalanceHybridDispatchCompletion>
         dispatch_completion;
+    std::optional<RailBalanceHybridCombineCompletion>
+        combine_completion;
     at::cuda::CUDAStream compute_stream;
     int num_tokens;
     int hidden;

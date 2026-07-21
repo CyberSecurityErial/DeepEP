@@ -53,6 +53,11 @@ using RailBalanceHybridDispatchResult = std::tuple<
     std::optional<torch::Tensor>,
     std::optional<EventHandle>>;
 
+using RailBalanceHybridCombineResult = std::tuple<
+    torch::Tensor,
+    std::optional<torch::Tensor>,
+    std::optional<EventHandle>>;
+
 using RailBalanceVNodeTensors = std::tuple<
     torch::Tensor,
     torch::Tensor,
@@ -892,6 +897,7 @@ public:
                     .main_combine = std::move(main_combine),
                     .raw = dispatch_raw,
                     .dispatch_completion = std::nullopt,
+                    .combine_completion = std::nullopt,
                     .compute_stream = compute_stream,
                     .num_tokens = num_tokens,
                     .hidden = hidden,
@@ -1326,6 +1332,231 @@ public:
             std::nullopt,
         };
         pending.state = RailBalanceHybridPlanState::DispatchLive;
+        return result;
+    }
+
+    void rail_balance_hybrid_combine_prepare(
+        const torch::Tensor& x,
+        const std::optional<torch::Tensor>& topk_weights,
+        const int& invocation_id) {
+        EP_HOST_ASSERT(not destroyed);
+        EP_HOST_ASSERT(rail_balance_hybrid_plan_pending.has_value());
+        auto& pending = rail_balance_hybrid_plan_pending.value();
+        EP_HOST_ASSERT(pending.invocation_id == invocation_id);
+        EP_HOST_ASSERT(
+            pending.state == RailBalanceHybridPlanState::DispatchLive);
+        EP_HOST_ASSERT(pending.plan_status == 0);
+        EP_HOST_ASSERT(pending.shuffled);
+        EP_HOST_ASSERT(pending.dispatch_bundle != nullptr);
+        auto& bundle = *pending.dispatch_bundle;
+        EP_HOST_ASSERT(bundle.dispatch_completion.has_value());
+        EP_HOST_ASSERT(not bundle.combine_completion.has_value());
+        EP_HOST_ASSERT(bundle.main_combine != nullptr);
+        EP_HOST_ASSERT(pending.return_unshuffle != nullptr);
+        EP_HOST_ASSERT(pending.local_barrier != nullptr);
+        EP_HOST_ASSERT(pending.combine_epilogue != nullptr);
+        EP_HOST_ASSERT(bundle.raw.buffer != nullptr);
+        EP_HOST_ASSERT(bundle.raw.workspace != nullptr);
+        EP_HOST_ASSERT(bundle.raw.arena != nullptr);
+        EP_HOST_ASSERT(bundle.raw.proxy_return_base != nullptr);
+        EP_HOST_ASSERT(bundle.raw.legacy_reduce_buffer_base != nullptr);
+        EP_HOST_ASSERT(
+            bundle.raw.psum_num_recv_tokens_per_scaleup_rank != nullptr);
+        EP_HOST_ASSERT(bundle.raw.token_metadata_at_forward != nullptr);
+        EP_HOST_ASSERT(bundle.raw.channel_linked_list != nullptr);
+        EP_HOST_ASSERT(bundle.raw.moved != nullptr);
+        EP_HOST_ASSERT(bundle.raw.group_prefix != nullptr);
+        EP_HOST_ASSERT(bundle.raw.proxy_required != nullptr);
+        EP_HOST_ASSERT(bundle.raw.status != nullptr);
+        const auto& dispatch_completion =
+            bundle.dispatch_completion.value();
+        EP_HOST_ASSERT(dispatch_completion.num_recv_tokens >= 0);
+        EP_HOST_ASSERT(
+            dispatch_completion.num_recv_tokens == 0 or
+            dispatch_completion.raw.recv_src_metadata != nullptr);
+        EP_HOST_ASSERT(
+            bundle.num_tokens == 0 or
+            bundle.raw.copied_topk_idx != nullptr);
+
+        EP_HOST_ASSERT(x.dim() == 2 and x.is_cuda() and x.is_contiguous());
+        EP_HOST_ASSERT(x.get_device() == device_index);
+        EP_HOST_ASSERT(x.scalar_type() == torch::kBFloat16);
+        EP_HOST_ASSERT(
+            x.size(0) == dispatch_completion.num_recv_tokens and
+            x.size(1) == bundle.hidden);
+        EP_HOST_ASSERT(topk_weights.has_value());
+        EP_HOST_ASSERT(topk_weights->dim() == 2 and
+                       topk_weights->is_cuda() and
+                       topk_weights->is_contiguous());
+        EP_HOST_ASSERT(topk_weights->get_device() == device_index);
+        EP_HOST_ASSERT(topk_weights->scalar_type() == torch::kFloat);
+        EP_HOST_ASSERT(
+            topk_weights->size(0) ==
+                dispatch_completion.num_recv_tokens and
+            topk_weights->size(1) == bundle.num_topk);
+
+        const c10::cuda::CUDAGuard device_guard(device_index);
+        const auto compute_stream =
+            at::cuda::getCurrentCUDAStream(device_index);
+        auto combined_x = torch::empty(
+            {bundle.num_tokens, bundle.hidden}, x.options());
+        auto combined_topk_weights = torch::empty(
+            {bundle.num_tokens, bundle.num_topk},
+            topk_weights->options());
+
+        RailBalanceHybridCombineCompletion completion = {
+            .x = x,
+            .topk_weights = topk_weights,
+            .combined_x = std::move(combined_x),
+            .combined_topk_weights = combined_topk_weights,
+            .raw = {},
+        };
+        completion.raw = {
+            .x = completion.x.data_ptr(),
+            .topk_weights = completion.topk_weights.has_value() ?
+                completion.topk_weights->data_ptr<float>() : nullptr,
+            .combined_x = completion.combined_x.data_ptr(),
+            .combined_topk_weights =
+                completion.combined_topk_weights.has_value() ?
+                    completion.combined_topk_weights->data_ptr<float>() :
+                    nullptr,
+        };
+        EP_HOST_ASSERT(
+            dispatch_completion.num_recv_tokens == 0 or
+            (completion.raw.x != nullptr and
+             completion.raw.topk_weights != nullptr));
+        EP_HOST_ASSERT(
+            bundle.num_tokens == 0 or
+            (completion.raw.combined_x != nullptr and
+             completion.raw.combined_topk_weights != nullptr));
+        if (comm_stream.id() != compute_stream.id())
+            stream_wait(comm_stream, compute_stream);
+
+        // Installation is the final prepare operation. A future WORLD
+        // combine gate may now either commit this exact owner or abort it.
+        bundle.combine_completion.emplace(std::move(completion));
+    }
+
+    void rail_balance_hybrid_combine_abort(const int& invocation_id) {
+        if (destroyed or not rail_balance_hybrid_plan_pending.has_value())
+            return;
+        auto& pending = rail_balance_hybrid_plan_pending.value();
+        if (pending.invocation_id != invocation_id or
+            pending.state != RailBalanceHybridPlanState::DispatchLive or
+            pending.dispatch_bundle == nullptr)
+            return;
+        auto& bundle = *pending.dispatch_bundle;
+        if (not bundle.combine_completion.has_value())
+            return;
+        bundle.combine_completion.reset();
+    }
+
+    RailBalanceHybridCombineResult rail_balance_hybrid_combine_commit(
+        const int& invocation_id) {
+        EP_HOST_ASSERT(not destroyed);
+        EP_HOST_ASSERT(rail_balance_hybrid_plan_pending.has_value());
+        auto& pending = rail_balance_hybrid_plan_pending.value();
+        EP_HOST_ASSERT(pending.invocation_id == invocation_id);
+        EP_HOST_ASSERT(
+            pending.state == RailBalanceHybridPlanState::DispatchLive);
+        EP_HOST_ASSERT(pending.plan_status == 0);
+        EP_HOST_ASSERT(pending.shuffled);
+        EP_HOST_ASSERT(pending.dispatch_bundle != nullptr);
+        auto& bundle = *pending.dispatch_bundle;
+        EP_HOST_ASSERT(bundle.dispatch_completion.has_value());
+        EP_HOST_ASSERT(bundle.combine_completion.has_value());
+        EP_HOST_ASSERT(bundle.main_combine != nullptr);
+        EP_HOST_ASSERT(pending.return_unshuffle != nullptr);
+        EP_HOST_ASSERT(pending.local_barrier != nullptr);
+        EP_HOST_ASSERT(pending.combine_epilogue != nullptr);
+        EP_HOST_ASSERT(bundle.raw.legacy_reduce_buffer_base != nullptr);
+        EP_HOST_ASSERT(bundle.raw.status != nullptr);
+
+        const auto& dispatch_completion =
+            bundle.dispatch_completion.value();
+        const auto& combine_completion =
+            bundle.combine_completion.value();
+        const auto& prepared_combine = *bundle.main_combine;
+        const auto& prepared_return_unshuffle =
+            *pending.return_unshuffle;
+        const auto prepared_local_barrier = pending.local_barrier;
+        const auto local_barrier_launch_args =
+            pending.local_barrier_launch_args;
+        const auto& prepared_combine_epilogue =
+            *pending.combine_epilogue;
+        const auto raw = bundle.raw;
+        const auto dispatch_completion_raw = dispatch_completion.raw;
+        const auto combine_completion_raw = combine_completion.raw;
+        const auto nccl_dev_comm = nccl_context->dev_comm;
+        const auto nccl_window = nccl_context->window;
+        const int num_reduced_tokens =
+            dispatch_completion.num_recv_tokens;
+        const int num_combined_tokens = bundle.num_tokens;
+        const int num_experts = bundle.num_experts;
+        const int num_destinations = bundle.num_destinations;
+        const int num_rails = bundle.num_rails;
+        const int scaleout_rank_idx = bundle.scaleout_rank_idx;
+        const int scaleup_rank_idx = bundle.scaleup_rank_idx;
+        const int rank_idx = bundle.rank_idx;
+        const int num_max_tokens_per_rank =
+            bundle.num_max_tokens_per_rank;
+        const int proxy_capacity_per_egress =
+            bundle.proxy_capacity_per_egress;
+        const int64_t timeout_cycles = num_gpu_timeout_cycles;
+        const c10::cuda::CUDAGuard device_guard(device_index);
+
+        // No host work may split this committed sequence. Any submission or
+        // synchronization failure leaves the complete owner installed and the
+        // transaction permanently Invalid.
+        pending.state = RailBalanceHybridPlanState::Invalid;
+        launch_prepared_rail_balance_hybrid_combine(
+            prepared_combine,
+            combine_completion_raw.x,
+            combine_completion_raw.topk_weights,
+            dispatch_completion_raw.recv_src_metadata,
+            raw.psum_num_recv_tokens_per_scaleup_rank,
+            raw.token_metadata_at_forward,
+            raw.channel_linked_list,
+            nccl_dev_comm, nccl_window,
+            raw.buffer, raw.workspace,
+            raw.proxy_return_base,
+            scaleout_rank_idx, scaleup_rank_idx,
+            num_reduced_tokens, comm_stream);
+        submit_prepared_rail_balance_hybrid_return_unshuffle(
+            prepared_return_unshuffle,
+            nccl_dev_comm, nccl_window,
+            raw.arena, raw.legacy_reduce_buffer_base,
+            raw.moved, raw.group_prefix, raw.proxy_required, raw.status,
+            num_experts, num_destinations, num_rails,
+            scaleup_rank_idx, rank_idx,
+            num_max_tokens_per_rank,
+            proxy_capacity_per_egress, comm_stream);
+        submit_prepared_rail_balance_hybrid_local_barrier(
+            prepared_local_barrier, local_barrier_launch_args,
+            nccl_dev_comm, nccl_window, raw.workspace,
+            num_rails, scaleup_rank_idx, timeout_cycles, comm_stream);
+        submit_prepared_rail_balance_hybrid_combine_epilogue(
+            prepared_combine_epilogue,
+            combine_completion_raw.combined_x,
+            combine_completion_raw.combined_topk_weights,
+            raw.copied_topk_idx, raw.legacy_reduce_buffer_base,
+            num_combined_tokens,
+            scaleout_rank_idx, scaleup_rank_idx, comm_stream);
+
+        int host_status = 0;
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            &host_status, raw.status, sizeof(host_status),
+            cudaMemcpyDeviceToHost, comm_stream));
+        CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
+        pending.plan_status = host_status;
+        EP_HOST_ASSERT(host_status == 0);
+
+        RailBalanceHybridCombineResult result = {
+            combine_completion.combined_x,
+            combine_completion.combined_topk_weights,
+            std::nullopt,
+        };
+        rail_balance_hybrid_plan_pending.reset();
         return result;
     }
 
@@ -5074,6 +5305,20 @@ static void register_apis(pybind11::module_& m) {
         .def(
             "_rail_balance_hybrid_dispatch_finish",
             &ElasticBuffer::rail_balance_hybrid_dispatch_finish,
+            pybind11::arg("invocation_id"))
+        .def(
+            "_rail_balance_hybrid_combine_prepare",
+            &ElasticBuffer::rail_balance_hybrid_combine_prepare,
+            pybind11::arg("x"),
+            pybind11::arg("topk_weights"),
+            pybind11::arg("invocation_id"))
+        .def(
+            "_rail_balance_hybrid_combine_abort",
+            &ElasticBuffer::rail_balance_hybrid_combine_abort,
+            pybind11::arg("invocation_id"))
+        .def(
+            "_rail_balance_hybrid_combine_commit",
+            &ElasticBuffer::rail_balance_hybrid_combine_commit,
             pybind11::arg("invocation_id"))
         .def(
             "_rail_balance_hybrid_source_shuffle",
