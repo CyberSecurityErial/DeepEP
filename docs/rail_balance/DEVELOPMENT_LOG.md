@@ -4881,3 +4881,45 @@ env OMP_NUM_THREADS=1 EP_DISABLE_GIN=1 \
   --num-processes 8 --timeout 180 --master-port 29978 \
   --watchdog-seconds 900
 ```
+
+## 2026-07-22 — D086: close the first O077 data-consumer triangle
+
+Three independent fresh-JIT eight-GPU tests consume the committed rotated
+prefixes beyond the planner.  The controlled C100 H256 source case moves all
+7168 copies, exactly 896 per owner/egress, and compares final proxy TokenLayout
+bytes against the legacy reference while proving inputs immutable.  The
+controlled C100 H256 return case maps all 7168 records back to the exact owner
+row/token bytes and preserves poison in every non-target.  Finally, the 2x4
+H256 vnode completes dispatch, source proxy, ingress forwarding, synthetic
+expert, combine return and original-owner unshuffle for six moved copies.
+
+```bash
+env OMP_NUM_THREADS=1 EP_DISABLE_GIN=1 \
+  EP_JIT_CACHE_DIR=/tmp/deepep-o077-source.7ExqUy \
+  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 PYTHONPATH=. \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/test_rail_balance_hybrid_shuffle_lsa.py \
+  --case-name c100_volume_h256 --master-port 30102 \
+  --timeout 180 --watchdog-seconds 900
+
+env OMP_NUM_THREADS=1 EP_DISABLE_GIN=1 \
+  EP_JIT_CACHE_DIR=/tmp/deepep-o077-return.mA9qer \
+  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 PYTHONPATH=. \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/test_rail_balance_hybrid_unshuffle_lsa.py \
+  --case-name c100_volume_h256 --master-port 30103 \
+  --timeout 180 --watchdog-seconds 900
+
+env OMP_NUM_THREADS=1 EP_DISABLE_GIN=1 \
+  EP_JIT_CACHE_DIR=/tmp/deepep-o077-vnode.neeVW3 \
+  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 PYTHONPATH=. \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/test_rail_balance_hybrid_vnode.py \
+  --case-name hybrid_vnode_2x4_h256 --master-port 30104 \
+  --timeout 300 --watchdog-seconds 1800
+```
+
+All three pass without a profiler.  They prove local LSA functional semantics,
+not Gin/RDMA/NIC execution and not latency improvement.  H7168, the full
+source/return/vnode matrices, corruption recovery and default-off regression
+remain explicit next gates.

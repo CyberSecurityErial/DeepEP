@@ -1759,5 +1759,13 @@ CPU/GPU plan cases and the fresh-JIT eight-GPU LSA plan transaction.  These
 include the audit partial-deficit counterexample, pure-deficit cyclic wrap,
 C1024/D32 and exact C100 224-by-4 distribution.  The missing-pytest, both stale-
 golden failures, rejected rotate-all CPU prototype and rejected extra-GPU-pass
-prototype are retained in D084/D085.  Source/return/vnode correctness and all
-performance conclusions remain pending.
+prototype are retained in D084/D085.  Full source/return/vnode consumer-matrix
+correctness and all performance conclusions remain pending.
+
+Consumer status: fresh-JIT C100 H256 source shuffle passes exact legacy
+TokenLayout bytes for 7168 moved copies, and return-unshuffle passes exact
+owner row/token bytes with poison-preserved non-targets.  A fresh-JIT
+2x4/H256 vnode passes the full dispatch, forwarding, synthetic expert, combine
+return and original-owner unshuffle round trip.  This establishes the minimal
+local semantic data path; it does not replace H7168/full-matrix/fault/default-
+off regression and carries no performance conclusion.
