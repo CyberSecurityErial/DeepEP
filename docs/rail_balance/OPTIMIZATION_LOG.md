@@ -1442,3 +1442,23 @@ skew; failing sends the problem to Nsys OSRT+CUDA rather than to a speculative
 CUDA edit.  This probe cannot prove pure Gloo protocol cost, production Hybrid
 latency, or a kernel speedup because host scheduling is inseparable from the
 observed barrier return.
+
+## Measurement decision O067 — separate gate skew from adapter attribution without subtraction
+
+E2 passes its registered criterion: all three bare-Gloo medians cover at least
+59.97% of every E1 median start skew, and rank1-first/rank7-last each reach 98%.
+The artificial pre-stage control gate is therefore a proven major component
+of the global span's run-to-run median variance.
+
+The response is not to subtract 36--39 us, cherry-pick a rank, or replace the
+primary report with a corrected number.  Every future C100 report retains the
+same common-host global span and all raw rank intervals.  For operator work it
+also treats the existing per-iteration maximum rank-local synchronous adapter
+duration as a separate call-envelope metric; its source-H7168 run medians were
+already much tighter than global spans.  Nsys must then split that envelope
+into CPU launch/wakeup, CUDA API/synchronization and exposed GPU kernels.
+
+This two-metric interpretation supersedes the earlier attempt to make one
+number serve both end-to-end rank arrival and kernel attribution.  It changes
+no timer, benchmark code or CUDA hot path and can be falsified by the upcoming
+source/return distributions and Nsys timeline.

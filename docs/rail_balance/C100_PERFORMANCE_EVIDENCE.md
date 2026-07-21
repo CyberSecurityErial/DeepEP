@@ -234,6 +234,44 @@ global-span skew.  Missing either rejects that narrow claim and requires an
 Nsys OS-runtime/CUDA timeline.  Even a positive result is not a pure Gloo
 protocol latency measurement and cannot describe CUDA kernel performance.
 
+### E2 formal result — criterion passed
+
+Three clean, direct runs at commit `ee41415e86a5b1d220bb2ee2bb119ec5e45566e6`
+used `CUDA_VISIBLE_DEVICES=''`, `OMP_NUM_THREADS=1`, 10 warmup and 100 steady
+iterations.  Pre/post Git and source identities match, every rank reports CUDA
+uninitialized, and no run increments the cgroup's throttled-period or
+throttled-time counters.
+
+| Run | Return-span median/p95/p99 (us) | Mean/std (us) | CV | Min/max (us) | rank 1 first | rank 7 last |
+| --- | --- | --- | ---: | --- | ---: | ---: |
+| 1 | 38.693 / 50.225 / 133.799 | 41.923 / 15.025 | 35.84% | 32.815 / 147.017 | 98/100 | 98/100 |
+| 2 | 36.319 / 40.327 / 42.255 | 36.216 / 2.383 | 6.58% | 27.521 / 47.137 | 100/100 | 100/100 |
+| 3 | 38.028 / 44.075 / 45.103 | 38.832 / 2.725 | 7.02% | 31.702 / 45.506 | 98/100 | 98/100 |
+| pooled | 37.864 / 44.175 / 57.040 | 38.990 / 9.223 | 23.65% | 27.521 / 147.017 | n/a | n/a |
+
+Run medians span 6.54%.  Even the smallest run median, 36.319 us, explains
+80.8%, 60.0%, and 78.9% of the three E1 median stage-start skews.  The dominant
+first/last ranks occur at least 98% of the time.  Both pre-registered thresholds
+therefore pass: bare Gloo return plus host wakeup is sufficient to create most
+of the measured post-gate start skew without any CUDA work.
+
+This result neither assigns E1's former millisecond tail to Gloo nor measures
+pure Gloo protocol latency.  It proves only that the artificial pre-stage gate
+adds a large, deterministic component to the benchmark's global span.  Future
+reports continue to retain that honest global span.  Operator attribution must
+also use the already recorded maximum rank-local synchronous adapter duration
+and then an Nsys CUDA/OS-runtime timeline; no sample is corrected by subtracting
+the gate median.
+
+Verified local artifacts live under the ignored directory
+`.cache/rail_balance/c100/gloo-gate/ee41415/`:
+
+```text
+9675e24eb7747346e5183397fdb83dcc2ebaa9e5b9df825bff407c316e61bd59  gloo-omp1-r1.json
+21d7cb6c4c233b7b16e718c12c8f1afe771b365d3310d6ec554ee903a9ff0d02  gloo-omp1-r2.json
+b274444bda0fec04228d4eb9a4c80c34d39888a8a0918a8964cc8f92646dbd5f  gloo-omp1-r3.json
+```
+
 ## Environment manifest — 2026-07-21 UTC
 
 ### Host and GPU management view

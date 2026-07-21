@@ -4266,3 +4266,31 @@ torchrun, four workers, compiler helpers and W&B children) received TERM and
 fully exited.  A separate DLB/NVSHMEM test briefly appeared afterward; it was
 not Megatron, was left untouched, and exited on its own.  All GPUs were empty
 before the second smoke.
+
+## 2026-07-22 — D070: formally prove bare-Gloo release skew
+
+After committing and pushing the audited probe as `ee41415`, three independent
+clean processes ran with an empty CUDA visibility mask, OMP=1, 10 warmup and
+100 steady samples.  Their Gloo return-span medians are
+38.693/36.319/38.028 us; run medians span 6.54%.  The first run retains two
+host-tail samples and reaches 147.017 us, so pooled CV is 23.65%; no sample was
+deleted.  Runs two and three have CV 6.58% and 7.02%.
+
+rank 1 returns first in 98/100, 100/100 and 98/100 samples; rank 7 returns last
+at the same rates.  The smallest formal median covers
+80.8%/60.0%/78.9% of E1's three median stage-start skews.  This passes both
+pre-registered thresholds without reinterpretation.  Each report is clean,
+pre/post source and Git identities match, every rank remains
+CUDA-uninitialized, and cgroup throttled count/time have zero delta.
+
+Before collection, the earlier Megatron-based workload restarted as a new
+explicit `restart5` launch and consumed four GPUs plus many CPU compiler
+workers.  Exact PGID 1046676 was resolved and terminated under standing user
+authorization.  It did not restart again, the host's active CPU consumers
+dropped below 3%, and the formal runs began only afterward.  No unrelated
+process was terminated.
+
+The verified ignored artifacts and manifest live under
+`.cache/rail_balance/c100/gloo-gate/ee41415/`.  This closes the narrow Gloo
+release falsification, not measurement work as a whole.  Source-H256 and both
+return widths remain, followed by Nsys; NCU still has no selected invocation.

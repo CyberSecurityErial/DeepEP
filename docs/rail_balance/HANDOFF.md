@@ -180,6 +180,15 @@ the exact file snapshots without inventing commit identity.
   `.cache/rail_balance/c100/stability-omp1/4211bae/`.  No Nsys/NCU or hot-path
   change has occurred.  Resume with one minimal release-skew falsification,
   then collect stable source/return distributions.
+- That release-skew falsification is now complete.  The reviewed CPU-only
+  probe at `ee41415` produces three clean Gloo return medians of
+  38.693/36.319/38.028 us; rank1-first and rank7-last each dominate at least
+  98%.  Even the smallest median covers at least 59.97% of every OMP E1 start
+  skew, so the pre-registered 50%/80% criterion passes.  Verified artifacts
+  are under `.cache/rail_balance/c100/gloo-gate/ee41415/`.  Global spans remain raw, but
+  kernel work must be attributed from rank-local adapter envelopes and Nsys,
+  never by subtracting the probe median.  Source-H256 and both return widths
+  still need OMP=1 repeated collection.
 
 ## Mandatory retained boundary
 

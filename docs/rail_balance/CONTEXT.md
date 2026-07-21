@@ -775,3 +775,22 @@ Out of scope until evidence expands the project:
   JIT, public Hybrid path, or production code changed, and Nsys/NCU have not
   started.  Isolate rank-release skew next; only then accept source/return
   baseline distributions.
+
+## C100 CPU-only Gloo release context (2026-07-22)
+
+- Commit `ee41415` adds a standalone eight-rank bare-Gloo probe that never
+  imports DeepEP or initializes CUDA.  Its watchdog, atomic report, raw timing,
+  identity and claim boundaries pass final independent review with
+  Blocker0/High0/Medium0/Low0.
+- The formal three 10+100 OMP=1 runs have return-span medians
+  38.693/36.319/38.028 us and a 6.54% run-median range.  rank 1 returns first
+  in 98/100, 100/100 and 98/100 samples; rank 7 returns last at the same rates.
+- The smallest probe median explains 80.8%/60.0%/78.9% of the three E1 median
+  stage-start skews, so the registered 50% coverage and 80% ordering criteria
+  both pass.  No cgroup throttle counter changes and all rank manifests remain
+  CUDA-uninitialized.
+- The result proves the artificial Gloo gate plus host wakeup is sufficient to
+  create most global-span start skew.  It does not prove pure Gloo protocol
+  cost or explain every rank-local tail.  Keep global spans raw; use the
+  already reported rank-local synchronous envelope plus Nsys for operator
+  attribution.  Do not algebraically subtract a median.
