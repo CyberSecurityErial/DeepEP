@@ -171,6 +171,25 @@ def _encode_rail_balance_world_gate(
         host_words[3 + 2 * index] = -value
 
 
+def _patch_rail_balance_world_gate_prevalidated(
+        host_words: torch.Tensor,
+        local_error_key: int,
+        field_index: int = -1,
+        field_value: int = 0) -> None:
+    """Patch prepared gate words without field iteration or validation.
+
+    The caller must validate the fixed storage, error key, field index, and
+    value before entering the collective transaction.  ``field_index == -1``
+    patches only the error word.  This deliberately tiny helper is for the
+    Gate1/Gate2 interval where rank-local dynamic validation is unsafe.
+    """
+    host_words[0] = local_error_key
+    if field_index >= 0:
+        offset = 2 + 2 * field_index
+        host_words[offset] = field_value
+        host_words[offset + 1] = -field_value
+
+
 def _decode_rail_balance_world_gate(
         host_words: torch.Tensor) -> Tuple[int, int, int, int]:
     """Return ``(error_key, field, minimum, maximum)`` without rank-local throws."""
