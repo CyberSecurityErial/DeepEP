@@ -158,7 +158,8 @@ def _assert_owning_bundle_contract() -> None:
         "topk_idx_t* copied_topk_idx;",
         "int* cumulative_local_expert_recv_stats;",
         "int* psum_num_recv_tokens_per_scaleup_rank;",
-        "int* psum_num_recv_tokens_per_expert;",
+        "int* psum_num_recv_tokens_per_expert_storage;",
+        "int* psum_num_recv_tokens_per_expert_inclusive;",
         "int* num_unaligned_recv_tokens_per_expert;",
         "int* dst_buffer_slot_idx;",
         "int* token_metadata_at_forward;",
@@ -298,14 +299,11 @@ def _assert_owning_bundle_contract() -> None:
     ):
         assert forbidden not in finish, forbidden
 
-    # H4b ends at ownership.  Only H4c may publish payloads and make
-    # DispatchLive reachable.
+    # This prepare method still ends at ownership.  H4c publishes only through
+    # its separate commit method after the caller completes Gate #2.
     assert "submit_prepared_rail_balance_hybrid_source_shuffle(" not in prepare
     assert "launch_prepared_rail_balance_hybrid_dispatch(" not in prepare
     assert "RailBalanceHybridPlanState::DispatchLive" not in prepare
-    assert not re.search(
-        r"state\s*=\s*RailBalanceHybridPlanState::DispatchLive",
-        buffer_source)
 
     abort = _balanced_brace_section(
         buffer_source, "rail_balance_hybrid_plan_abort(")

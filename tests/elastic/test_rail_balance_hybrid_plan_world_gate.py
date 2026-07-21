@@ -125,7 +125,7 @@ def _assert_cpu_contract() -> tuple[PlanCase, PlanCase, PlanCase]:
     begin = buffer_header.index(
         "RailBalanceHybridPlanTensors rail_balance_hybrid_plan_finish(")
     end = buffer_header.index(
-        "void rail_balance_hybrid_source_shuffle(", begin)
+        "void rail_balance_hybrid_dispatch_commit(", begin)
     finish_body = buffer_header[begin:end]
     # H4b freezes the barrier LaunchArgs before Gate1; finish may only submit
     # that prepared launch once and must not reconstruct arguments from live
