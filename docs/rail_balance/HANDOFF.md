@@ -21,10 +21,9 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Latest pushed checkpoints are `cf587da` (return-H256 evidence) and
-  `57b69a9` (tail-scope clarification) on
-  `fork/feat/rail-balance-prototype`; the next commit archives the completed
-  return-H7168 group.
+- Latest pushed checkpoints are `1888908` (complete profiler-free collection),
+  `f5e7906` (Nsys contract), and `feaf03e` (steady-only diagnostic NVTX mode)
+  on `fork/feat/rail-balance-prototype`.
 - Both capability bits remain false and no result claims real Gin/RDMA
   behavior. The local activation evidence is complete, but the public methods
   deliberately remain unreachable through a normal force construction until a
@@ -201,6 +200,10 @@ the exact file snapshots without inventing commit identity.
   reach 2021.557/2008.428 us.  A concurrent eight-GPU DeepEP dispatch demo
   makes r2 permanently rejected.  All four profiler-free source/return groups
   are now collected; retained tail attribution is the remaining baseline task.
+- The clean `feaf03e` benchmark has a default-off, baseline-ineligible NVTX
+  diagnostic mode.  Final-commit default-off and NVTX-on EP8 smokes pass after
+  one separate co-tenant tester report was correctly rejected.  Nsys capture
+  must explicitly use `--capture-range-end=stop --kill=none`.
 
 ## Mandatory retained boundary
 

@@ -4454,3 +4454,28 @@ eligibility false.  The default report records `disabled`, semantic flag
 false, no forwarded flag, and is ineligible only because the tree is dirty and
 the 0+1 smoke lacks formal depth.  Both leave no GPU process.  No Nsys profile
 has yet started and no device/production hot path changed.
+
+## 2026-07-22 — D076: final-commit smoke and another co-tenant rejection
+
+Commit `feaf03e` is pushed and clean.  Its first default-off 0+1 smoke passed
+functionality but the report gate found eight processes from a concurrent
+`torchrun --standalone --nproc-per-node=8 dlb_nvshmem_tester.py` that appeared
+after the shell preflight.  They were present in the benchmark pre-snapshot and
+gone at post-snapshot.  The report is retained and rejected; the tester had
+already exited and no unrelated Codex process was killed.  A validation script
+that required an empty unexpected-PID list failed at this report as intended.
+
+The clean retry and clean NVTX smoke both pass with no unexpected compute
+process.  The retry records profiler mode disabled, semantic NVTX false and no
+forwarded flag.  The NVTX smoke records `nvtx_diagnostic`, semantic NVTX true
+and exactly one forwarded flag.  Both are intentionally non-baseline 0+1
+reports.  Verified hashes are:
+
+```text
+82b58266c5a508c6f39f8fffc77ca8e9620e64cc847f82dcc6daabf7bdeeae39  default-off-smoke.json  # rejected co-tenant
+b99c7991334314aa96f5c222e29f539e60b8bd64c665a01559890ccd14134b43  default-off-smoke-r2.json
+2445b8467fed377cfacfe4ebbc46038082cd7752f25c1b9274d0ef8f5d5d7b94  nvtx-smoke.json
+```
+
+The local manifest verifies all three.  GPUs are empty and the first actual
+Nsys range-trigger smoke is next.
