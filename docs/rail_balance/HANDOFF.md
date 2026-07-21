@@ -12,16 +12,18 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
   compatibility and focused sanitizer closure now pass. There is no unfinished
   local Hybrid integration slice or half-written host abstraction.
 - C000 through C070 remain complete for the agreed single-node PoC scope.
+- C090 exhaustive local correctness is PASS. The final additions are three
+  named route distributions plus one g812--g814 true-EP8 corrupt-p/delayed-
+  rank/recovery case; no local correctness or sanitizer gap remains.
 - C080-A/B/C/D are PASS. C080-D now includes corrupt/missing world-plan
   pre-B0 abort plus same-buffer next-generation recovery; C080-C has the
   fixed-tensor WORLD transaction, public ticket, and truthful D1 watchdog.
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- The final pre-closure pushed checkpoint is `558cd7c` (world-plan fault
-  documentation), following `6377e0c` (vnode world-plan fault/recovery),
-  `0597ed0` (real EP8 public watchdog), and `741e126`/`cbe7df2` (public Hybrid
-  lifecycle/contracts) on `fork/feat/rail-balance-prototype`.
+- Latest pushed checkpoints are `5f8eab5` (live transit-key fault, delayed rank,
+  and recovery), `ee827e8` (named route distributions), and `eb2810c` (C080-G
+  local closure) on `fork/feat/rail-balance-prototype`.
 - Both capability bits remain false and no result claims real Gin/RDMA
   behavior. The local activation evidence is complete, but the public methods
   deliberately remain unreachable through a normal force construction until a
@@ -153,6 +155,14 @@ the exact file snapshots without inventing commit identity.
   also reports zero hazards/warnings. Final audit is Blocker0/High0/Medium0.
   C080 is `LOCAL_COMPLETE / MULTINODE_PENDING`; C080-H remains an environment
   gate, and both production capability bits remain false.
+- C090 closes at `5f8eab5`. The B1 matrix is now 70 unchanged cases plus named
+  one-hot/Zipf/log-normal, all 73 exact on one GPU. A fresh-cache true-EP8
+  4x2/H256 run checks the complete corrupt-p status graph and collective abort
+  at generation 812, a rank-2 native comm-stream delay with full success at
+  813, and ordinary same-buffer recovery at 814. Full rebuild, API 9/9,
+  legacy 4/4, and final C++/protocol/exit audits pass. No CUDA/JIT kernel or
+  production hot path changed, so the accepted C080-G sanitizer evidence is
+  unchanged.
 
 ## Mandatory retained boundary
 
@@ -180,14 +190,12 @@ No C070 timing is performance evidence.
    production core changes. Its final-tree matrix and sanitizer closure pass.
 5. Keep both production capability bits false until truthful C080-H D>1
    Rail/Gin correctness passes. D1 evidence is never a D>1 Gin success claim.
-6. First close C090 with one small CPU/single-GPU named Zipf/log-normal matrix
-   and one small EP8 test-only case for corrupt live transit-key `p`, exact
-   abort/recovery, and rank-selective delay on the current descriptor-free path.
-   Do not rerun unchanged full suites or sanitizer kernels.
-7. Then notify the user and wait for the promised NCU/Nsys procedure before
-   controlled C100 profiling/optimization. Run performance tests only with idle
-   GPUs and retain negative/tool-failure evidence. C105 packages the fastest
-   possible real-cluster bring-up afterward.
+6. C090 is complete. Do not rerun its unchanged full suites or sanitizer
+   kernels unless production device code changes.
+7. Notify the user and wait for the promised NCU/Nsys procedure before
+   resuming the next controlled C100 profiling/optimization run. Run performance
+   tests only with idle GPUs and retain negative/tool-failure evidence. C105
+   packages the fastest possible real-cluster bring-up afterward.
 
 Pinned runtime for accepted commands:
 

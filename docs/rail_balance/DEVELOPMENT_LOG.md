@@ -3696,3 +3696,90 @@ and no rank-selective delayed-rank/liveness case on that path. Earlier queue
 slow-consumer evidence belongs to a superseded protocol and cannot close the
 last item. C080-G therefore passes independently while C090 remains in
 progress; these three minimal cases precede C100 profiling.
+This paragraph records the D059-time gap; all three items are closed by D060.
+
+## 2026-07-21 — D060: close the three retained C090 local gaps
+
+The route-distribution gap is closed inside the existing B1 strict runner,
+without a sampler, new planner, or production path. Three fixed, explicitly
+named token-level expert-route fixtures now pass the same destination
+deduplication and fourteen-tensor GPU materializer as the original cases:
+
+```text
+route_level_one_hot:    moved=18, proxy_required=(0, 6, 6, 6)
+route_level_zipf:       moved=21, proxy_required=(7, 4, 3, 7)
+route_level_log_normal: moved=33, proxy_required=(11, 6, 5, 11)
+```
+
+Destination zero is local padding and remains zero in the counted matrix. The
+original seventy cases are unchanged; the three C090 cases raise the strict
+single-GPU total to 73. CPU oracle, legacy 4/4, `py_compile`, and CUDA exact
+comparison on device zero pass. Independent review manually recomputed every
+move/proxy total and reports Blocker/High/Medium/Low 0/0/0/0. This is fixed
+distribution correctness, not statistical-fit or performance evidence.
+
+The final protocol gap uses one existing 4x2/H256 vnode case over three new
+generations on the same source/world buffers:
+
+1. generation 812 changes the already prepared moved record's four-byte
+   linked transit key `p` from 0 to 1 on source egress rank 2;
+2. generation 813 queues a two-million-cycle sleep only on rank 2's existing
+   world comm stream, then immediately enters the fixed B0--B5 protocol;
+3. generation 814 runs an ordinary byte-exact round trip with no injection.
+
+The fault is a sticky status, never a trap. Every rank calls finish exactly
+once. After B5 and the existing stream synchronization, a new private read-only
+host getter exposes the status vector already copied by the vnode bridge. The
+exact nonzero graph is frozen: rank 2 reports `InvalidProxy=35` at pack plus
+two downstream `ReadyMismatch=1` values; rank 6 reports the corresponding
+forward/return mismatch lanes; all other entries are zero. Ranks 2 and 6 throw
+only after the synchronized snapshot, all ranks gather diagnostics, then the
+existing idempotent world/source abort runs. Generations 813 and 814 both
+complete exact dispatch, return, unshuffle, epilogue, and immutable-input
+checks, proving late-rank liveness and same-buffer recovery.
+
+The private getter adds one host boolean and one additive underscored pybind.
+It is compiled into the extension rather than hidden by a test build flag, but
+only serves the existing private vnode proof bridge; it changes no CUDA/JIT
+kernel, layout, launch ABI, public Python API, or production dispatch/combine
+hot path. Final-tree evidence:
+
+```text
+PASS build_ext --inplace after the host-only change
+PASS true EP8 fresh-cache g812 fault, g813 delayed success, g814 recovery
+PASS C080-A API 9/9 and legacy identity 4/4
+PASS B1 CPU oracle plus single-GPU 73/73 exact materializer cases
+PASS C++ final audit: Blocker/High/Medium/Low 0/0/0/0
+PASS protocol final audit: Blocker/High/Medium/Low 0/0/0/0
+```
+
+The true-EP8 run used dedicated cache
+`/tmp/deepep-c090-transit.YIOYYv` and master port 30006. The cache is an
+ephemeral build artifact, not a checked-in dependency.
+
+Failed designs and retained boundaries:
+
+- The first delay draft enqueued `_sleep` and then performed two Gloo gathers.
+  Review correctly rejected that as liveness evidence because the delay could
+  finish before B0. The accepted order gathers the rank marker first, enqueues
+  the delay second, and performs no host/CUDA rendezvous before finish.
+- The first fault draft called the status getter outside an exception guard.
+  If finish failed before the D2H snapshot, one rank could skip the diagnostic
+  gather and deadlock peers. Getter errors now join the same all-rank diagnostic
+  gather before any assertion or abort.
+- A size check initially multiplied `6 * status_stride` in `int` before its
+  cast. Review changed it to `size_t(6) * status_stride` before commit.
+- The pre-existing vnode abort does not promise in-process recovery from an
+  arbitrary CUDA failure before stream synchronization. The accepted corrupt-p
+  case reaches the synchronized sticky-status boundary; it must not be cited
+  as proof for traps or pre-sync asynchronous failures.
+
+No sanitizer rerun is required because no device/JIT code changed and C080-G
+already sanitized these kernels. No new NCU/Nsys or performance measurement
+was run in this slice. Real D>1 Gin/RDMA remains outside this evidence.
+
+The final C090 exit audit maps every item in `C080_PLAN.md` section 12 to the
+unchanged historical matrix or the two new checkpoints. It reports Blocker 0,
+High 0, Medium 0; its sole Low was the stale checkpoint text corrected here.
+C090 is therefore PASS. No additional CPU, GPU, full-suite, or sanitizer rerun
+is required before the next controlled C100 profiling run.

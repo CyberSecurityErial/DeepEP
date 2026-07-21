@@ -1182,9 +1182,10 @@ checkpoint:
   storage and real collectives must be measured before adopting it. Encode has
   similar vectorization potential but requires a fail-closed fallback.
 
-No NCU/Nsys optimization was started. Per the agreed workflow, device and
-end-to-end tuning waits for the user's profiling procedure and an idle GPU
-window; these CPU observations carry no network or multi-node speedup claim.
+No new NCU/Nsys optimization was started in this host-path checkpoint. Per the
+agreed workflow, the next device/end-to-end tuning run waits for the user's
+profiling procedure and an idle GPU window; these CPU observations carry no
+network or multi-node speedup claim.
 
 ## Validation decision O056 — sanitize the smallest complete changed path
 
@@ -1215,3 +1216,28 @@ cleanup. Once it closes, controlled C100 profiling begins: obtain the user's
 promised NCU/Nsys workflow and verify that no unrelated GPU workload would
 contaminate timing. Candidate host cost reductions from O055 remain hypotheses
 until separately measured.
+
+Those two correctness cases are closed in O057/D060; this O056 sentence is the
+recorded decision at the sanitizer checkpoint, not the current task state.
+
+## Validation decision O057 — inject state, not a fault framework
+
+The C090 transit-key test mutates the exact four-byte `p` word already consumed
+by the descriptor-free pack/demux path. It does not add a fault kernel, device
+branch, delay argument, descriptor, or ring. Exact diagnostics reuse the host
+status array that finish already copies after B5; one readiness bit prevents a
+snapshot before that copy completes. This is smaller than encoding error values
+in exception text and stronger because all six stage rows remain observable.
+
+Rank delay must model late GPU work rather than a slow Python participant. The
+selected sequence first agrees which rank is delayed, then queues `_sleep` on
+that rank's existing comm stream and enters finish with no intervening Gloo or
+CUDA synchronization. Thus peer B0 arrivals can precede the delayed producer,
+while ordering stays native to the same stream used by the protocol. The sleep
+duration is a liveness perturbation only and carries no latency claim.
+
+Because this slice changes host/test code only, the correct validation is a
+full extension rebuild, exact EP8 fault/status/recovery, API/legacy identity,
+and the existing B1 materializer. Repeating Compute Sanitizer or codegen would
+not exercise a changed device instruction. Resume the next C100 NCU/Nsys and
+controlled-timing run only after the user provides the profiling workflow.

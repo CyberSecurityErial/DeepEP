@@ -578,10 +578,34 @@ Out of scope until evidence expands the project:
   checkpoint state `DEFERRED_ENVIRONMENT`. D1 control-plane evidence and vnode
   LSA execution are not real D>1 Gin/RDMA/QP/NIC evidence. C080-H remains the
   only gate that can establish multi-node correctness.
-- NCU/Nsys optimization has not begun in this closure. Before C100, C090 still
-  needs one small CPU/single-GPU named Zipf/log-normal matrix and one small EP8
-  test-only case combining corrupt live transit-key `p`, exact abort/recovery,
-  and rank-selective delay/liveness on the current descriptor-free protocol.
-  Unchanged historical suites and sanitizer kernels do not need reruns. C100
-  then starts only after the user supplies the promised profiling workflow and
-  the GPUs are suitable for uncontaminated timing.
+- At the C080 closure boundary, C090 still needed one small named-distribution
+  matrix and one EP8 corrupt-p/delay/recovery case. The section below records
+  their completion; this bullet is retained only as the transition rationale.
+  No new NCU/Nsys run began in that closure, and unchanged historical suites
+  or sanitizer kernels did not need reruns.
+
+## C090 exhaustive-local closure context (2026-07-21)
+
+- C090 is PASS after commits `ee827e8` and `5f8eab5`. The former adds named
+  route-level one-hot, Zipf, and log-normal fixtures to the existing B1 path;
+  70 unchanged baseline cases plus three additions pass exact CPU and single-
+  GPU materializer comparison. It is deterministic distribution correctness,
+  not a statistical sampler or throughput test.
+- One 4x2/H256 true-EP8 case uses generations 812--814 on the same buffers.
+  It corrupts a live moved record's four-byte `p`, checks the complete sticky
+  status matrix, converges all ranks before abort, queues a rank-2 delay on the
+  native world comm stream with no intervening synchronization, then completes
+  both delayed and ordinary recovery round trips.
+- Exact failed-finish diagnostics reuse the vnode bridge's existing D2H host
+  status. The additive private getter has a readiness bit and changes no CUDA
+  kernel, JIT source, layout, launch ABI, public Python API, or production
+  dispatch/combine hot path.
+- Initial reviews rejected a delay followed by Gloo synchronization and an
+  unguarded status getter; both could invalidate the evidence or split ranks.
+  The accepted ordering closes them. Final C++ and protocol reviews are each
+  Blocker/High/Medium/Low 0/0/0/0; C090 exit review is 0/0/0 with one corrected
+  documentation Low.
+- The next local gate is to resume C100. Start its next controlled NCU/Nsys run
+  only after the user supplies the promised profiling workflow, and do not time
+  under unrelated GPU load. C080-H/Gin remains deferred to a truthful D>1
+  environment.
