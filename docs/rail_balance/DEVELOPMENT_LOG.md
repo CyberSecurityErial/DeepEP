@@ -4160,3 +4160,54 @@ JSON files and a verified `SHA256SUMS` live at
 No Nsys, NCU, CUDA/JIT/runtime edit, or optimization followed these unstable
 samples.  Resume first at measurement-stability falsification, then finish
 return baselines; only afterward select Nsys/NCU targets.
+
+## 2026-07-21 — D068: limit PyTorch intra-op threads and localize remaining skew
+
+Work resumed from clean commit `4211bae`.  Recreating the Goal through the
+goal API failed with `cannot create a new goal because this thread has an
+unfinished goal`: the previously paused Goal still appears blocked to the
+tool.  The failure changes neither repository state nor the user-authorized
+objective, so execution continued under the existing checkpoint plan.
+
+The first stability experiment changed exactly one external variable:
+`OMP_NUM_THREADS=1`.  Source-H7168, G8/D9/K4/N1024/C256, 7,168 moved records,
+10 warmup, 100 steady iterations, direct watchdog execution, fresh JIT cache,
+and the same `max(end)-min(start)` truth were unchanged.  All GPUs were empty
+before each process, all three reports pass the automatic gate, and no worker
+or GPU process leaked.
+
+Run medians are 132.625, 152.436, and 137.857 us; pooled median/p95/p99 are
+140.501/160.198/175.784 us, CV is 8.34%, and maximum is 218.716 us.  Relative
+to the original H7168 reports, pooled CV falls from 82.84% and maximum from
+2,274.190 us.  The cgroup exposes 192 logical CPUs but grants a 96-CPU quota;
+default PyTorch reports 96 intra-op and 96 inter-op threads per rank, whereas
+OMP=1 reduces only intra-op to one.  This supports thread pressure as the
+severe-tail cause.
+
+An independent read-only audit verified all report statistics and hashes.
+Tracked benchmark/extension/generated/production source is identical across
+the original and OMP collections, and all six source-shuffle cubins have the
+same disassembled-instruction hash.  Rank-local maximum-stage median changes
+only 97.518→96.556 us while its p99/max collapse.  Because the two conditions
+were collected sequentially rather than interleaved, this remains tail-control
+evidence and is not called a kernel or end-to-end speedup.
+
+It does not close stability.  Rank 1 starts first in 299/300 samples and rank
+7 last in 295/300.  Run median start skews are 44.943/60.566/46.031 us, while
+the median global span after subtracting that skew is
+87.775/93.237/91.610 us.  The three global medians still span 14.94%, so the
+next single-variable experiment must isolate the Gloo/post-barrier release
+order rather than edit a CUDA kernel.
+
+Two exploratory aggregation commands failed with `KeyError`: the first
+assumed top-level `baseline_collection_eligible`, and the second assumed a
+`stages` dictionary.  The committed schema instead stores the former under
+`measurement` and raw samples directly under `steady`; the corrected reader
+used all 300 records.  Both mistakes are retained here and no report was
+modified.  One checksum verification was also launched from the repository
+root even though the manifest stores relative basenames; it failed to find the
+three files.  Rerunning from the artifact directory verified all three as OK.
+
+The verified reports are local ignored artifacts under
+`.cache/rail_balance/c100/stability-omp1/4211bae/`.  No Nsys, NCU, production
+code, CUDA/JIT kernel, or public Hybrid path changed.

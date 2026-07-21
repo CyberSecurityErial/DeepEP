@@ -152,6 +152,70 @@ return-H256 process received SIGINT, the watchdog exited 130, all child/GPU
 processes were reaped, and no partial report exists.  No Nsys, NCU, or
 performance-related source change followed this partial collection.
 
+## Stability falsification E1 — one PyTorch intra-op thread
+
+At clean commit `4211baef530cd94c72eea7dd4a6ab6df1d3d6f29`, the first
+single-variable experiment retained the exact source-H7168 workload, timing
+boundary, process topology, warmup/steady counts, and report path, and changed
+only `OMP_NUM_THREADS` from unset to `1`.  A separate out-of-band probe of the
+pinned runtime reports 96 PyTorch intra-op and 96 inter-op threads by default,
+and one intra-op plus 96 inter-op threads with the variable set.  The reports
+themselves record the environment variable, not these runtime thread counts.
+All three direct runs passed the automatic collection gate and retained 10
+warmup plus 100 steady samples.
+
+| Run | Median/p95/p99 (us) | Mean/std (us) | CV | Max (us) | Median start skew (us) |
+| --- | --- | --- | ---: | ---: | ---: |
+| 1 | 132.625 / 149.080 / 163.141 | 134.558 / 7.574 | 5.63% | 167.547 | 44.943 |
+| 2 | 152.436 / 163.621 / 175.894 | 153.530 / 6.917 | 4.51% | 194.810 | 60.566 |
+| 3 | 137.857 / 154.795 / 184.107 | 140.081 / 11.373 | 8.12% | 218.716 | 46.031 |
+| pooled | 140.501 / 160.198 / 175.784 | 142.723 / 11.902 | 8.34% | 218.716 | n/a |
+
+Compared with the original source-H7168 collection, this removes the
+millisecond-scale tail: pooled CV falls from 82.84% to 8.34% and maximum span
+falls from 2,274.190 us to 218.716 us.  This supports host thread pressure as a
+cause of the severe tail.  It does not establish a stable global-span
+baseline: the three run medians still span 14.94%.
+
+The tracked benchmark, extension, generated source and production sources are
+unchanged between the two collections; the six source-shuffle cubins also
+produce the same disassembled-instruction hash.  Median rank-local maximum
+stage duration changes only from 97.518 to 96.556 us, while its p99 and maximum
+collapse.  Therefore E1 is evidence for tail control, not evidence that the
+GPU kernel became faster.  The default and OMP runs were collected in two
+sequential groups rather than as an interleaved paired A/B, which further
+forbids a speedup claim.
+
+The remaining variation is dominated by a repeatable post-Gloo start order,
+not a comparable change in rank-local adapter duration.  Rank 1 starts first
+in 299/300 steady samples; rank 7 starts last in 295/300.  Median global span
+minus start skew is 87.775/93.237/91.610 us across the three runs, while median
+start skew itself changes from 44.943 to 60.566 us.  This is evidence that the
+current `max(end)-min(start)` truth includes deterministic control-plane
+release skew.  It does not yet prove whether the release order originates in
+Gloo progress, host scheduling, or both.
+
+The container exposes CPUs 0--191 across NUMA nodes 0--1 but has a cgroup-v1
+CPU quota of 9,600,000 us per 100,000 us period, equivalent to 96 CPUs.  Its
+historical `cpu.stat` already reports throttled periods.  The benchmark does
+not set CPU affinity, so every rank and helper thread inherits CPUs 0--191.
+This host evidence explains why limiting intra-op threads is a relevant
+falsification, but no cgroup delta or per-thread migration evidence was
+captured inside these reports; it is not a complete causal proof.
+
+Raw reports and their verified manifest remain in the ignored local directory
+`.cache/rail_balance/c100/stability-omp1/4211bae/`:
+
+```text
+93771ef50adc24d7067b56994b96c467931e3213e7b6f83d5923de18720e0b69  source-h7168-r1.json
+4e6b064cfea4fe04de6ed8357988a9b3135df6ab5fb1f325e056314e7a39636f  source-h7168-r2.json
+6d6a5e5c3093e42cf45b6c6847cb64a4e53fd7ba6aa108b90e25be8cab2ebe9e  source-h7168-r3.json
+```
+
+No CUDA/JIT/runtime/hot-path code changed, and no Nsys or NCU was collected.
+The next falsification must isolate the rank-release skew before return
+baselines or kernel attribution are accepted.
+
 ## Environment manifest — 2026-07-21 UTC
 
 ### Host and GPU management view
@@ -293,8 +357,9 @@ No old report may be relabelled as evidence for the new 7,168-record fixture.
 1. Explanation for the H200 operational target versus the management labels,
    compute-capability field and P2P `NS` output.
 2. Stable, accepted profiler-free source and return samples for H256/H7168.
-   Six clean source reports exist but failed the current stability review;
-   return remains uncollected.
+   Six clean source reports failed the original stability review.  Three
+   OMP-one-thread H7168 reports remove the severe tail but retain 14.94%
+   cross-run median span from rank-release skew; return remains uncollected.
 3. Nsys exposed critical-path attribution for the new large fixture.
 4. An exact NCU invocation selected from that Nsys report.
 5. Sustained same-machine peer-copy/HBM reference if a bandwidth percentage is

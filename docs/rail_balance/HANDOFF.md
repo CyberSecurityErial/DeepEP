@@ -171,6 +171,15 @@ the exact file snapshots without inventing commit identity.
   one rank-4 sample reaches 2.254 ms. No Nsys/NCU or performance-path change
   followed. The first return run was user-interrupted, exited 130 through the
   watchdog, wrote no JSON, and left no worker/GPU process.
+- A resumed one-variable H7168 experiment at clean `4211bae` set only
+  `OMP_NUM_THREADS=1`.  Three 10+100 reports cut pooled CV from 82.84% to
+  8.34% and maximum from 2.274 ms to 218.716 us, but their medians still span
+  14.94%.  Rank 1 starts first in 299/300 samples and rank 7 last in 295/300;
+  the remaining global-span variability follows post-Gloo release skew.
+  Reports plus a verified manifest live under
+  `.cache/rail_balance/c100/stability-omp1/4211bae/`.  No Nsys/NCU or hot-path
+  change has occurred.  Resume with one minimal release-skew falsification,
+  then collect stable source/return distributions.
 
 ## Mandatory retained boundary
 

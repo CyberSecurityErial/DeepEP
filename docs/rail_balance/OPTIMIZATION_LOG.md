@@ -1397,3 +1397,31 @@ Use a single controlled variable—such as explicit rank CPU affinity or an Nsys
 OS-runtime timeline chosen to explain the outlier—while retaining the original
 unbound reports.  Only after a repeatable boundary exists should return
 baseline collection and target-kernel NCU proceed.
+
+## Measurement decision O065 — keep OMP=1 for tail control, reject it as a full fix
+
+Setting only `OMP_NUM_THREADS=1` reduces the source-H7168 pooled CV from
+82.84% to 8.34% and its maximum from 2,274.190 us to 218.716 us.  The result is
+large, repeatable across three independent 10+100 processes, and consistent
+with the container's 96-CPU quota versus default 96 intra-op threads per each
+of eight ranks.  It is accepted as a measurement-environment control for the
+next falsification, not as an operator optimization or throughput claim.
+The rank-local maximum-stage median is essentially unchanged
+(97.518→96.556 us), while its p99/max collapse; unchanged disassembled kernel
+instructions reinforce the same interpretation.  The sequential, unpaired
+collection order also prevents a causal speedup percentage claim.
+
+The experiment does not stabilize the primary global-span median: its three
+medians span 14.94%.  Raw timestamps show a nearly fixed rank 1→rank 7 launch
+order after the pre-stage Gloo gate; the run with the largest median also has
+the largest median start skew.  Rank-local stage-duration medians and
+global-minus-start-skew medians are much tighter.  Therefore changing source
+shuffle instructions, launch geometry, TMA cadence, or plan layout would not
+address the currently exposed variance and remains prohibited.
+
+The next experiment holds OMP=1 and changes only the release measurement or
+main-thread scheduling condition needed to falsify this control-plane skew.
+It must stay default-off or benchmark-only, preserve all raw per-rank times,
+and be removed/rejected if it merely hides real work.  Nsys remains the next
+diagnostic layer only if this minimal experiment cannot distinguish host
+release from device execution; NCU still has no justified invocation.

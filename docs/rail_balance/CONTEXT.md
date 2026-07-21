@@ -753,3 +753,25 @@ Out of scope until evidence expands the project:
 - No Nsys/NCU or performance-path change occurred.  Resume at measurement
   stability analysis, then finish return baselines; do not discard outliers or
   proceed directly to kernel optimization.
+
+## C100 OMP stability falsification context (2026-07-21)
+
+- Clean commit `4211bae` ran source-H7168 three times with the sole workload
+  change `OMP_NUM_THREADS=1`; each report contains 10 warmup and 100 steady
+  samples and passes the automatic collection gate.
+- Pooled median/p95/p99 are 140.501/160.198/175.784 us, pooled CV is 8.34%,
+  and maximum is 218.716 us.  This removes the original 2.274 ms severe tail
+  and materially supports host thread pressure as one cause.
+- It is not yet an accepted stable baseline: run medians
+  132.625/152.436/137.857 us span 14.94%.  Rank 1 starts first in 299/300
+  samples and rank 7 starts last in 295/300; median post-barrier start skew is
+  44.943/60.566/46.031 us while global-minus-skew medians are much tighter at
+  87.775/93.237/91.610 us.
+- The process inherits CPUs 0--191, while its cgroup-v1 quota is equivalent to
+  96 CPUs.  Default PyTorch exposes 96 intra-op and 96 inter-op threads per
+  rank; OMP=1 changes intra-op only.  The reports do not contain per-iteration
+  cgroup/migration evidence, so scheduler/Gloo causality remains open.
+- Original and OMP experiments are both retained.  No source/return CUDA path,
+  JIT, public Hybrid path, or production code changed, and Nsys/NCU have not
+  started.  Isolate rank-release skew next; only then accept source/return
+  baseline distributions.
