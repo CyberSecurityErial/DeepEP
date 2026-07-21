@@ -6,23 +6,25 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 
 ## Safe pause state
 
-- H5a dispatch completion and H5b private combine completion are implemented,
-  independently audited, and split into implementation/test commits; no
-  half-written C++ lifecycle file remains. The next slice is the minimal public
-  Python `EPHandle` ownership/consumption and WORLD-gate wiring.
+- H6 constructor consensus and the public one-shot force lifecycle are
+  implemented, independently audited, and split into production/test commits;
+  no half-written lifecycle file remains. The next slice is truthful EP8
+  constructor/public D=1 fail-close evidence, not another host abstraction.
 - C000 through C070 remain complete for the agreed single-node PoC scope.
 - C080-A/B are complete; C080-D shared source/return cores and vnode closure
-  pass their current local gates. C080-C remains open only for the production
-  fixed-tensor WORLD transaction/state machine.
+  pass their current local gates. C080-C now has the fixed-tensor WORLD
+  transaction and buffer-bound public ticket, but remains open for real local
+  watchdog/regression/sanitizer closure.
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Latest local implementation checkpoints are `ffe4fd4` (owning combine
-  lifecycle) and `403e725` (H5b source gate), following `81ecb86`/`7bd17a4`
-  (owning dispatch finish), `edb1a0e`/`ba82134` (adjacent Hybrid
-  dispatch commit) and `4e48b84`/`7ab382b` (owning prepare), on
+- Latest pushed checkpoints are `741e126` (public Hybrid one-shot lifecycle)
+  and `cbe7df2` (public lifecycle/fault contract), following `1e0ea60`/
+  `eb6b834` (constructor consensus) on
   `fork/feat/rail-balance-prototype`.
-- Public force still fails closed and no result claims real Gin/RDMA behavior.
+- Both capability bits remain false and no result claims real Gin/RDMA
+  behavior. The public methods are wired but unreachable through a normal
+  force construction until the local activation evidence is complete.
 - Resume from the working tree and the newest entries in `DEVELOPMENT_LOG.md`;
   do not restore the obsolete sidecar/descriptor/ring draft.
 
@@ -116,16 +118,34 @@ the exact file snapshots without inventing commit identity.
   submits main combine, return-unshuffle, local barrier, and native epilogue
   adjacently before one correctness sync. Adapter, codegen, API/legacy, build,
   truthful D1 fail-close, and independent C++ audit pass. Public `EPHandle`
-  identity/consumption and force capability are deliberately still closed.
+  identity/consumption was deliberately still closed at that checkpoint.
+- H6 constructor consensus is committed at `1e0ea60` with tests at `eb6b834`.
+  One universal pre-comm gate rejects mixed mode/geometry before symmetric
+  window divergence; force reuses the same 1 KiB CUDA/pinned storage for one
+  post-sizing/pre-window gate. Constructor 9/9, API 9/9, legacy 4/4, and
+  independent Blocker0/High0 review pass.
+- H6 public lifecycle is committed at `741e126` with tests at `cbe7df2`.
+  Dispatch performs prepare/Gate1, plan/Gate2, then native commit/finish;
+  combine validates one buffer-owned shared ticket, prepares/gates, consumes
+  before commit, and returns the native three-item result. Success, shallow-
+  copy one-shot, capacity/remote rejection, retry, foreign/off misuse, prepare,
+  commit, and finish faults pass the CPU fake runtime. H3-H5 source contracts,
+  API 9/9, legacy 4/4, pycompile/diff, and final public audit pass with no
+  Blocker/High. This evidence does not execute production D>1 Gin.
 
 ## Mandatory retained boundary
 
-The remaining boundary is production reliability, not CUDA codegen: force must
-use fixed CUDA tensor WORLD consensus before publication and one uninterrupted
-C++ committed sequence on every rank. No rank may throw between source shuffle
-and Hybrid dispatch Tag0, or between main combine and the post-unshuffle local
-barrier/legacy epilogue. Post-publication failure invalidates the force object;
-precommit abort must not destroy an older live dispatch handle.
+The fixed WORLD consensus and uninterrupted private C++ commit sequences are
+now connected to public dispatch/combine, but only fake/source evidence covers
+that final Python lifecycle. The next local proof must exercise the real EP8
+constructor and public D=1 failure path under a watchdog: every rank must reject
+before publication, abort the same invocation, remain retryable where allowed,
+and destroy cleanly. D=1 cannot turn the production Hybrid data path into a
+success because it has no remote destination server.
+
+Post-publication failure must continue to invalidate the force object;
+precommit abort must not destroy an older live dispatch handle. Do not weaken
+these rules merely to make a local D=1 test succeed.
 
 No current result claims real Gin/RDMA/QP/NIC behavior or a multi-node speedup.
 No C070 timing is performance evidence.
@@ -137,26 +157,19 @@ No C070 timing is performance evidence.
 2. Verify branch and state with `git status --short --branch` and run
    `git diff --cached --check`.
 3. Do not redo C061/C070 unless the relevant code changes.
-4. H3/H4/H5a/H5b now reach a synchronized private DispatchLive result and a
-   complete private combine transaction. Wire the smallest public force path:
-   dispatch prepare → fixed WORLD Gate1 → finish/Gate2 → commit/finish → exact
-   native tuple; bind the result to a buffer/invocation-owned, one-shot,
-   non-cached handle. Combine must validate that handle, prepare before its
-   WORLD gate, abort retryably on gate rejection, atomically consume on gate
-   acceptance, then call the existing private commit. Do not return to vnode
-   or add a descriptor/ring/coordinator. Preserve the distinction between host
-   launch acceptance and real Gin completion.
-   Its accepted evidence is in
-   `tests/elastic/test_rail_balance_hybrid_plan_world_gate.py`: CPU and EP8
-   watchdog, four abort/retry states, capacity/asymmetric fail-close,
-   fourteen-output oracle, stable storage, actual-K mismatch, non-default
-   compatibility, and exactly two MAX calls per completed transaction.
-5. Keep public force unavailable until force combine is connected as one
-   main-combine→return-unshuffle→local-barrier→legacy-epilogue commit and handle
-   ownership/consumption is fail-closed.
-6. After host closure, run C080-G/C090 compatibility and sanitizer gates. Run
-   controlled C100 NCU/Nsys only while GPUs are idle and retain negative/tool-
-   failure evidence.
+4. Add the smallest real EP8 watchdog around existing public APIs. Temporarily
+   expose the already compiled private capability only inside each test process;
+   cover mixed off/force Gate0, asymmetric invalid force config, unanimous
+   force construction/destruction, and public D=1 dispatch fail-close plus a
+   second retry. Use small H256/K2/M/Pcap, `EP_DISABLE_GIN=1`, explicit process-
+   group teardown, and a hard timeout. Do not add vnode or a second runtime.
+5. Keep both production capability bits false until that watchdog, default-off
+   regression, focused C080-G/C090 sanitizer, and an independent boundary audit
+   pass. D=1 evidence may justify a test-only activation hook, never a D>1 Gin
+   success claim.
+6. After local correctness closure, notify the user before entering controlled
+   C100 NCU/Nsys work and wait for the promised profiling procedure. Run
+   performance tests only with idle GPUs; retain negative/tool-failure evidence.
 
 Pinned runtime for accepted commands:
 

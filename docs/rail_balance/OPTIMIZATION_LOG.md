@@ -1145,3 +1145,43 @@ machinery for a topology outside force-v1's H200/NVSwitch target. Relying on
 the existing NCCL/C++ topology boundary is smaller and avoids a new control
 path. Constructor-gate timing belongs in later host profiling; no performance
 claim is made from the CPU/fake correctness tests.
+
+## Host-path decision O055 — share one ticket and consume before commit
+
+An ordinary `EPHandle` receives one dynamic three-field ticket rather than a
+second handle hierarchy or copied route. Its mutable state is shared by shallow
+copies, so one copy consuming combine invalidates every alias. `PREPARING`
+separates a retryable gate interval from `LIVE`; after gate acceptance Python
+first sets `CONSUMED` and clears the buffer's live pointer, then enters the
+irreversible C++ commit. A later failure is terminal and cannot recreate a
+route whose device work may already have been submitted.
+
+Combine acquires cleanup ownership before calling private prepare. Abort is
+therefore attempted only for this buffer's matching invocation and is
+idempotent even if prepare threw before installing completion. Foreign handles
+are rejected by owner identity before they can mutate state or collide with an
+invocation number. Dispatch uses the same attempt-before-call rule for its
+stale-safe plan abort.
+
+This public closure adds no kernel, arena byte, JIT specialization, payload
+copy, NVLink/RDMA transfer, or device hot-path branch. It retains exactly two
+dispatch WORLD gates and one combine WORLD gate. Replacing the explicit code
+with a generic coordinator/state machine was rejected: it would hide the
+prepare/gate/abort/publication boundaries while saving no device work.
+
+Two host-cost candidates are recorded for C100, not changed in the correctness
+checkpoint:
+
+- production currently asks `plan_finish` for fourteen CUDA tensors, discards
+  thirteen, then calls `.item()` on status even though C++ already has a
+  synchronized host status. A status-only production result could remove both
+  Python tensor materialization and the redundant readback;
+- an exploratory CPU-tensor microbenchmark measured successful gate decode at
+  roughly 161 us when indexing/`.item()` is repeated for 127 words versus
+  roughly 8.6 us after one `tolist()`. This is only a host candidate; pinned
+  storage and real collectives must be measured before adopting it. Encode has
+  similar vectorization potential but requires a fail-closed fallback.
+
+No NCU/Nsys optimization was started. Per the agreed workflow, device and
+end-to-end tuning waits for the user's profiling procedure and an idle GPU
+window; these CPU observations carry no network or multi-node speedup claim.

@@ -526,3 +526,15 @@ Out of scope until evidence expands the project:
   Blocker0/High0 audit pass. Public dispatch/combine and the shared one-shot
   ticket remain unimplemented, `_RAIL_BALANCE_FORCE_HOST_AVAILABLE` remains
   false, and no local evidence claims a truthful D>1 Gin/RDMA execution.
+- H6 public lifecycle is now committed at `741e126` with its focused contract
+  at `cbe7df2`. It connects the private H3b/H4/H5 transaction through two
+  dispatch WORLD gates and one combine WORLD gate, then attaches one dynamic
+  owner/invocation/shared-state ticket to the ordinary `EPHandle`. Validation
+  and rejected gates are retryable with stale-safe/idempotent abort; accepted
+  dispatch Gate2 or combine-gate failures are terminal. Combine marks the
+  shared ticket `PREPARING`, then consumes it and clears the buffer live pointer
+  before irreversible commit, so shallow handle copies cannot replay. Off
+  keeps the legacy body and rejects only an exact force ticket before legacy
+  metadata unpacking. Focused fake/source, constructor 9/9, API 9/9, legacy
+  4/4, and independent Blocker0/High0 evidence pass. Both capability bits stay
+  false: this proves host lifecycle ordering, not truthful D>1 Rail/Gin/RDMA.

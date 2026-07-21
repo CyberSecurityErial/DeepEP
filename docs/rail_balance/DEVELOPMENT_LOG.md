@@ -3455,3 +3455,75 @@ one-shot `EPHandle` lifecycle plus its three per-call WORLD gates. A truthful
 EP8 constructor watchdog remains activation evidence; communicator creation
 and the accepted C++ window call are explicitly job-fatal distributed/resource
 boundaries rather than locally recoverable protocol errors.
+
+## 2026-07-21 — D056: close the public one-shot Hybrid lifecycle
+
+The narrow force-v1 public path now delegates to the private H3b/H4/H5
+transaction without changing the ordinary `EPHandle` constructor or the
+legacy off body. Every dispatch attempt reserves a monotonic invocation before
+local validation, prepares the complete private transaction, enters WORLD
+Gate1, finishes the plan, enters WORLD Gate2, then calls the adjacent private
+commit/finish and preserves the native sixteen-item dispatch ABI internally.
+Only after success does Python publish an ordinary `EPHandle` with one dynamic
+private ticket containing buffer identity, invocation identity, and shared
+one-shot state.
+
+Combine accepts only that buffer's exact live ticket. It changes the shared
+state from `LIVE` to `PREPARING` before private prepare, enters one WORLD gate,
+then changes it to `CONSUMED` and clears the buffer's live pointer before the
+irreversible private commit. Shallow `EPHandle` copies share the same ticket,
+so only one copy can consume the route. A prepare/gate rejection executes the
+idempotent abort and restores `LIVE`; any failure after an accepted dispatch
+Gate2 or combine gate makes the buffer terminal and never resurrects the
+ticket. A collective exception is also terminal because distributed state is
+unknown.
+
+The off path remains the original runtime/JIT/result path. It now rejects an
+exact force ticket before any legacy handle metadata is unpacked; this is a
+safety check only and prevents one buffer from replaying another force
+window's routing state. Cached force dispatch, FP8, expansion, masking, bias,
+events/async mode, deterministic mode, and non-unit alignment remain outside
+the deliberately small v1 contract.
+
+Accepted evidence at commits `741e126` and `cbe7df2`:
+
+```text
+PASS H3/H3b/H4b/H4c/H5a/H5b focused source/CPU contracts
+PASS H6 public success, one-shot/copy, retry, foreign/off misuse, and terminal faults
+PASS H6 constructor preflight 9/9
+PASS C080-A Hybrid API 9/9 and legacy identity 4/4
+PASS py_compile and git diff --check
+PASS independent public audit: Blocker 0 / High 0
+```
+
+Failures and corrections retained:
+
+- the old H4b source test sliced from public `dispatch` through public
+  `combine`, so the newly inserted private combine helper was accidentally
+  included in a dispatch-only negative assertion. The test now ends at the
+  stable `_unpack_bias` boundary and still checks that public dispatch only
+  delegates;
+- independent review found that an off buffer could receive a force ticket and
+  dereference its foreign routing metadata through the legacy path. Both off
+  entry points now reject the exact ticket before legacy unpacking, with a
+  focused regression;
+- combine originally acquired abort ownership only after C++ prepare returned.
+  It now marks `prepare_attempted` before the call, so an exception after C++
+  installs completion cannot leave a hidden owner. The injected prepare-fault
+  test initially retained the old no-abort trace and was updated to require
+  the idempotent cleanup plus successful retry;
+- command-only failures were retained rather than mistaken for code failures:
+  one audit used a nonexistent legacy-test filename, `/usr/bin/time` was not
+  installed, three reruns initially omitted `PYTHONPATH`, and the first log
+  inspection assumed these records lived at the repository root. Corrected
+  commands passed the complete focused matrix;
+- a 552-line-control-plane concern was reviewed explicitly. The length comes
+  from fixed fail-closed validation/gate/abort boundaries, not CUDA data-path
+  branches. A generic transaction framework was rejected because it would
+  hide those ownership edges without reducing device work.
+
+Both Python and C++ capability bits remain false. CPU fake-runtime and source
+contracts prove host ordering and failure ownership only; they are not a
+truthful D>1 Rail/Gin/RDMA execution. The next local evidence is a real EP8
+constructor/public D=1 watchdog followed by focused regression and sanitizer
+closure.
