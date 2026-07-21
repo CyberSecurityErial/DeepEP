@@ -92,8 +92,8 @@ static RailBalancePlanTensors build_rail_balance_plan(
 }
 
 static void register_rail_balance_apis(pybind11::module_& m) {
-    // The public force path stays unavailable until both Hybrid dispatch and
-    // combine are installed.  Python also owns an independent host capability,
+    // The public force path stays unavailable until truthful D>1 Rail/Gin
+    // correctness passes.  Python also owns an independent host capability,
     // so a partially upgraded installation fails closed in either direction.
     m.def("_rail_balance_force_available", []() noexcept { return false; });
     m.def(

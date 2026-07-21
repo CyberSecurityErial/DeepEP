@@ -301,8 +301,8 @@ def test_force_capability_rejects_before_group_cuda_or_collectives():
             raise AssertionError(f'force capability gate touched group.{name}')
 
     expected = (
-        '[DeepEP rail_balance:FeatureUnavailable] force-v1 is disabled until '
-        'both Hybrid dispatch and combine are installed')
+        '[DeepEP rail_balance:FeatureUnavailable] force-v1 remains disabled '
+        'until truthful D>1 Rail/Gin correctness passes')
     _expect_error(
         RuntimeError, expected,
         lambda: elastic_module.ElasticBuffer(

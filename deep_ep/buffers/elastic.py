@@ -713,7 +713,9 @@ class ElasticBuffer:
             explicitly_destroy: If this flag is set to True, you need to explicitly call `destroy()` to release resources;
                 otherwise, the resources will be released by the destructor.
             rail_balance: experimental source-side rail-balancing mode, either ``'off'`` or ``'force'``.
-                The default ``'off'`` path is identical to the legacy ElasticBuffer path.
+                The default ``'off'`` path preserves the legacy buffer sizing, runtime arguments,
+                JIT specialization, handles, and results; only local configuration parsing and
+                mode guards are added.
             rail_balance_proxy_slots_per_rank: moved-copy capacity reserved on each egress rank.
                 Must be zero for ``'off'`` and positive for ``'force'``.
         """
@@ -736,7 +738,7 @@ class ElasticBuffer:
                 if not _rail_balance_force_available():
                     raise RuntimeError(_rail_balance_error(
                         'FeatureUnavailable',
-                        'force-v1 is disabled until both Hybrid dispatch and combine are installed'))
+                        'force-v1 remains disabled until truthful D>1 Rail/Gin correctness passes'))
         else:
             # This is intentionally before get_nccl_comm_handle, buffer sizing,
             # and window registration. Off participates once, then keeps no
