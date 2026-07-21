@@ -677,41 +677,109 @@ stable.  Only device 6, the exact steady-26 NVTX range, one demangled return
 kernel, and the installed `basic` set are eligible.  `--kill 0` is mandatory:
 killing rank 6 after collection would strand its peers in B4 or a WORLD gate.
 
-The pre-registered command core is:
+The pre-registered command was tested rather than silently corrected.  NCU
+2025.1.1 rejected its `--output` spelling before the target started, and the
+first `--export` retry completed functionality but matched no kernel because a
+push/pop range needs escaped slashes and a trailing `/`.  Neither failure
+authorized a replay or matching fallback.  The accepted command core is:
 
 ```bash
 /usr/local/cuda/bin/ncu \
   --config-file off --target-processes all --devices 6 \
   --replay-mode application \
   --app-replay-mode strict --app-replay-match grid \
-  --nvtx --nvtx-include 'c100/return/stage/steady/26' \
+  --nvtx --nvtx-include 'c100\/return\/stage\/steady\/26/' \
   --kernel-name-base demangled \
   --kernel-name 'regex:.*rail_balance_hybrid_return_unshuffle_impl.*' \
   --launch-count 1 --kill 0 --set basic \
   --cache-control none --clock-control none \
   --force-overwrite \
-  --output .cache/rail_balance/c100/ncu/formal/return-h7168-rank6-basic \
+  --log-file .cache/rail_balance/c100/ncu/formal/return-h7168-rank6-basic-r2.log \
+  --export .cache/rail_balance/c100/ncu/formal/return-h7168-rank6-basic-r2 \
   /home/chen/.cache/deepep-sjlgpt/bin/python -B \
   tests/elastic/bench_rail_balance_hybrid_lsa.py \
   --stage return --case-name c100_volume_h7168 \
   --warmup-iters 10 --steady-iters 27 --nvtx \
-  --json-out .cache/rail_balance/c100/ncu/formal/return-h7168-rank6-basic.json \
-  --master-port 30247 --timeout 180 --watchdog-seconds 1800
+  --json-out .cache/rail_balance/c100/ncu/formal/return-h7168-rank6-basic-r2.json \
+  --master-port 30248 --timeout 180 --watchdog-seconds 1800
 ```
 
 The surrounding environment remains the formal Nsys environment.  Cache and
 clock control are explicitly `none` to avoid perturbing only rank 6 while its
 peers wait; achieved clocks must be read from the report, and the NCU duration
-must not be compared with Nsys duration.  The unresolved question is whether
-NCU 2025.1.1 can strictly match this multiprocessing application replay.  A
-failure is retained as evidence and does not authorize fallback to kernel
-replay, relaxed matching, `full`, or killing the target.  The report is
+must not be compared with Nsys duration.  A failure is retained as evidence and
+does not authorize fallback to kernel replay, relaxed matching, `full`, or
+killing the target.  The report is
 accepted only if the process exits cleanly, the benchmark passes every replay,
 no GPU/process remains, and exactly one device-6 grid-256/block-32 target with
 14,400-byte dynamic shared memory is present.  Replay pass count, profiler
 warnings, clock/cache state, child injection, metric permission/conflict,
 barrier timeout, process cleanup, artifact hash, commit, dirty state, and
 co-tenant state are mandatory audit fields.
+
+### Accepted first-pass NCU evidence
+
+Strict multiprocessing application replay succeeds without weakening the
+contract.  The accepted run exits zero after ten application-replay passes.
+The observed outer console emitted PASS after each replay, no strict-match,
+timeout, functional, or cleanup error appeared, and no worker or GPU allocation
+remained.  The console stream was not separately redirected; the NCU pass log,
+final-pass JSON and report are the persistent raw artifacts.  The report
+contains exactly one process, one launch on device 6, and
+one `rail_balance_hybrid_return_unshuffle_impl<7168,4>` invocation in the exact
+steady-26 push/pop range.  Its identity is stream 26, grid 256, block 32,
+60 registers/thread, and 14,400 bytes of dynamic shared memory, matching the
+pre-registered Nsys candidate.
+
+The retained artifacts are:
+
+```text
+db2f66dfc8edb7a5f9201c5e877976ac3908063e9b314ec134bd697ea69d04b4  return-h7168-rank6-basic-r2.json
+e8c6c59d6ae40b84ce8a86a15c5eb87645c2499f2dee065507125de861d33388  return-h7168-rank6-basic-r2.log
+878527125f66b9f30cc538f88df674a0fc4a8570148bbf4f121d99247a2e6245  return-h7168-rank6-basic-r2.ncu-rep
+```
+
+The JSON records clean commit `4fe7223`, no co-tenant and diagnostic-only
+eligibility.  The log preserves the required warnings: caches were uncontrolled
+and clocks unmodified.  The report measures 1.50 GHz SM and 3.20 GHz DRAM clocks
+for the collected pass.  Its 735.200-us duration is replay-instrumented and is
+not compared with the 142.752-us Nsys duration or profiler-free latency.
+
+The installed `basic` set proves launch geometry and broad utilization only:
+
+```text
+waves/SM                          0.13
+theoretical / achieved occupancy 23.44% / 1.61%
+achieved active warps/SM          1.03
+SM / DRAM throughput              0.11% / 0.41%
+L1/TEX / L2 throughput            1.39% / 0.95%
+SM active cycles min/avg/max      9,503 / 270,616.69 / 1,107,335
+SMSP active cycles min/avg/max    0 / 71,821.86 / 1,142,220
+```
+
+This is not a shared-memory occupancy diagnosis: 256 one-warp blocks across
+132 SMs expose only 1.94 blocks/SM even though shared memory permits 15.  A
+deterministic CPU-plan audit gives the missing work mapping.  For every egress,
+224 target channels have zero moved copies and only 32 target channels each
+own 28 copies (four copies for each of seven remote destinations).  The earlier
+O059 statement that 224 channels move four records describes source-producer
+channels, not the target-channel layout consumed by return-unshuffle.  GPU
+prefix materialization uses the same greedy low-channel fill at
+`rail_balance_hybrid_plan.cuh:489-510`.  That mapping is consistent with the
+large SM/SMSP active-cycle dispersion, but `basic` still cannot distinguish
+eligible-warp starvation, the serial TMA wait chain, or peer-link behavior.
+
+The next single-purpose capture therefore adds only `SchedulerStats`,
+`WarpStateStats`, and `Nvlink` under the same strict application replay.
+`SourceCounters` is deferred because the accepted cubin was compiled without
+`EP_JIT_WITH_LINEINFO=1`; a source-correlated rerun must first prove a lineinfo
+cubin keeps identical SASS and resources.  Detailed memory sections remain a
+conditional experiment.  No hot-path edit is authorized by this first report.
+
+The rejected no-match retry is retained as JSON/log under hashes
+`228d8f3b...f1e7` and `00193eac...8d9`; it has no `.ncu-rep`.  The earlier
+invalid-`--output` attempt failed before target launch and produced no raw file,
+which remains an explicit missing artifact rather than reconstructed evidence.
 
 The exact installed-schema SQL used to prove the multi-rank window is retained
 here; formal analysis must first require exactly one outer range:
@@ -816,17 +884,19 @@ No old report may be relabelled as evidence for the new 7,168-record fixture.
    rather than a circular prerequisite that would forbid profiling them.
 3. Nsys exposed critical-path attribution for the new large fixture.  This is
    complete for return-H7168 and selects the exact invocation above.
-4. An exact NCU invocation selected from that Nsys report.
+4. An exact NCU invocation selected from that Nsys report.  The strict `basic`
+   capture is complete; scheduler/warp/link attribution is still pending.
 5. Sustained same-machine peer-copy/HBM reference if a bandwidth percentage is
    later needed; published peak alone is insufficient.
 6. Real D>1 Gin/RDMA/QP/NIC behavior and network-visible counters.
 7. Full-MoE or training-level target metric and compute/communication overlap.
 
-Item 2's profiler-free truth and item 3's Nsys attribution are present.  Until
-item 4 exists, standalone
-TMA waits, segment scans, QP choice, tail publication cadence, planner launch,
-and barriers are hypotheses only.  No performance-path code change is
-authorized by this manifest.  Unstable tails continue to limit confidence and
+Items 2--4 now exist, but the first NCU set only establishes low broad
+utilization plus deterministic target-channel packing; it cannot yet name the
+dominant wait state or link behavior.  TMA waits, segment scans, QP choice,
+tail publication cadence, planner launch, and barriers remain hypotheses.  No
+performance-path code change is authorized until the bounded scheduler/warp/
+link capture closes that gap.  Unstable tails continue to limit confidence and
 must be represented in any later no-profiler validation; they do not prevent
 Nsys from determining whether a tail is host-, API-, synchronization-, or
 kernel-owned.

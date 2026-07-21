@@ -220,6 +220,13 @@ the exact file snapshots without inventing commit identity.
   The exact first NCU target is
   rank/device 6, steady iteration 26, 142.752 us, grid 256, block 32, regs 60,
   dynamic shared memory 14,400 bytes.  No hot-path edit has begun.
+- The first exact NCU report is accepted at clean `4fe7223`.  Ten strict
+  application-replay passes produce one device-6 target and preserve two prior
+  failures (invalid output option and no-match NVTX syntax).  Basic plus plan
+  audit shows sparse utilization and 32 active versus 224 empty target channels,
+  but no dominant wait/link root cause.  Resume with the bounded
+  SchedulerStats/WarpStateStats/Nvlink capture; do not edit the hot path or jump
+  to `full`.
 
 ## Mandatory retained boundary
 
@@ -249,16 +256,13 @@ No C070 timing is performance evidence.
    Rail/Gin correctness passes. D1 evidence is never a D>1 Gin success claim.
 6. C090 is complete. Do not rerun its unchanged full suites or sanitizer
    kernels unless production device code changes.
-7. The GPU evidence-chain skill is installed and formal Nsys attribution is
-   complete.  Before running NCU, recheck idle GPUs and the installed NCU CLI,
-   notify the user, and capture only the exact rank-6 return invocation recorded
-   above with the `basic` set.  Use strict whole-application replay, name+grid
-   matching, device 6, `kill 0`, and explicit cache/clock control `none`; default
-   kernel/range replay is forbidden because the kernel writes peer-process
-   memory.  Record pass count, matching, warnings, achieved clocks, cleanup and
-   artifact hash.  Do not fall back to relaxed or peer-side replay if the first
-   capture fails.  A hot-path edit remains blocked until an accepted report
-   maps a limiter to source.  C105 packages the fastest possible real-cluster
+7. The GPU evidence-chain skill is installed; formal Nsys attribution and the
+   exact `basic` NCU capture are complete.  Recheck idle GPUs, then retain the
+   same strict whole-application replay, name+grid matching, device 6, `kill 0`
+   and cache/clock `none` for the bounded SchedulerStats/WarpStateStats/Nvlink
+   capture.  Default kernel/range replay, relaxed matching and `full` remain
+   forbidden.  A hot-path edit is still blocked until that report maps the
+   active-channel limiter.  C105 packages the fastest possible real-cluster
    bring-up afterward.
 
 Pinned runtime for accepted commands:

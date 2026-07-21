@@ -4631,3 +4631,46 @@ command and acceptance/failure rules are in `C100_PERFORMANCE_EVIDENCE.md`.
 Multiprocessing application-replay matching itself remains an empirical gate:
 preserve a failure and stop rather than weakening replay safety.  This is a
 measurement-contract checkpoint only; no GPU command or hot-path edit occurred.
+
+## 2026-07-22 — D080: accept exact NCU basic evidence and expose target-channel packing
+
+The first command failed before launch because NCU 2025.1.1 does not accept
+`--output`; the installed option is `--export`.  It produced no artifact.  The
+first `--export` retry then ran the complete EP8 adapter successfully but logged
+`No kernels were profiled`: the NVTX expression lacked push/pop syntax.  Its
+JSON and log are retained with hashes
+`228d8f3bd56737fb0a3f7b47213ea2a94d6f4036620a1629d543e5395f7af1e7`
+and `00193eacb9bce5a116420feea090f82050a556103a7be41dab1b976baa6ba8d9`;
+there is intentionally no report.
+
+The corrected expression `c100\/return\/stage\/steady\/26/` completed ten
+strict application-replay passes at clean commit `4fe7223`.  Every pass ran the
+whole eight-rank benchmark and the observed outer console printed PASS.  That
+console stream was not independently redirected; the pass log and final-pass
+JSON are retained.  The command exited zero, left no worker or GPU allocation,
+and generated one report containing exactly
+one device-6 return-unshuffle launch whose stream/grid/block/register/shared-
+memory identity equals the Nsys candidate.  JSON, log and report hashes are
+`db2f66df...d04b4`, `e8c6c59d...33388`, and `87852712...6245` respectively.
+
+The accepted report preserves uncontrolled-cache and unmodified-clock warnings;
+its observed clocks are 1.50 GHz SM and 3.20 GHz DRAM.  NCU's 735.200-us replay
+duration is not compared with Nsys or profiler-free time.  `basic` reports only
+0.13 waves/SM, 1.61% achieved occupancy, 1.03 active warps/SM, 0.11% SM and
+0.41% DRAM throughput, plus wide per-SM active-cycle dispersion.  Shared memory
+is not the immediate occupancy root cause because the finite grid supplies only
+1.94 one-warp blocks/SM while the resource limit permits 15.
+
+A CPU-only schedule audit then proves the target-work distribution: each egress
+has 224 empty target channels and 32 channels with 28 copies each.  Seven remote
+destinations contribute four copies to each active target channel.  This does
+not contradict O059's 224-by-four source-producer description; source and target
+channel mappings differ.  GPU prefix materialization implements the same greedy
+fill at `rail_balance_hybrid_plan.cuh:489-510`.  The plan evidence explains why
+workload distribution is worth testing, but it does not yet prove the dominant
+warp wait or NVLink behavior.
+
+The next bounded capture is SchedulerStats+WarpStateStats+Nvlink under the
+unchanged strict replay contract.  SourceCounters is deferred because the
+accepted JIT cubin has no lineinfo; enabling lineinfo later requires identical-
+SASS/resource proof.  No CUDA/JIT/runtime hot path changed.

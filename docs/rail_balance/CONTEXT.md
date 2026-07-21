@@ -899,3 +899,23 @@ Out of scope until evidence expands the project:
   use strict application replay, `basic`, device 6, `kill 0`, and stop rather
   than relaxing the contract if matching fails.  No performance-path edit has
   yet begun.  Older profiler-free millisecond events remain unattributed.
+
+## C100 exact NCU basic context (2026-07-22)
+
+- Goal remains active.  NCU 2025.1.1 matched the cross-process peer-writing
+  return kernel only after retaining two command failures: invalid `--output`,
+  then an `--export` run whose NVTX expression matched no push/pop range.  The
+  accepted expression escapes each `/` and ends in `/`.
+- The accepted report at clean `4fe7223` contains exactly one device-6,
+  steady-26 `return_unshuffle<7168,4>` launch.  Ten strict application replays
+  pass full EP8 functionality and leave no process/GPU allocation.  Kernel or
+  range replay, relaxed matching and target killing remain forbidden.
+- Launch identity is stream 26, grid 256, block 32, REG60 and 14,400-byte
+  dynamic shared memory.  Observed clocks are 1.50 GHz SM / 3.20 GHz DRAM;
+  cache and clocks were intentionally uncontrolled.  NCU duration is diagnostic
+  replay time and cannot be compared with Nsys or profiler-free latency.
+- Basic metrics show low broad utilization.  CPU/GPU-plan source review proves
+  return target work is packed into 32 channels with 28 copies each while 224
+  channels are empty.  This is distinct from the source-producer distribution.
+  Scheduler/warp/link attribution is next; no performance-path edit is yet
+  authorized.

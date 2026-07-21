@@ -1604,3 +1604,31 @@ rebuild all distributed state.  Explicit `cache-control none` and
 unqualified cross-device clock comparison.  Application-replay mismatch,
 timeout, permission error, or cleanup failure is a retained falsification, not
 permission to relax matching or replay the peer-writing kernel.
+
+## Measurement decision O075 — separate target-channel packing from warp wait
+
+The exact `basic` capture passes identity and lifecycle gates after ten strict
+whole-application replays.  It shows 0.13 waves/SM, 1.61% achieved occupancy,
+1.03 active warps/SM, 0.11% SM throughput and 0.41% DRAM throughput.  These
+values reject a saturated-SM or saturated-HBM explanation for the instrumented
+pass, but do not identify why one-warp CTAs are not issuing.  Shared memory is
+not the first fix: only 256 blocks exist for 132 SMs, far below its 15-block/SM
+resident limit.
+
+The deterministic plan adds a concrete imbalance hypothesis.  Return-unshuffle
+sees 32 target channels with 28 records each and 224 empty channels per egress,
+because prefix materialization greedily fills each destination from channel
+zero.  The source-side 224-by-four producer distribution recorded in O059 is a
+different mapping and remains valid.  Empty CTAs explain some distribution
+skew; only scheduler/warp evidence can show whether the active CTAs are then
+dominated by serial TMA waits, scoreboard, membar, or another dependency.
+
+Do not increase occupancy, change channel count, stripe the plan, batch TMA, or
+rewrite the proxy layout yet.  The smallest next falsification keeps the same
+device-6 steady-26 identity and adds only SchedulerStats, WarpStateStats and
+Nvlink.  Nvlink tests whether transmitted user bytes match the expected
+12,873,728-byte record volume and whether peer transport is saturated.
+SourceCounters is not collected from the current no-lineinfo cubin; a later
+lineinfo build must first prove identical SASS/resources.  MemoryWorkloadAnalysis
+is conditional, and `full` remains rejected.  A hot-path single-variable
+experiment is still blocked.
