@@ -4729,3 +4729,23 @@ measured, and a return-only improvement is insufficient.  CPU oracle and
 validator are the first code slice; GPU materialization follows only after its
 focused correctness passes.  This is a design/measurement checkpoint; no hot
 path changed in D082.
+
+## 2026-07-22 — D083: capture O077's immediate pre-change A side
+
+An external preflight observed no compute application, then twelve direct no-
+profiler processes at clean `fc39bf7` captured source/return, H256/H7168 and
+three trials per combination.  Every process uses a fresh JIT cache, OMP=1,
+10 warmups and 100 steady samples; all automatic environment, source identity,
+pre/post co-tenant and persistence gates pass.  The persistent snapshots see
+only the eight benchmark workers but cannot exclude transient interference.
+Exact hashes and global plus rank-local statistics are indexed in
+`C100_PERFORMANCE_EVIDENCE.md`.
+
+H7168 return medians are 332.363/333.360/333.805 us, a 1.442-us span, and form
+the primary O077 A-side anchor.  Source-H7168 medians are
+128.755/133.056/132.721 us.  H256 medians are less stable, and several groups
+retain p99/max rank-local events up to milliseconds.  These are not discarded:
+the B side must report all three distributions and cannot claim a win from one
+best trial.  No tracked benchmark, oracle, C++/CUDA/JIT or hot path changed in
+this checkpoint.  The twelve reports are gated and retained; their unstable
+p95/p99/max values are not accepted as a stable baseline.

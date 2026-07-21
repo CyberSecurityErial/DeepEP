@@ -13,6 +13,7 @@ large source fixture: FUNCTIONAL_PASS, NO_DIAGNOSTIC_PROFILE
 large return fixture: FUNCTIONAL_PASS, NSYS_ATTRIBUTED
 checked-adapter benchmark harness: AUDITED_PASS
 profiler-free baseline: SOURCE_AND_RETURN_COLLECTED, TAIL_STABILITY_NOT_ACCEPTED
+O077 immediate pre-change baseline: TWELVE_RUNS_GATED_AND_RETAINED
 new Nsys attribution: FORMAL_H7168_PASS, EXACT_NCU_TARGET_SELECTED
 new NCU dossier: BASIC_AND_DIRECTED_SCHEDULER_WARP_NVLINK_PASS
 performance-path change: NONE
@@ -875,6 +876,58 @@ single variable will change independent channel work while leaving every TMA
 instruction, TokenLayout byte, proxy count and link endpoint unchanged.  If
 that experiment fails, memory-path attribution becomes the next bounded
 section rather than an assumed explanation.
+
+### O077 immediate pre-change profiler-free baseline
+
+Before changing the oracle or GPU materializer, an immediate external preflight
+observed no compute application, then the exact frozen benchmark collected
+three fresh-JIT eight-rank runs for each source/return and H256/H7168 combination at
+clean commit `fc39bf7`.  Persistent pre/post snapshots see only the eight
+benchmark workers and no unexpected co-tenant; they cannot exclude a transient
+mid-run process, clock, power or thermal event.  Every run uses OMP=1,
+10 warmups, 100 steady samples, no NVTX/profiler, and passes the automatic
+environment, identity, persistence and co-tenant gates.  These are eligibility-
+gated retained A-side reports, not acceptance of tail stability; they do not
+replace the earlier historical baseline or erase its tails.
+
+| Stage/shape | run | global median/p95/p99/max (us) | global mean/std/CV | rank-local-max median/p95/p99/max (us) | local mean/std/CV |
+| --- | ---: | --- | --- | --- | --- |
+| source H256 | 1 | 126.149 / 151.242 / 181.796 / 198.424 | 129.076 / 12.012 / 9.31% | 74.312 / 85.640 / 92.066 / 118.707 | 75.766 / 6.612 / 8.73% |
+| source H256 | 2 | 118.382 / 136.386 / 232.119 / 715.141 | 125.999 / 60.891 / 48.33% | 78.809 / 86.830 / 126.632 / 144.039 | 81.237 / 9.142 / 11.25% |
+| source H256 | 3 | 113.700 / 134.138 / 262.597 / 713.222 | 122.373 / 61.701 / 50.42% | 77.013 / 88.445 / 187.372 / 673.444 | 85.947 / 60.527 / 70.42% |
+| return H256 | 1 | 203.746 / 238.398 / 258.592 / 269.993 | 207.149 / 13.003 / 6.28% | 201.459 / 226.803 / 243.291 / 255.247 | 203.744 / 10.814 / 5.31% |
+| return H256 | 2 | 220.534 / 245.205 / 308.324 / 2518.285 | 245.967 / 228.682 / 92.97% | 216.732 / 232.497 / 292.529 / 2463.154 | 239.961 / 223.659 / 93.21% |
+| return H256 | 3 | 207.612 / 227.860 / 237.530 / 257.629 | 210.696 / 9.171 / 4.35% | 203.646 / 217.893 / 225.697 / 242.383 | 205.919 / 6.906 / 3.35% |
+| source H7168 | 1 | 128.755 / 142.353 / 172.559 / 191.031 | 130.722 / 10.078 / 7.71% | 96.235 / 110.115 / 147.209 / 160.985 | 99.539 / 9.943 / 9.99% |
+| source H7168 | 2 | 133.056 / 142.584 / 169.405 / 267.274 | 135.038 / 14.219 / 10.53% | 97.348 / 103.814 / 108.950 / 258.418 | 99.652 / 16.180 / 16.24% |
+| source H7168 | 3 | 132.721 / 141.006 / 158.077 / 169.121 | 133.885 / 5.880 / 4.39% | 96.013 / 110.556 / 112.286 / 127.897 | 97.494 / 5.256 / 5.39% |
+| return H7168 | 1 | 332.363 / 357.907 / 485.553 / 514.222 | 337.778 / 26.300 / 7.79% | 328.613 / 347.615 / 459.725 / 473.518 | 332.734 / 21.917 / 6.59% |
+| return H7168 | 2 | 333.360 / 363.412 / 599.404 / 1580.357 | 353.009 / 128.855 / 36.50% | 329.947 / 359.989 / 599.310 / 1570.964 | 348.493 / 127.277 / 36.52% |
+| return H7168 | 3 | 333.805 / 361.237 / 658.128 / 2395.960 | 359.702 / 207.086 / 57.57% | 331.183 / 360.495 / 657.556 / 2387.726 | 356.744 / 206.580 / 57.91% |
+
+H7168 return is the primary A-side anchor: its run medians span only
+1.442 us.  H256 and all p99/max columns retain intermittent host/rank-local
+tails, so O077 must compare all three distributions rather than a best run.
+The retained files are:
+
+```text
+f45f6d1cd6d79578f26aeba055f877224b12a83b22caeafd22d363e8820e8db0  source-h256-r1.json
+424b46c43791050cf6d1a6f36850ce91f9a36af486becec661fe2eddb293a645  source-h256-r2.json
+ac083a153bf2c87e11b65c21f6c8aa1ef7fb1b659bb7399b370ff338b0046529  source-h256-r3.json
+3ff1a21fae00aa94a4ac750325010358ce4825c4ab075f42fff396ea954b82ee  return-h256-r1.json
+52adb4166ff586f3585a7b54c3c93c85de945a0e15be8fce4b50e51ae870f16f  return-h256-r2.json
+871d4622ec42b09c2866aa836a68f019c2a491418ea18abfc844e8043ce1ca4f  return-h256-r3.json
+76e1c3b4d623f988db9254155c949b92b1b99d3b8e354f2e1c23f7b4811a97a3  source-h7168-r1.json
+f18f248a3c4090fee5e42b0ddd0a18de37de23b37203479e0d22daa12ce122e8  source-h7168-r2.json
+6357bcba42b306f25b5347c337b3a16209bf0b63f5421b94a80b36c5e09d26d8  source-h7168-r3.json
+21dfec17a8d143e1acb898f4e2afa42c39ffe54709a04080234d880f65d5193f  return-h7168-r1.json
+8e1e62be0e33cc35dd21cb015b3b1225ad7578d70fd1e214b24ec14b37aef8a4  return-h7168-r2.json
+38cbcc57510f95eae00fca253d2e760e93b6c0fa7114dc0d78bb98c1d00e62ca  return-h7168-r3.json
+```
+
+All files live under
+`.cache/rail_balance/c100/o077/pre-fc39bf7/`.  They are ignored raw artifacts;
+their checksums and statistics above are the tracked audit index.
 
 The exact installed-schema SQL used to prove the multi-rank window is retained
 here; formal analysis must first require exactly one outer range:
