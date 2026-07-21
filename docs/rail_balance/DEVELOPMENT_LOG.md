@@ -3527,3 +3527,59 @@ contracts prove host ordering and failure ownership only; they are not a
 truthful D>1 Rail/Gin/RDMA execution. The next local evidence is a real EP8
 constructor/public D=1 watchdog followed by focused regression and sanitizer
 closure.
+
+## 2026-07-21 — D057: pass the real EP8 public D=1 watchdog
+
+One isolated test now activates the already compiled private capability only
+inside each of eight spawned worker processes. Production Python and C++
+capability bits remain false before and after the run; no environment switch,
+second runtime, vnode path, or public API was added.
+
+The real H200/NCCL sequence performs exactly six fixed MAX gates:
+
+```text
+1  mixed off/force constructor Gate0 rejects before communicator creation
+1  rank-3 invalid force geometry rejects before communicator creation
+2  unanimous force Gate0 + sizing Gate1 create the registered window
+1  first public dispatch rejects truthful D=1 prepare
+1  second public dispatch retries and rejects the same truthful D=1 prepare
+```
+
+The successful force constructor reports logical `D=1,G=8`, exact
+`legacy+arena` bytes, one allocated QP, and live registered runtime ownership.
+Both public dispatch attempts converge on error priority 31/rank 0, advance the
+invocation from 1 to 3, retain no live ticket, and keep the buffer nonterminal.
+The accepted constructor's CUDA/pinned gate storage is pointer-stable across
+its two constructor gates and both dispatch attempts. All ranks then call the
+real collective destroy in the same order and restore both capability gates to
+false.
+
+Accepted evidence at commit `0597ed0`:
+
+```text
+PASS CPU/source default-capability contract
+PASS real EP8 mixed-mode and asymmetric-invalid constructor fail-close
+PASS real EP8 force constructor/window and collective destroy
+PASS real EP8 public D1 dispatch fail-close twice with six stable MAX gates
+PASS py_compile and git diff --check
+PASS watchdog audit: Blocker 0 / High 0
+```
+
+Failures and resource decisions retained:
+
+- the first new file inherited mode 0600 from the local umask; it was corrected
+  to the repository's normal 0644 before commit;
+- pre-run review found three watchdog weaknesses: rejection cases only had an
+  aggregate gate-count check, `EP_DISABLE_GIN` used `setdefault`, and nonzero
+  subprocess exit relied on spawn cleanup. Each case now asserts one Gate0,
+  GIN disable is forced inside the isolated subprocess, and nonzero/timeout
+  exits clean the dedicated process group;
+- Megatron was restarted by a higher-level `launch.sh` after its first
+  torchrun was terminated. The second cleanup killed the identified launcher,
+  torchrun, and four training children under standing authorization. The
+  unrelated 528 MiB CUDA elementwise sample remained untouched.
+
+This closes the local public-control-plane activation evidence only. The D=1
+guard fires before JIT, arena stores, source shuffle, or payload publication,
+so the run is deliberately not D>1 Gin/RDMA or performance evidence. C080-G
+now owns default-off, compatibility, fault, and sanitizer closure.

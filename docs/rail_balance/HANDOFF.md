@@ -8,18 +8,18 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 
 - H6 constructor consensus and the public one-shot force lifecycle are
   implemented, independently audited, and split into production/test commits;
-  no half-written lifecycle file remains. The next slice is truthful EP8
-  constructor/public D=1 fail-close evidence, not another host abstraction.
+  the real EP8 constructor/public D=1 watchdog also passes. No half-written
+  lifecycle file remains; the next slice is C080-G local regression/sanitizer
+  closure, not another host abstraction.
 - C000 through C070 remain complete for the agreed single-node PoC scope.
 - C080-A/B are complete; C080-D shared source/return cores and vnode closure
-  pass their current local gates. C080-C now has the fixed-tensor WORLD
-  transaction and buffer-bound public ticket, but remains open for real local
-  watchdog/regression/sanitizer closure.
+  pass their current local gates. C080-C is PASS with the fixed-tensor WORLD
+  transaction, buffer-bound public ticket, and truthful D1 watchdog.
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Latest pushed checkpoints are `741e126` (public Hybrid one-shot lifecycle)
-  and `cbe7df2` (public lifecycle/fault contract), following `1e0ea60`/
+- Latest pushed checkpoint is `0597ed0` (real EP8 public watchdog), following
+  `741e126`/`cbe7df2` (public Hybrid lifecycle/contracts) and `1e0ea60`/
   `eb6b834` (constructor consensus) on
   `fork/feat/rail-balance-prototype`.
 - Both capability bits remain false and no result claims real Gin/RDMA
@@ -132,16 +132,21 @@ the exact file snapshots without inventing commit identity.
   commit, and finish faults pass the CPU fake runtime. H3-H5 source contracts,
   API 9/9, legacy 4/4, pycompile/diff, and final public audit pass with no
   Blocker/High. This evidence does not execute production D>1 Gin.
+- H6 real EP8 watchdog is committed at `0597ed0`. It rejects mixed mode and a
+  rank-3 invalid force geometry before communicator creation, creates a real
+  unanimous force window, rejects public dispatch twice at the truthful D1
+  guard, and collectively destroys. It observes exactly six fixed MAX gates,
+  stable accepted-constructor storage, invocation 1→3, no live ticket, and a
+  nonterminal retryable buffer. The audit closes Blocker0/High0; production
+  capability is restored false and no payload/Gin stage executes.
 
 ## Mandatory retained boundary
 
 The fixed WORLD consensus and uninterrupted private C++ commit sequences are
-now connected to public dispatch/combine, but only fake/source evidence covers
-that final Python lifecycle. The next local proof must exercise the real EP8
-constructor and public D=1 failure path under a watchdog: every rank must reject
-before publication, abort the same invocation, remain retryable where allowed,
-and destroy cleanly. D=1 cannot turn the production Hybrid data path into a
-success because it has no remote destination server.
+connected to public dispatch/combine, and real EP8 now covers constructor,
+window, D1 fail-close/retry, and destroy. The remaining local boundary is
+regression breadth and sanitizer evidence; D=1 cannot turn the production
+Hybrid data path into a success because it has no remote destination server.
 
 Post-publication failure must continue to invalidate the force object;
 precommit abort must not destroy an older live dispatch handle. Do not weaken
@@ -157,16 +162,12 @@ No C070 timing is performance evidence.
 2. Verify branch and state with `git status --short --branch` and run
    `git diff --cached --check`.
 3. Do not redo C061/C070 unless the relevant code changes.
-4. Add the smallest real EP8 watchdog around existing public APIs. Temporarily
-   expose the already compiled private capability only inside each test process;
-   cover mixed off/force Gate0, asymmetric invalid force config, unanimous
-   force construction/destruction, and public D=1 dispatch fail-close plus a
-   second retry. Use small H256/K2/M/Pcap, `EP_DISABLE_GIN=1`, explicit process-
-   group teardown, and a hard timeout. Do not add vnode or a second runtime.
-5. Keep both production capability bits false until that watchdog, default-off
-   regression, focused C080-G/C090 sanitizer, and an independent boundary audit
-   pass. D=1 evidence may justify a test-only activation hook, never a D>1 Gin
-   success claim.
+4. Run C080-G as a manifest-driven compatibility pass: default-off EP8, H3-H6
+   focused contracts, existing 8x1 source/return, 4x2/2x4 vnode, force/legacy
+   codegen, and only the sanitizer cases whose touched code changed. Do not
+   rerun every historical exhaustive seed unless a relevant core changed.
+5. Keep both production capability bits false through C080-G and its final
+   independent boundary audit. D1 evidence is never a D>1 Gin success claim.
 6. After local correctness closure, notify the user before entering controlled
    C100 NCU/Nsys work and wait for the promised profiling procedure. Run
    performance tests only with idle GPUs; retain negative/tool-failure evidence.

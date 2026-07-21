@@ -538,3 +538,13 @@ Out of scope until evidence expands the project:
   metadata unpacking. Focused fake/source, constructor 9/9, API 9/9, legacy
   4/4, and independent Blocker0/High0 evidence pass. Both capability bits stay
   false: this proves host lifecycle ordering, not truthful D>1 Rail/Gin/RDMA.
+- H6 real EP8 activation evidence is committed at `0597ed0`. A test-only
+  per-worker patch opens the already installed private path while leaving both
+  production capability bits false. Eight H200 ranks reject mixed mode and a
+  rank-local invalid force geometry before communicator creation, unanimously
+  create one real force window, reject public dispatch twice at the truthful
+  `D=1` topology guard, and collectively destroy. Exactly six fixed MAX gates
+  run; accepted-constructor storage stays pointer-stable; invocation advances
+  1→3 with no live ticket or terminal state. Watchdog review is Blocker0/High0.
+  C080-C is locally complete, but no payload/JIT/Gin stage executes at D=1;
+  C080-G compatibility/sanitizer and C080-H real D>1 remain separate gates.
