@@ -366,7 +366,8 @@ public:
         // the noncollective side of WORLD Gate #1.
         auto outputs = allocate_rail_balance_hybrid_plan_outputs(
             int_options, num_rails, num_channels, num_scaleout_ranks);
-        auto prepared = prepare_rail_balance_hybrid_plan();
+        auto prepared = prepare_rail_balance_hybrid_plan(
+            1, num_rails, num_channels, num_scaleout_ranks);
         auto local_barrier = prepare_rail_balance_hybrid_local_barrier(
             num_rails, num_gpu_timeout_cycles);
         auto source_shuffle =
@@ -389,9 +390,41 @@ public:
             stream_wait(comm_stream, compute_stream);
 
         auto* local_channel_count = arena_layout.get_channel_count_ptr();
+        RailBalanceHybridPlanRawPointers raw = {
+            .channel_count = outputs.channel_count.data_ptr<int>(),
+            .count = outputs.count.data_ptr<int>(),
+            .quota = outputs.quota.data_ptr<int>(),
+            .keep_count = outputs.keep_count.data_ptr<int>(),
+            .segments = outputs.segments.data_ptr<int>(),
+            .num_segments = outputs.num_segments.data_ptr<int>(),
+            .owner_channel_prefix =
+                outputs.owner_channel_prefix.data_ptr<int>(),
+            .retained = outputs.retained.data_ptr<int>(),
+            .moved = outputs.moved.data_ptr<int>(),
+            .moved_channel_prefix =
+                outputs.moved_channel_prefix.data_ptr<int>(),
+            .group_prefix = outputs.group_prefix.data_ptr<int>(),
+            .proxy_required = outputs.proxy_required.data_ptr<int>(),
+            .moved_copies = outputs.moved_copies.data_ptr<int>(),
+            .status = outputs.status.data_ptr<int>(),
+            .local_channel_count = local_channel_count,
+            .peer_channel_count = {},
+        };
+        for (int peer = 0; peer < num_rails; ++peer) {
+            raw.peer_channel_count[peer] = static_cast<const int*>(
+                nccl_context->get_sym_ptr(local_channel_count, peer));
+        }
+        const int64_t active_count_values =
+            static_cast<int64_t>(num_channels) * num_scaleout_ranks;
+        EP_HOST_ASSERT(active_count_values > 0 and
+                       active_count_values <= INT_MAX);
+        const auto active_count_bytes = static_cast<size_t>(
+            active_count_values * sizeof(int));
+        const auto local_barrier_launch_args = jit::LaunchArgs(
+            1, 512, 0, 1, true);
         launch_prepared_rail_balance_hybrid_count(
             prepared, topk_idx.data_ptr<topk_idx_t>(),
-            local_channel_count, outputs.status.data_ptr<int>(),
+            local_channel_count, raw.status,
             1, num_tokens, num_topk, num_channels,
             num_experts, num_scaleout_ranks,
             local_scaleout_rank, comm_stream);
@@ -426,17 +459,527 @@ public:
                 .proxy_capacity_per_egress = proxy_capacity_per_egress,
                 .normalized_remainder_seed = normalized_remainder_seed,
                 .arena_offset = arena_offset,
+                .active_count_values = active_count_values,
+                .active_count_bytes = active_count_bytes,
                 .arena = arena,
                 .local_channel_count = local_channel_count,
+                .raw = raw,
                 .topk_idx = topk_idx,
                 .prepared = std::move(prepared),
+                .local_barrier_launch_args = local_barrier_launch_args,
                 .local_barrier = std::move(local_barrier),
                 .source_shuffle = std::move(source_shuffle),
                 .return_unshuffle = std::move(return_unshuffle),
                 .combine_epilogue = std::move(combine_epilogue),
+                .dispatch_bundle = nullptr,
                 .outputs = std::move(outputs),
             });
         return 0;
+    }
+
+    RailBalanceHybridDispatchPrepareResult
+    rail_balance_hybrid_dispatch_prepare(
+        const torch::Tensor& x,
+        const torch::Tensor& topk_idx,
+        const torch::Tensor& topk_weights,
+        const std::optional<torch::Tensor>&
+            cumulative_local_expert_recv_stats,
+        const int& num_max_tokens_per_rank,
+        const int& num_experts,
+        const int& num_sms,
+        const int& num_qps,
+        const int& proxy_capacity_per_egress,
+        const int64_t& arena_offset,
+        const int& invocation_id,
+        const pybind11::object& remainder_seed) {
+        // This is the production-shaped, noncollective half of force dispatch.
+        // It deliberately accepts no topology, local-rank, hidden, top-k, or
+        // channel argument: all of those values are derived and frozen here.
+        EP_HOST_ASSERT(not destroyed);
+        EP_HOST_ASSERT(not rail_balance_hybrid_plan_pending.has_value());
+        EP_HOST_ASSERT(allow_hybrid_mode);
+        EP_HOST_ASSERT(allow_multiple_reduction);
+        EP_HOST_ASSERT(num_cpu_buffer_bytes == 0);
+        EP_HOST_ASSERT(invocation_id >= 0);
+        EP_HOST_ASSERT(PyLong_CheckExact(remainder_seed.ptr()));
+
+        EP_HOST_ASSERT(x.dim() == 2 and x.is_cuda() and x.is_contiguous());
+        EP_HOST_ASSERT(x.get_device() == device_index);
+        EP_HOST_ASSERT(x.scalar_type() == torch::kBFloat16);
+        EP_HOST_ASSERT(topk_idx.dim() == 2 and topk_idx.is_cuda() and
+                       topk_idx.is_contiguous());
+        EP_HOST_ASSERT(topk_idx.get_device() == device_index);
+        EP_HOST_ASSERT(
+            topk_idx.scalar_type() ==
+            c10::CppTypeToScalarType<topk_idx_t>::value);
+        EP_HOST_ASSERT(topk_weights.dim() == 2 and
+                       topk_weights.is_cuda() and
+                       topk_weights.is_contiguous());
+        EP_HOST_ASSERT(topk_weights.get_device() == device_index);
+        EP_HOST_ASSERT(topk_weights.scalar_type() == torch::kFloat32);
+
+        const auto num_tokens_i64 = x.size(0);
+        const auto hidden_i64 = x.size(1);
+        const auto num_topk_i64 = topk_idx.size(1);
+        EP_HOST_ASSERT(num_tokens_i64 >= 0 and num_tokens_i64 <= INT_MAX);
+        EP_HOST_ASSERT(hidden_i64 > 0 and hidden_i64 <= INT_MAX);
+        EP_HOST_ASSERT(num_topk_i64 >= 1 and num_topk_i64 <= 32);
+        EP_HOST_ASSERT(topk_idx.size(0) == num_tokens_i64);
+        EP_HOST_ASSERT(topk_weights.size(0) == num_tokens_i64 and
+                       topk_weights.size(1) == num_topk_i64);
+        const int num_tokens = static_cast<int>(num_tokens_i64);
+        const int hidden = static_cast<int>(hidden_i64);
+        const int num_topk = static_cast<int>(num_topk_i64);
+        EP_HOST_ASSERT(hidden % 256 == 0);
+        EP_HOST_ASSERT(
+            static_cast<int64_t>(hidden) * sizeof(nv_bfloat16) <= INT_MAX);
+        EP_HOST_ASSERT(num_max_tokens_per_rank > 0 and
+                       num_tokens <= num_max_tokens_per_rank);
+        EP_HOST_ASSERT(num_experts > 0);
+        EP_HOST_ASSERT(num_sms >= 2 and num_sms <= kNumMaxSMs);
+        EP_HOST_ASSERT(num_sms <= jit::device_runtime->get_num_sms());
+        EP_HOST_ASSERT(num_qps > 0 and
+                       num_qps <= nccl_context->num_allocated_qps);
+        EP_HOST_ASSERT(proxy_capacity_per_egress > 0);
+
+        const int num_destinations = nccl_context->num_scaleout_ranks;
+        const int num_rails = nccl_context->num_scaleup_ranks;
+        const int scaleout_rank_idx = nccl_context->scaleout_rank_idx;
+        const int scaleup_rank_idx = nccl_context->scaleup_rank_idx;
+        const int rank_idx = nccl_context->rank_idx;
+        EP_HOST_ASSERT(num_destinations >= 2 and num_destinations <= 32);
+        EP_HOST_ASSERT(num_rails >= 2 and num_rails <= 32);
+        EP_HOST_ASSERT(nccl_context->is_scaleup_nvlink);
+        EP_HOST_ASSERT(nccl_context->num_rdma_ranks == num_destinations);
+        EP_HOST_ASSERT(nccl_context->num_nvl_ranks == num_rails);
+        EP_HOST_ASSERT(nccl_context->rdma_rank_idx == scaleout_rank_idx);
+        EP_HOST_ASSERT(nccl_context->nvl_rank_idx == scaleup_rank_idx);
+        EP_HOST_ASSERT(
+            static_cast<int>(nccl_context->nvl_window_ptrs.size()) ==
+            num_rails);
+        EP_HOST_ASSERT(
+            nccl_context->num_ranks == num_destinations * num_rails);
+        EP_HOST_ASSERT(
+            rank_idx == scaleout_rank_idx * num_rails + scaleup_rank_idx);
+        EP_HOST_ASSERT(
+            num_experts % (num_destinations * num_rails) == 0);
+        const int num_local_experts =
+            num_experts / (num_destinations * num_rails);
+        EP_HOST_ASSERT(
+            num_destinations * num_rails <=
+            layout::WorkspaceLayout::kNumMaxRanks);
+        EP_HOST_ASSERT(
+            num_experts <= layout::WorkspaceLayout::kNumMaxExperts);
+        EP_HOST_ASSERT(
+            num_local_experts <=
+            layout::WorkspaceLayout::kNumMaxExpertsPerRank);
+        EP_HOST_ASSERT(
+            static_cast<int64_t>(num_destinations) * num_rails *
+                num_max_tokens_per_rank <= INT_MAX);
+        EP_HOST_ASSERT(
+            static_cast<int64_t>(rank_idx) * num_max_tokens_per_rank +
+                (num_tokens > 0 ? num_tokens - 1 : 0) <= INT_MAX);
+
+        int expected_device = -1;
+        if (not rail_balance_hybrid_plan_process_device.compare_exchange_strong(
+                expected_device, device_index, std::memory_order_relaxed) and
+            expected_device != device_index)
+            EP_HOST_UNREACHABLE(
+                "Hybrid rail-balance planner supports one CUDA device per process");
+
+        const int num_smem_bytes =
+            jit::device_runtime->get_num_smem_bytes();
+        const int num_hidden_bytes =
+            hidden * static_cast<int>(sizeof(nv_bfloat16));
+        const auto dispatch_token_layout = get_dispatch_token_layout(
+            hidden, sizeof(nv_bfloat16), 0, num_topk);
+        const auto combine_token_layout = get_combine_token_layout(
+            hidden, sizeof(nv_bfloat16), num_topk);
+        const int notify_smem_bytes = get_num_notify_smem_bytes(
+            num_destinations * num_rails, num_experts);
+        EP_HOST_ASSERT(num_smem_bytes > notify_smem_bytes);
+        int num_channels_per_sm = std::min<int>(
+            (num_smem_bytes - notify_smem_bytes) /
+                dispatch_token_layout.get_num_bytes<true>(),
+            32 - kNumNotifyWarps);
+        num_channels_per_sm = std::min<int>(
+            num_smem_bytes /
+                combine_token_layout.get_num_bytes<true>(),
+            num_channels_per_sm);
+        num_channels_per_sm = std::min<int>(
+            num_channels_per_sm / 2, kNumMaxChannelsPerSM);
+        if (not prefer_overlap_with_compute)
+            num_channels_per_sm = std::min<int>(
+                num_channels_per_sm, 4);
+        EP_HOST_ASSERT(num_channels_per_sm > 0);
+        const int64_t num_channels_i64 =
+            static_cast<int64_t>(num_sms) * num_channels_per_sm;
+        EP_HOST_ASSERT(
+            num_channels_i64 > 0 and
+            num_channels_i64 <= rail_balance::kNumHybridMaxChannels);
+        const int num_channels = static_cast<int>(num_channels_i64);
+        const int num_max_tokens_per_channel =
+            math::ceil_div(num_max_tokens_per_rank, num_channels);
+
+        const int64_t remainder_seed_i64 = remainder_seed.cast<int64_t>();
+        EP_HOST_ASSERT(remainder_seed_i64 >= 0);
+        const int normalized_remainder_seed = static_cast<int>(
+            remainder_seed_i64 % num_rails);
+
+        // Legacy dispatch/combine may use only the prefix before the appended
+        // arena.  Checking against num_buffer_bytes would incorrectly allow a
+        // legacy layout to overlap proxy payloads (or a future CPU segment).
+        const int64_t legacy_dispatch_bytes = get_dispatch_buffer_size(
+            num_max_tokens_per_rank, hidden, 0, num_topk,
+            sizeof(nv_bfloat16), num_destinations, num_rails, true);
+        const int64_t legacy_combine_bytes = get_combine_buffer_size(
+            num_max_tokens_per_rank, hidden, num_topk,
+            num_destinations, num_rails, true, true);
+        const int64_t expected_legacy_bytes = math::align<int64_t>(
+            std::max(legacy_dispatch_bytes, legacy_combine_bytes),
+            symmetric::kNumAlignmentBytes);
+        EP_HOST_ASSERT(legacy_dispatch_bytes <= arena_offset);
+        EP_HOST_ASSERT(legacy_combine_bytes <= arena_offset);
+        EP_HOST_ASSERT(arena_offset == expected_legacy_bytes);
+        EP_HOST_ASSERT(
+            arena_offset >= 0 and
+            arena_offset % rail_balance::kNumHybridBufferAlignmentBytes == 0);
+        EP_HOST_ASSERT(arena_offset <= num_gpu_buffer_bytes);
+        auto* arena = math::advance_ptr(buffer, arena_offset);
+        const auto arena_layout = rail_balance::HybridArenaLayout(
+            hidden, num_topk, proxy_capacity_per_egress, arena);
+        EP_HOST_ASSERT(
+            arena_layout.arena_bytes <= num_gpu_buffer_bytes - arena_offset);
+        EP_HOST_ASSERT(
+            arena_offset + arena_layout.arena_bytes == num_gpu_buffer_bytes);
+
+        const c10::cuda::CUDAGuard device_guard(device_index);
+        const auto compute_stream =
+            at::cuda::getCurrentCUDAStream(device_index);
+        const auto int_options = topk_idx.options().dtype(torch::kInt);
+
+        // Allocate every plan/handle tensor before the first symmetric arena
+        // store.  Exact receive tensors remain a documented post-main local
+        // allocation because their leading dimension is not known yet.
+        auto outputs = allocate_rail_balance_hybrid_plan_outputs(
+            int_options, num_rails, num_channels, num_destinations);
+        auto copied_topk_idx = torch::empty_like(topk_idx);
+        auto psum_num_recv_tokens_per_scaleup_rank = torch::empty(
+            {num_rails}, int_options);
+        auto psum_num_recv_tokens_per_expert_storage = torch::empty(
+            {num_local_experts + 1}, int_options);
+        auto psum_num_recv_tokens_per_expert =
+            psum_num_recv_tokens_per_expert_storage.slice(
+                0, 1, num_local_experts + 1);
+        auto num_unaligned_recv_tokens_per_expert = torch::empty(
+            {num_local_experts}, int_options);
+        auto dst_buffer_slot_idx = torch::empty(
+            {num_channels, num_destinations,
+             num_max_tokens_per_channel, num_topk}, int_options);
+        auto token_metadata_at_forward = torch::empty(
+            {num_channels,
+             num_destinations * num_max_tokens_per_channel + 1,
+             3 + num_topk * 2}, int_options);
+        auto channel_linked_list = torch::empty(
+            {num_channels,
+             num_destinations * num_max_tokens_per_channel + 1,
+             num_rails}, int_options);
+        auto cumulative_stats =
+            cumulative_local_expert_recv_stats.value_or(torch::Tensor());
+        if (cumulative_stats.defined()) {
+            EP_HOST_ASSERT(cumulative_stats.dim() == 1 and
+                           cumulative_stats.is_cuda() and
+                           cumulative_stats.is_contiguous());
+            EP_HOST_ASSERT(cumulative_stats.get_device() == device_index);
+            EP_HOST_ASSERT(cumulative_stats.scalar_type() == torch::kInt32);
+            EP_HOST_ASSERT(cumulative_stats.size(0) == num_local_experts);
+        }
+
+        // Cold JIT, layout validation, and every LaunchArgs derivation for the
+        // whole round trip remain on the pre-Gate1 side.
+        auto prepared_plan = prepare_rail_balance_hybrid_plan(
+            1, num_rails, num_channels, num_destinations);
+        auto local_barrier = prepare_rail_balance_hybrid_local_barrier(
+            num_rails, num_gpu_timeout_cycles);
+        auto source_shuffle =
+            std::make_shared<PreparedRailBalanceHybridSourceShuffle>(
+                prepare_rail_balance_hybrid_source_shuffle(
+                    hidden, num_topk, num_channels, num_tokens));
+        const RailBalanceHybridDispatchSpec dispatch_spec = {
+            .num_sms = num_sms,
+            .num_notify_warps = kNumNotifyWarps,
+            .num_scaleout_warps = num_channels_per_sm,
+            .num_forward_warps = num_channels_per_sm,
+            .num_scaleout_ranks = num_destinations,
+            .num_scaleup_ranks = num_rails,
+            .num_hidden_bytes = num_hidden_bytes,
+            .num_max_tokens_per_rank = num_max_tokens_per_rank,
+            .num_experts = num_experts,
+            .num_topk = num_topk,
+            .expert_alignment = 1,
+            .num_qps = num_qps,
+            .num_timeout_cycles = num_gpu_timeout_cycles,
+            .num_smem_bytes = num_smem_bytes,
+            .proxy_capacity = proxy_capacity_per_egress,
+        };
+        auto main_dispatch =
+            std::make_shared<PreparedRailBalanceHybridDispatch>(
+                prepare_rail_balance_hybrid_dispatch(dispatch_spec));
+        const int num_physical_sms = jit::device_runtime->get_num_sms();
+        auto dispatch_epilogue =
+            std::make_shared<PreparedRailBalanceHybridDispatchEpilogue>(
+                prepare_rail_balance_hybrid_dispatch_epilogue(
+                    hidden, num_max_tokens_per_rank, num_experts, num_topk,
+                    num_destinations, num_rails, num_physical_sms,
+                    num_channels));
+        const RailBalanceHybridCombineSpec combine_spec = {
+            .num_sms = num_sms,
+            .num_scaleup_warps = num_channels_per_sm,
+            .num_forward_warps = num_channels_per_sm,
+            .num_scaleout_ranks = num_destinations,
+            .num_scaleup_ranks = num_rails,
+            .hidden = hidden,
+            .num_max_tokens_per_rank = num_max_tokens_per_rank,
+            .num_experts = num_experts,
+            .num_topk = num_topk,
+            .num_qps = num_qps,
+            .num_timeout_cycles = num_gpu_timeout_cycles,
+            .num_smem_bytes = num_smem_bytes,
+        };
+        auto main_combine =
+            std::make_shared<PreparedRailBalanceHybridCombine>(
+                prepare_rail_balance_hybrid_combine(combine_spec));
+        auto return_unshuffle =
+            std::make_shared<PreparedRailBalanceHybridReturnUnshuffle>(
+                prepare_rail_balance_hybrid_return_unshuffle(
+                    hidden, num_topk, num_channels));
+        auto combine_epilogue =
+            std::make_shared<PreparedRailBalanceHybridCombineEpilogue>(
+                prepare_rail_balance_hybrid_combine_epilogue(
+                    hidden, num_max_tokens_per_rank, num_experts, num_topk,
+                    num_destinations, num_rails));
+
+        auto* local_channel_count = arena_layout.get_channel_count_ptr();
+        RailBalanceHybridPlanRawPointers plan_raw = {
+            .channel_count = outputs.channel_count.data_ptr<int>(),
+            .count = outputs.count.data_ptr<int>(),
+            .quota = outputs.quota.data_ptr<int>(),
+            .keep_count = outputs.keep_count.data_ptr<int>(),
+            .segments = outputs.segments.data_ptr<int>(),
+            .num_segments = outputs.num_segments.data_ptr<int>(),
+            .owner_channel_prefix =
+                outputs.owner_channel_prefix.data_ptr<int>(),
+            .retained = outputs.retained.data_ptr<int>(),
+            .moved = outputs.moved.data_ptr<int>(),
+            .moved_channel_prefix =
+                outputs.moved_channel_prefix.data_ptr<int>(),
+            .group_prefix = outputs.group_prefix.data_ptr<int>(),
+            .proxy_required = outputs.proxy_required.data_ptr<int>(),
+            .moved_copies = outputs.moved_copies.data_ptr<int>(),
+            .status = outputs.status.data_ptr<int>(),
+            .local_channel_count = local_channel_count,
+            .peer_channel_count = {},
+        };
+        for (int peer = 0; peer < num_rails; ++peer) {
+            plan_raw.peer_channel_count[peer] = static_cast<const int*>(
+                nccl_context->get_sym_ptr(local_channel_count, peer));
+        }
+
+        auto host_workspace_layout = layout::WorkspaceLayout(
+            host_workspace, num_destinations, num_rails, num_experts);
+        auto* host_scaleup_rank_count =
+            host_workspace_layout.get_scaleup_rank_count_ptr<false>();
+        auto* host_expert_count =
+            host_workspace_layout.get_scaleup_expert_count_ptr<false>();
+        std::fill_n(host_scaleup_rank_count, num_rails, 0);
+        std::fill_n(host_expert_count, num_local_experts, 0);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+
+        RailBalanceHybridDispatchRawPointers dispatch_raw = {
+            .x = x.data_ptr(),
+            .topk_idx = topk_idx.data_ptr<topk_idx_t>(),
+            .topk_weights = topk_weights.data_ptr<float>(),
+            .copied_topk_idx = copied_topk_idx.data_ptr<topk_idx_t>(),
+            .cumulative_local_expert_recv_stats =
+                cumulative_stats.defined() ?
+                    cumulative_stats.data_ptr<int>() : nullptr,
+            .psum_num_recv_tokens_per_scaleup_rank =
+                psum_num_recv_tokens_per_scaleup_rank.data_ptr<int>(),
+            .psum_num_recv_tokens_per_expert =
+                psum_num_recv_tokens_per_expert_storage.data_ptr<int>(),
+            .num_unaligned_recv_tokens_per_expert =
+                num_unaligned_recv_tokens_per_expert.data_ptr<int>(),
+            .dst_buffer_slot_idx = dst_buffer_slot_idx.data_ptr<int>(),
+            .token_metadata_at_forward =
+                token_metadata_at_forward.data_ptr<int>(),
+            .channel_linked_list = channel_linked_list.data_ptr<int>(),
+            .buffer = buffer,
+            .workspace = workspace,
+            .mapped_host_workspace = mapped_host_workspace,
+            .arena = arena,
+            .proxy_dispatch_base = arena_layout
+                .get_proxy_dispatch_layout(0).get_base_ptr(),
+            .proxy_return_base = arena_layout
+                .get_proxy_return_layout(0).get_base_ptr(),
+            .legacy_reduce_buffer_base =
+                get_rail_balance_hybrid_legacy_reduce_buffer_base(
+                    *main_combine, buffer),
+            .host_scaleup_rank_count = host_scaleup_rank_count,
+            .host_expert_count = host_expert_count,
+            .owner_channel_prefix = plan_raw.owner_channel_prefix,
+            .keep_count = plan_raw.keep_count,
+            .segments = plan_raw.segments,
+            .num_segments = plan_raw.num_segments,
+            .retained = plan_raw.retained,
+            .moved = plan_raw.moved,
+            .moved_channel_prefix = plan_raw.moved_channel_prefix,
+            .group_prefix = plan_raw.group_prefix,
+            .proxy_required = plan_raw.proxy_required,
+            .status = plan_raw.status,
+        };
+
+        auto dispatch_bundle =
+            std::make_shared<RailBalanceHybridDispatchBundle>(
+                RailBalanceHybridDispatchBundle{
+                    .x = x,
+                    .topk_idx = topk_idx,
+                    .topk_weights = topk_weights,
+                    .cumulative_local_expert_recv_stats = cumulative_stats,
+                    .copied_topk_idx = std::move(copied_topk_idx),
+                    .psum_num_recv_tokens_per_scaleup_rank =
+                        std::move(psum_num_recv_tokens_per_scaleup_rank),
+                    .psum_num_recv_tokens_per_expert_storage =
+                        std::move(psum_num_recv_tokens_per_expert_storage),
+                    .psum_num_recv_tokens_per_expert =
+                        std::move(psum_num_recv_tokens_per_expert),
+                    .num_unaligned_recv_tokens_per_expert =
+                        std::move(num_unaligned_recv_tokens_per_expert),
+                    .dst_buffer_slot_idx =
+                        std::move(dst_buffer_slot_idx),
+                    .token_metadata_at_forward =
+                        std::move(token_metadata_at_forward),
+                    .channel_linked_list =
+                        std::move(channel_linked_list),
+                    .main_dispatch = std::move(main_dispatch),
+                    .dispatch_epilogue = std::move(dispatch_epilogue),
+                    .main_combine = std::move(main_combine),
+                    .raw = dispatch_raw,
+                    .compute_stream = compute_stream,
+                    .num_tokens = num_tokens,
+                    .hidden = hidden,
+                    .num_topk = num_topk,
+                    .num_max_tokens_per_rank = num_max_tokens_per_rank,
+                    .num_experts = num_experts,
+                    .num_local_experts = num_local_experts,
+                    .num_rails = num_rails,
+                    .num_destinations = num_destinations,
+                    .num_channels = num_channels,
+                    .num_channels_per_sm = num_channels_per_sm,
+                    .num_max_tokens_per_channel =
+                        num_max_tokens_per_channel,
+                    .num_sms = num_sms,
+                    .num_qps = num_qps,
+                    .num_smem_bytes = num_smem_bytes,
+                    .num_physical_sms = num_physical_sms,
+                    .scaleout_rank_idx = scaleout_rank_idx,
+                    .scaleup_rank_idx = scaleup_rank_idx,
+                    .rank_idx = rank_idx,
+                    .proxy_capacity_per_egress =
+                        proxy_capacity_per_egress,
+                    .arena_offset = arena_offset,
+                    .arena_bytes = arena_layout.arena_bytes,
+                });
+
+        // All caller-stream initializers and allocations above are now ordered
+        // before comm-stream count/finish/commit.  Event construction is
+        // intentionally pre-Gate1 because it may throw.
+        if (comm_stream.id() != compute_stream.id())
+            stream_wait(comm_stream, compute_stream);
+
+        const int64_t active_count_values =
+            static_cast<int64_t>(num_channels) * num_destinations;
+        EP_HOST_ASSERT(active_count_values > 0 and
+                       active_count_values <= INT_MAX);
+        const auto active_count_bytes = static_cast<size_t>(
+            active_count_values * sizeof(int));
+        const auto local_barrier_launch_args = jit::LaunchArgs(
+            1, 512, 0, 1, true);
+
+        // PREPARING owns every resource before the first symmetric arena
+        // store.  A launch/synchronization exception is therefore recoverable
+        // by the invocation-scoped precommit abort after WORLD Gate #1.
+        rail_balance_hybrid_plan_pending.emplace(
+            RailBalanceHybridPlanPending{
+                .invocation_id = invocation_id,
+                .state = RailBalanceHybridPlanState::Preparing,
+                .shuffled = false,
+                .return_unshuffle_tested = false,
+                .combine_epilogue_tested = false,
+                .plan_status = -1,
+                .num_rails = num_rails,
+                .num_channels = num_channels,
+                .num_destinations = num_destinations,
+                .local_destination = scaleout_rank_idx,
+                .num_tokens = num_tokens,
+                .num_topk = num_topk,
+                .hidden = hidden,
+                .num_experts = num_experts,
+                .num_max_tokens_per_rank = num_max_tokens_per_rank,
+                .proxy_capacity_per_egress = proxy_capacity_per_egress,
+                .normalized_remainder_seed = normalized_remainder_seed,
+                .arena_offset = arena_offset,
+                .active_count_values = active_count_values,
+                .active_count_bytes = active_count_bytes,
+                .arena = arena,
+                .local_channel_count = local_channel_count,
+                .raw = plan_raw,
+                .topk_idx = topk_idx,
+                .prepared = std::move(prepared_plan),
+                .local_barrier_launch_args = local_barrier_launch_args,
+                .local_barrier = std::move(local_barrier),
+                .source_shuffle = std::move(source_shuffle),
+                .return_unshuffle = std::move(return_unshuffle),
+                .combine_epilogue = std::move(combine_epilogue),
+                .dispatch_bundle = std::move(dispatch_bundle),
+                .outputs = std::move(outputs),
+            });
+        auto& pending = rail_balance_hybrid_plan_pending.value();
+        launch_prepared_rail_balance_hybrid_count(
+            pending.prepared, pending.dispatch_bundle->raw.topk_idx,
+            pending.raw.local_channel_count, pending.raw.status,
+            1, num_tokens, num_topk, num_channels,
+            num_experts, num_destinations, scaleout_rank_idx, comm_stream);
+
+        int host_status = 0;
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            &host_status, pending.raw.status, sizeof(host_status),
+            cudaMemcpyDeviceToHost, comm_stream));
+        CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
+        EP_HOST_ASSERT(host_status == 0 or host_status == 2 or
+                       host_status == 3);
+
+        return {
+            host_status,
+            num_channels,
+            num_channels_per_sm,
+            num_destinations,
+            num_rails,
+            hidden,
+            num_topk,
+            num_max_tokens_per_rank,
+            num_experts,
+            proxy_capacity_per_egress,
+            num_sms,
+            dispatch_spec.num_notify_warps,
+            dispatch_spec.num_scaleout_warps,
+            dispatch_spec.num_forward_warps,
+            num_smem_bytes,
+            num_qps,
+            num_gpu_timeout_cycles,
+            arena_offset,
+            arena_layout.arena_bytes,
+            3 + num_topk * 2,
+        };
     }
 
     RailBalanceHybridPlanTensors rail_balance_hybrid_plan_finish(
@@ -454,55 +997,47 @@ public:
         const c10::cuda::CUDAGuard device_guard(device_index);
         // WORLD Gate #1 is owned by Python. Once it succeeds, every local rank
         // consumes exactly one monotonic legacy-workspace barrier epoch.
-        launch_prepared_rail_balance_hybrid_local_barrier(
+        submit_prepared_rail_balance_hybrid_local_barrier(
             pending.local_barrier,
+            pending.local_barrier_launch_args,
             nccl_context->dev_comm, nccl_context->window,
             workspace,
             pending.num_rails, nccl_context->nvl_rank_idx,
             num_gpu_timeout_cycles, comm_stream);
 
-        const int64_t active_count_values =
-            static_cast<int64_t>(pending.num_channels) *
-            pending.num_destinations;
-        EP_HOST_ASSERT(active_count_values > 0 and
-                       active_count_values <= INT_MAX);
-        const auto active_count_bytes = static_cast<size_t>(
-            active_count_values * sizeof(int));
-        auto* snapshot = pending.outputs.channel_count.data_ptr<int>();
+        auto* snapshot = pending.raw.channel_count;
         for (int lsa_owner = 0; lsa_owner < pending.num_rails; ++lsa_owner) {
-            const auto* peer_count = static_cast<const int*>(
-                nccl_context->get_sym_ptr(
-                    pending.local_channel_count, lsa_owner));
             CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
-                snapshot + lsa_owner * active_count_values,
-                peer_count, active_count_bytes,
+                snapshot + lsa_owner * pending.active_count_values,
+                pending.raw.peer_channel_count[lsa_owner],
+                pending.active_count_bytes,
                 cudaMemcpyDeviceToDevice, comm_stream));
         }
 
         launch_prepared_rail_balance_hybrid_plan(
             pending.prepared,
-            pending.outputs.channel_count.data_ptr<int>(),
-            pending.outputs.count.data_ptr<int>(),
-            pending.outputs.quota.data_ptr<int>(),
-            pending.outputs.keep_count.data_ptr<int>(),
-            pending.outputs.segments.data_ptr<int>(),
-            pending.outputs.num_segments.data_ptr<int>(),
+            pending.raw.channel_count,
+            pending.raw.count,
+            pending.raw.quota,
+            pending.raw.keep_count,
+            pending.raw.segments,
+            pending.raw.num_segments,
             pending.num_rails, pending.num_channels,
             pending.num_destinations,
             pending.normalized_remainder_seed, comm_stream);
         launch_prepared_rail_balance_hybrid_prefix(
             pending.prepared,
-            pending.outputs.channel_count.data_ptr<int>(),
-            pending.outputs.quota.data_ptr<int>(),
-            pending.outputs.keep_count.data_ptr<int>(),
-            pending.outputs.owner_channel_prefix.data_ptr<int>(),
-            pending.outputs.retained.data_ptr<int>(),
-            pending.outputs.moved.data_ptr<int>(),
-            pending.outputs.moved_channel_prefix.data_ptr<int>(),
-            pending.outputs.group_prefix.data_ptr<int>(),
-            pending.outputs.proxy_required.data_ptr<int>(),
-            pending.outputs.moved_copies.data_ptr<int>(),
-            pending.outputs.status.data_ptr<int>(),
+            pending.raw.channel_count,
+            pending.raw.quota,
+            pending.raw.keep_count,
+            pending.raw.owner_channel_prefix,
+            pending.raw.retained,
+            pending.raw.moved,
+            pending.raw.moved_channel_prefix,
+            pending.raw.group_prefix,
+            pending.raw.proxy_required,
+            pending.raw.moved_copies,
+            pending.raw.status,
             pending.num_rails, pending.num_channels,
             pending.num_destinations,
             pending.num_max_tokens_per_rank,
@@ -510,7 +1045,7 @@ public:
 
         int host_status = 0;
         CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
-            &host_status, pending.outputs.status.data_ptr<int>(),
+            &host_status, pending.raw.status,
             sizeof(host_status), cudaMemcpyDeviceToHost, comm_stream));
         CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
         EP_HOST_ASSERT(host_status == 0 or host_status == 1);
@@ -848,9 +1383,16 @@ public:
             rail_balance_hybrid_plan_pending->invocation_id == invocation_id) {
             const auto state = rail_balance_hybrid_plan_pending->state;
             if (state == RailBalanceHybridPlanState::Preparing or
-                state == RailBalanceHybridPlanState::PlanReady)
+                state == RailBalanceHybridPlanState::PlanReady) {
+                // Preparing owns pointers already visible to comm_stream.  A
+                // failed enqueue/readback may leave count work in flight, so
+                // quiesce it before releasing the backing tensors.  Preserve
+                // fail-close cleanup even when CUDA reports an async error.
+                const auto stream_status =
+                    cudaStreamSynchronize(comm_stream);
                 rail_balance_hybrid_plan_pending.reset();
-            else if (state == RailBalanceHybridPlanState::DispatchLive)
+                CUDA_RUNTIME_CHECK(stream_status);
+            } else if (state == RailBalanceHybridPlanState::DispatchLive)
                 rail_balance_hybrid_plan_pending->state =
                     RailBalanceHybridPlanState::Invalid;
         }
@@ -1170,7 +1712,8 @@ public:
 
         // Every cold-build failure remains pre-commit.  finish performs no
         // build, allocation, tensor validation, or quota compaction.
-        auto prepared_plan = prepare_rail_balance_hybrid_plan();
+        auto prepared_plan = prepare_rail_balance_hybrid_plan(
+            1, num_source_ranks, num_channels, num_destinations);
         auto prepared_adapter = prepare_rail_balance_hybrid_vnode(
             hidden, num_topk);
         auto prepared_vnode = prepare_rail_balance_vnode(hidden, num_topk);
@@ -4216,6 +4759,21 @@ static void register_apis(pybind11::module_& m) {
         .def("get_comm_stream", &ElasticBuffer::get_comm_stream)
         .def("get_physical_domain_size", &ElasticBuffer::get_physical_domain_size)
         .def("get_logical_domain_size", &ElasticBuffer::get_logical_domain_size)
+        .def(
+            "_rail_balance_hybrid_dispatch_prepare",
+            &ElasticBuffer::rail_balance_hybrid_dispatch_prepare,
+            pybind11::arg("x"),
+            pybind11::arg("topk_idx"),
+            pybind11::arg("topk_weights"),
+            pybind11::arg("cumulative_local_expert_recv_stats"),
+            pybind11::arg("num_max_tokens_per_rank"),
+            pybind11::arg("num_experts"),
+            pybind11::arg("num_sms"),
+            pybind11::arg("num_qps"),
+            pybind11::arg("proxy_capacity_per_egress"),
+            pybind11::arg("arena_offset"),
+            pybind11::arg("invocation_id"),
+            pybind11::arg("remainder_seed") = pybind11::int_(0))
         .def(
             "_rail_balance_hybrid_plan_prepare",
             &ElasticBuffer::rail_balance_hybrid_plan_prepare,

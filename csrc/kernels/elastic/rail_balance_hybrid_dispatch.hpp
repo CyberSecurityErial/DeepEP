@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <climits>
 #include <cstdint>
@@ -21,6 +22,8 @@
 namespace deep_ep::elastic {
 
 struct PreparedRailBalanceHybridCombineEpilogue;
+struct PreparedRailBalanceHybridCombine;
+struct PreparedRailBalanceHybridDispatchEpilogue;
 struct PreparedRailBalanceHybridSourceShuffle;
 struct PreparedRailBalanceHybridReturnUnshuffle;
 
@@ -678,8 +681,9 @@ prepare_rail_balance_hybrid_local_barrier(
         RailBalanceHybridLocalBarrierRuntime::generate(args));
 }
 
-static void launch_prepared_rail_balance_hybrid_local_barrier(
+static void submit_prepared_rail_balance_hybrid_local_barrier(
     const std::shared_ptr<jit::KernelRuntime>& prepared,
+    const jit::LaunchArgs& launch_args,
     const jit::NoRefPtr& nccl_dev_comm,
     const ncclWindow_t& nccl_window,
     void* workspace,
@@ -694,15 +698,33 @@ static void launch_prepared_rail_balance_hybrid_local_barrier(
         .nccl_window = nccl_window,
         .workspace = workspace,
         .nvl_rank_idx = nvl_rank_idx,
-        .launch_args = jit::LaunchArgs(1, 512, 0, 1, true),
+        .launch_args = launch_args,
     };
     RailBalanceHybridLocalBarrierRuntime::launch(prepared, args, stream);
+}
+
+static void launch_prepared_rail_balance_hybrid_local_barrier(
+    const std::shared_ptr<jit::KernelRuntime>& prepared,
+    const jit::NoRefPtr& nccl_dev_comm,
+    const ncclWindow_t& nccl_window,
+    void* workspace,
+    const int& num_rails,
+    const int& nvl_rank_idx,
+    const int64_t& num_timeout_cycles,
+    const at::cuda::CUDAStream& stream) {
+    const auto launch_args = jit::LaunchArgs(1, 512, 0, 1, true);
+    submit_prepared_rail_balance_hybrid_local_barrier(
+        prepared, launch_args, nccl_dev_comm, nccl_window, workspace,
+        num_rails, nvl_rank_idx, num_timeout_cycles, stream);
 }
 
 struct PreparedRailBalanceHybridPlan {
     std::shared_ptr<jit::KernelRuntime> count;
     std::shared_ptr<jit::KernelRuntime> plan;
     std::shared_ptr<jit::KernelRuntime> prefix;
+    jit::LaunchArgs count_launch_args;
+    jit::LaunchArgs plan_launch_args;
+    jit::LaunchArgs prefix_launch_args;
 };
 
 // Named storage keeps the production-shaped two-phase transaction readable;
@@ -774,6 +796,119 @@ enum class RailBalanceHybridPlanState : uint8_t {
     Invalid,
 };
 
+// Gate #1 freezes every pointer which finish-plan and the later committed
+// dispatch consume.  Keeping these as raw, non-owning views is safe because
+// RailBalanceHybridPlanPending owns all backing tensors and the symmetric
+// window for the whole transaction.
+struct RailBalanceHybridPlanRawPointers {
+    int* channel_count;
+    int* count;
+    int* quota;
+    int* keep_count;
+    int* segments;
+    int* num_segments;
+    int* owner_channel_prefix;
+    int* retained;
+    int* moved;
+    int* moved_channel_prefix;
+    int* group_prefix;
+    int* proxy_required;
+    int* moved_copies;
+    int* status;
+    int* local_channel_count;
+    std::array<const int*, 32> peer_channel_count;
+};
+
+struct RailBalanceHybridDispatchRawPointers {
+    void* x;
+    topk_idx_t* topk_idx;
+    float* topk_weights;
+    topk_idx_t* copied_topk_idx;
+    int* cumulative_local_expert_recv_stats;
+    int* psum_num_recv_tokens_per_scaleup_rank;
+    int* psum_num_recv_tokens_per_expert;
+    int* num_unaligned_recv_tokens_per_expert;
+    int* dst_buffer_slot_idx;
+    int* token_metadata_at_forward;
+    int* channel_linked_list;
+    void* buffer;
+    void* workspace;
+    void* mapped_host_workspace;
+    void* arena;
+    void* proxy_dispatch_base;
+    void* proxy_return_base;
+    void* legacy_reduce_buffer_base;
+    int64_t* host_scaleup_rank_count;
+    int64_t* host_expert_count;
+    const int* owner_channel_prefix;
+    const int* keep_count;
+    const int* segments;
+    const int* num_segments;
+    const int* retained;
+    const int* moved;
+    const int* moved_channel_prefix;
+    const int* group_prefix;
+    const int* proxy_required;
+    int* status;
+};
+
+// The first force dispatch prepares the complete round trip.  Receive payload
+// tensors are deliberately absent: their exact leading dimension is only
+// known after the main dispatch publishes CPU counts.  Every other Tensor,
+// cubin, LaunchArgs, and pointer required by dispatch/combine is owned here
+// before WORLD Gate #1.
+struct RailBalanceHybridDispatchBundle {
+    torch::Tensor x;
+    torch::Tensor topk_idx;
+    torch::Tensor topk_weights;
+    torch::Tensor cumulative_local_expert_recv_stats;
+    torch::Tensor copied_topk_idx;
+    torch::Tensor psum_num_recv_tokens_per_scaleup_rank;
+    torch::Tensor psum_num_recv_tokens_per_expert_storage;
+    torch::Tensor psum_num_recv_tokens_per_expert;
+    torch::Tensor num_unaligned_recv_tokens_per_expert;
+    torch::Tensor dst_buffer_slot_idx;
+    torch::Tensor token_metadata_at_forward;
+    torch::Tensor channel_linked_list;
+
+    std::shared_ptr<PreparedRailBalanceHybridDispatch> main_dispatch;
+    std::shared_ptr<PreparedRailBalanceHybridDispatchEpilogue>
+        dispatch_epilogue;
+    std::shared_ptr<PreparedRailBalanceHybridCombine> main_combine;
+
+    RailBalanceHybridDispatchRawPointers raw;
+    at::cuda::CUDAStream compute_stream;
+    int num_tokens;
+    int hidden;
+    int num_topk;
+    int num_max_tokens_per_rank;
+    int num_experts;
+    int num_local_experts;
+    int num_rails;
+    int num_destinations;
+    int num_channels;
+    int num_channels_per_sm;
+    int num_max_tokens_per_channel;
+    int num_sms;
+    int num_qps;
+    int num_smem_bytes;
+    int num_physical_sms;
+    int scaleout_rank_idx;
+    int scaleup_rank_idx;
+    int rank_idx;
+    int proxy_capacity_per_egress;
+    int64_t arena_offset;
+    int64_t arena_bytes;
+};
+
+// Fixed production prepare result.  It is sufficient to encode Gate #1
+// without recomputing topology or launch geometry in Python.  N and local
+// rank identities are intentionally absent because they may differ by rank.
+using RailBalanceHybridDispatchPrepareResult = std::tuple<
+    int, int, int, int, int, int, int, int, int, int,
+    int, int, int, int, int, int,
+    int64_t, int64_t, int64_t, int>;
+
 // One private prepare may be live per ElasticBuffer. PlanReady remains live
 // across the caller's Gate #2 and is released only by the explicit abort for
 // now; C080's source-shuffle commit will own the next state transition.
@@ -796,10 +931,14 @@ struct RailBalanceHybridPlanPending {
     int proxy_capacity_per_egress;
     int normalized_remainder_seed;
     int64_t arena_offset;
+    int64_t active_count_values;
+    size_t active_count_bytes;
     void* arena;
     int* local_channel_count;
+    RailBalanceHybridPlanRawPointers raw;
     torch::Tensor topk_idx;
     PreparedRailBalanceHybridPlan prepared;
+    jit::LaunchArgs local_barrier_launch_args;
     std::shared_ptr<jit::KernelRuntime> local_barrier;
     std::shared_ptr<PreparedRailBalanceHybridSourceShuffle>
         source_shuffle;
@@ -807,10 +946,22 @@ struct RailBalanceHybridPlanPending {
         return_unshuffle;
     std::shared_ptr<PreparedRailBalanceHybridCombineEpilogue>
         combine_epilogue;
+    std::shared_ptr<RailBalanceHybridDispatchBundle> dispatch_bundle;
     RailBalanceHybridPlanOutputs outputs;
 };
 
-static PreparedRailBalanceHybridPlan prepare_rail_balance_hybrid_plan() {
+static PreparedRailBalanceHybridPlan prepare_rail_balance_hybrid_plan(
+    const int& num_owners,
+    const int& num_rails,
+    const int& num_channels,
+    const int& num_destinations) {
+    EP_HOST_ASSERT(num_owners >= 1 and num_owners <= 32);
+    EP_HOST_ASSERT(num_rails >= 1 and num_rails <= 32);
+    EP_HOST_ASSERT(num_channels >= 1 and
+                   num_channels <= rail_balance::kNumHybridMaxChannels);
+    EP_HOST_ASSERT(num_destinations >= 1 and
+                   num_destinations <=
+                       rail_balance::kNumHybridMaxDestinations);
     const RailBalanceHybridCountRuntime::Args count_args = {
         .topk_idx = nullptr,
         .channel_count = nullptr,
@@ -866,6 +1017,10 @@ static PreparedRailBalanceHybridPlan prepare_rail_balance_hybrid_plan() {
         .prefix = jit::compiler->build(
             "rail_balance_hybrid_prefix_v1",
             RailBalanceHybridPrefixRuntime::generate(prefix_args)),
+        .count_launch_args = jit::LaunchArgs(
+            num_owners * num_channels, 32),
+        .plan_launch_args = jit::LaunchArgs(num_destinations, 32),
+        .prefix_launch_args = jit::LaunchArgs(num_rails, 32),
     };
 }
 
@@ -893,7 +1048,7 @@ static void launch_prepared_rail_balance_hybrid_count(
         .num_experts = num_experts,
         .num_destinations = num_destinations,
         .local_destination = local_destination,
-        .launch_args = jit::LaunchArgs(num_owners * num_channels, 32),
+        .launch_args = prepared.count_launch_args,
     };
     RailBalanceHybridCountRuntime::launch(prepared.count, args, stream);
 }
@@ -922,7 +1077,7 @@ static void launch_prepared_rail_balance_hybrid_plan(
         .num_channels = num_channels,
         .num_destinations = num_destinations,
         .remainder_seed = remainder_seed,
-        .launch_args = jit::LaunchArgs(num_destinations, 32),
+        .launch_args = prepared.plan_launch_args,
     };
     RailBalanceHybridPlanRuntime::launch(prepared.plan, args, stream);
 }
@@ -963,7 +1118,7 @@ static void launch_prepared_rail_balance_hybrid_prefix(
         .num_destinations = num_destinations,
         .num_max_tokens_per_rank = num_max_tokens_per_rank,
         .proxy_capacity_per_egress = proxy_capacity_per_egress,
-        .launch_args = jit::LaunchArgs(num_rails, 32),
+        .launch_args = prepared.prefix_launch_args,
     };
     RailBalanceHybridPrefixRuntime::launch(prepared.prefix, args, stream);
 }
@@ -1064,7 +1219,8 @@ static RailBalanceHybridPlanTensors build_rail_balance_hybrid_plan(
 
     // All three cubins are built before validation.  No JIT or allocation is
     // allowed between a successful validation gate and a future collective.
-    const auto prepared = prepare_rail_balance_hybrid_plan();
+    const auto prepared = prepare_rail_balance_hybrid_plan(
+        num_rails, num_rails, num_channels, num_destinations);
     launch_prepared_rail_balance_hybrid_count(
         prepared, topk_idx.data_ptr<topk_idx_t>(),
         channel_count.data_ptr<int>(), status.data_ptr<int>(),
