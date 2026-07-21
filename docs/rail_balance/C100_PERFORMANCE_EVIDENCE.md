@@ -12,7 +12,7 @@ environment manifest: FROZEN
 large source fixture: FUNCTIONAL_PASS, UNPROFILED
 large return fixture: FUNCTIONAL_PASS, UNPROFILED
 checked-adapter benchmark harness: AUDITED_PASS
-profiler-free baseline: SOURCE_AND_RETURN_H256_COLLECTED, TAIL_STABILITY_NOT_ACCEPTED
+profiler-free baseline: SOURCE_AND_RETURN_COLLECTED, TAIL_STABILITY_NOT_ACCEPTED
 new Nsys attribution: NOT_COLLECTED
 new NCU dossier: NOT_COLLECTED
 performance-path change: NONE
@@ -343,6 +343,49 @@ global maximum and a 1.324 ms rank-local maximum.  Return-H7168 must be
 collected next.  Nsys will then classify the retained tails before any NCU
 target or hot-path change is selected.
 
+## OMP-controlled return-H7168 collection — commit `57b69a9`
+
+The final profiler-free group has accepted set `{r1,r3,r4}`.  Each accepted
+report uses OMP=1, 10 warmup and 100 steady samples, passes every automatic
+gate, and preserves raw per-rank intervals.  Typical latency is repeatable,
+but the tails are not:
+
+| Run | Global median/p95/p99 (us) | Global CV/max | Rank-local-max median/p95/p99 (us) | Rank-local CV/max |
+| --- | --- | --- | --- | --- |
+| 1 | 341.347 / 370.748 / 441.746 | 18.16% / 963.464 | 337.711 / 365.133 / 440.255 | 17.61% / 937.534 |
+| 3 | 333.450 / 358.622 / 420.693 | 7.32% / 523.725 | 330.693 / 356.701 / 410.068 | 6.61% / 499.080 |
+| 4 | 335.065 / 358.999 / 1753.062 | 59.27% / 2021.557 | 331.282 / 351.044 / 1725.706 | 59.37% / 2008.428 |
+| pooled | 337.631 / 363.655 / 528.122 | 37.59% / 2021.557 | 334.003 / 359.490 / 503.465 | 37.49% / 2008.428 |
+
+Global and rank-local run medians span only 2.37% and 2.12%, respectively.
+The large events are nevertheless rank-local and retained: r1 steady sample 5
+has a 937.534 us rank-1 envelope, while r4 samples 45 and 56 have 1722.850 us
+rank-5 and 2008.428 us rank-3 envelopes.  The changing rank and iteration do
+not support a fixed-GPU or fixed-input conclusion.
+
+Run 2 is rejected.  Another Codex session launched an eight-rank
+`dlb_ep8_dispatch_demo.py --tokens-per-rank 2048 --experts-per-rank 32` after
+preflight.  Post-measurement found PIDs 1155497/1155498/1155499/1155500/
+1155501/1155504/1155506/1155508 and the report set
+`baseline_collection_eligible=false`.  The demo had already exited when
+identified, so no unrelated Codex process was killed.  Its 6.938 ms maximum is
+not part of any accepted statistic.
+
+The complete verified manifest is local at
+`.cache/rail_balance/c100/formal-omp1/57b69a9/`:
+
+```text
+995a543a76320cb4de069fc8397def08c558ecaabca253eab144babd4a26e897  return-h7168-r1.json
+428947471c62f5ef8ce7c9daa4593f04590be278b53f559e5cd53bd372ed7402  return-h7168-r2.json  # rejected: concurrent DeepEP demo
+5c1239ee5cf072728c7aa9c1d4cca77c716d74eecb897658c7251d282fb87a5b  return-h7168-r3.json
+ffc08d7a8f623a68814eb874a415cfac7919c6f35e4bdd9294bb80fa82367c69  return-h7168-r4.json
+```
+
+Profiler-free source and return collection is now complete for H256 and
+H7168.  It establishes repeatable medians, not stable p95/p99 tails or a GPU
+kernel root cause.  The next experiment is a separate Nsys run for variability
+and exposed-critical-path attribution; NCU and hot-path changes remain blocked.
+
 ## Environment manifest — 2026-07-21 UTC
 
 ### Host and GPU management view
@@ -484,10 +527,9 @@ No old report may be relabelled as evidence for the new 7,168-record fixture.
 1. Explanation for the H200 operational target versus the management labels,
    compute-capability field and P2P `NS` output.
 2. Stable, accepted profiler-free source and return samples for H256/H7168.
-   Source H256/H7168 raw collection is complete but tail stability is not
-   closed.  Return-H256 raw collection is complete with accepted reports
-   `{r1,r3,r4}`, but its p99/max tails are also unstable.  Return-H7168 remains
-   uncollected.
+   Raw collection is complete for all four stage/width groups, but p95/p99/max
+   tail stability is not closed.  The reports establish typical-latency
+   distributions and retained tail events, not a kernel root cause.
 3. Nsys exposed critical-path attribution for the new large fixture.
 4. An exact NCU invocation selected from that Nsys report.
 5. Sustained same-machine peer-copy/HBM reference if a bandwidth percentage is

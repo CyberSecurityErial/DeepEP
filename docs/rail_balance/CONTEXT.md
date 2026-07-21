@@ -815,3 +815,22 @@ Out of scope until evidence expands the project:
 - No benchmark, CUDA/JIT, runtime, Hybrid hot path, Nsys or NCU code changed.
   Finish return-H7168 next; notify the user before Nsys, and do not enter NCU
   until Nsys identifies an exact exposed invocation.
+
+## C100 OMP-controlled return-H7168 context (2026-07-22)
+
+- Clean commit `57b69a9` has accepted return-H7168 reports r1/r3/r4, each
+  OMP=1 with 10 warmup and 100 steady samples.  Global medians are
+  341.347/333.450/335.065 us (2.37% range); rank-local maximum-envelope
+  medians are 337.711/330.693/331.282 us (2.12% range).
+- Typical latency is reproducible, but tails remain open.  Pooled global
+  p99/max are 528.122/2021.557 us and rank-local p99/max are
+  503.465/2008.428 us.  The largest accepted events occur on changing ranks
+  and iterations, so no fixed-GPU or fixed-input cause is accepted.
+- r2 was correctly rejected after another Codex session launched an eight-GPU
+  `dlb_ep8_dispatch_demo.py` during measurement.  Its eight worker PIDs were
+  absent at preflight and present in the post-run compute-app snapshot.  The
+  demo had exited by diagnosis time; no unrelated process was killed.
+- All four profiler-free source/return stage-width groups are now collected
+  with checksums.  They support a repeatable-median claim only.  Nsys is next
+  for variability and exposed-critical-path attribution; NCU and hot-path
+  edits remain blocked until that evidence exists.

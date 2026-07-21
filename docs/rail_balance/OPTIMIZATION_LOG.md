@@ -1491,3 +1491,18 @@ then use Nsys to distinguish host descheduling, CUDA API/synchronization wait,
 and exposed GPU execution.  NCU is allowed only for an exact invocation whose
 critical-path exposure is established by Nsys.  No outlier trimming, affinity
 change, hot-path edit, or speculative TMA rewrite is introduced here.
+
+## Measurement decision O070 — freeze typical latency and profile the tails
+
+The final return-H7168 group closes raw profiler-free collection, not tail
+causality.  Accepted global medians span only 2.37% and rank-local medians
+2.12%, while two accepted rank-local calls exceed 1.7 ms and the maximum is
+2.008 ms.  Automatic eligibility proves the sampled environment contract, not
+distribution stability.
+
+The next Nsys capture is therefore a variability-diagnosis experiment.  It
+must preserve representative and tail invocations and separate CPU release,
+CUDA API/synchronization, and GPU-kernel intervals.  We will not optimize from
+the stable median alone, and will not profile the rejected co-tenant run as a
+kernel workload.  NCU remains conditional on Nsys identifying an exact
+exposed invocation with end-to-end impact.

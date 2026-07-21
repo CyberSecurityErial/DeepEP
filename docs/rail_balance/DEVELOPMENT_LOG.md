@@ -4365,3 +4365,42 @@ Post-commit independent review reports Blocker0/High0/Medium0/Low1.  The only
 Low was an ambiguous C100 checkpoint label: 406.292/1324.364 us are the pooled
 rank-local-envelope p99/max, whereas global values are 453.262/1419.432 us.
 The follow-up documentation commit makes both scopes explicit.
+
+## 2026-07-22 — D073: complete return-H7168 profiler-free collection
+
+At clean `57b69a9`, return-H7168 r1 passed with global median/p95
+341.347/370.748 us.  The next process completed functionality but the automatic
+post-run gate found eight new compute applications.  The retained process
+table resolves them to a separate
+`torchrun --standalone --nproc_per_node=8 dlb_ep8_dispatch_demo.py
+--tokens-per-rank 2048 --experts-per-rank 32` invocation.  Its worker PIDs are
+1155497/1155498/1155499/1155500/1155501/1155504/1155506/1155508.  r2 is
+therefore permanently rejected despite otherwise valid Git, JIT, GPU, MPS and
+measurement-depth gates.
+
+The demo was already gone when diagnosed.  Its parent traced to another Codex
+app-server session, not Megatron, so no kill authorization was inferred and no
+unrelated process was terminated.  Empty-GPU preflights then preceded clean r3
+and r4.  The accepted set `{r1,r3,r4}` has pooled global
+median/p95/p99/max 337.631/363.655/528.122/2021.557 us and pooled rank-local
+334.003/359.490/503.465/2008.428 us.  Global and rank-local run-median ranges
+are 2.37% and 2.12%, while the retained tails remain large.
+
+Accepted hashes are:
+
+```text
+995a543a76320cb4de069fc8397def08c558ecaabca253eab144babd4a26e897  return-h7168-r1.json
+5c1239ee5cf072728c7aa9c1d4cca77c716d74eecb897658c7251d282fb87a5b  return-h7168-r3.json
+ffc08d7a8f623a68814eb874a415cfac7919c6f35e4bdd9294bb80fa82367c69  return-h7168-r4.json
+```
+
+Rejected r2 remains under hash
+`428947471c62f5ef8ce7c9daa4593f04590be278b53f559e5cd53bd372ed7402`.
+The manifest verifies all four files.  No benchmark, CUDA/JIT/runtime/Hybrid
+hot path, Nsys or NCU configuration changed.
+
+Independent documentation review reports Blocker0/High0/Medium1/Low1.  The
+Medium was an active HANDOFF sentence that still said return-H7168 remained;
+the Low was a PID range that could imply nonexistent intermediate PIDs.  The
+handoff now points to the completed group and the evidence file lists all eight
+actual PIDs explicitly.
