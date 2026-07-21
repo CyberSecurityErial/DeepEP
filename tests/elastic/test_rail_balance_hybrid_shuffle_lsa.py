@@ -71,6 +71,11 @@ _LARGE_HIDDEN = 7168
 _NUM_TOPK = 4
 _MAX_TOKENS = 10
 _PROXY_CAPACITY = 6
+_C100_NUM_TOKENS = 1024
+_C100_NUM_CHANNELS = 256
+_C100_NUM_DESTINATIONS = _WORLD_SIZE + 1
+_C100_PROXY_CAPACITY = _C100_NUM_TOKENS * (_WORLD_SIZE - 1) // _WORLD_SIZE
+_C100_CASE_NAMES = ("c100_volume_h256", "c100_volume_h7168")
 _TMA_ALIGNMENT = 32
 _STREAM_DELAY_CYCLES = 2_000_000
 _OPERATION = "rail_balance_hybrid_source_shuffle"
@@ -177,6 +182,85 @@ def _single_token_case() -> PlanCase:
     )
 
 
+def _c100_volume_case(name: str) -> PlanCase:
+    """Build one controlled all-rank payload-scaling fixture.
+
+    Owner ``g`` sends every token to remote destination ``g + 1``.  With 1024
+    tokens and eight rails, each destination keeps 128 records on its owner
+    and moves 128 records to each of the other seven egresses.  Thus every
+    producer and consumer executes the same 896-record data path.
+    """
+    assert _C100_NUM_TOKENS % _WORLD_SIZE == 0
+    experts_per_destination = _WORLD_SIZE
+    owners = []
+    for owner in range(_WORLD_SIZE):
+        destination = owner + 1
+        rows = ((destination,) * _NUM_TOPK,) * _C100_NUM_TOKENS
+        owners.append(_encode_destination_rows(
+            rows,
+            num_destinations=_C100_NUM_DESTINATIONS,
+            experts_per_destination=experts_per_destination,
+        ))
+    return PlanCase(
+        name=name,
+        topk_idx=tuple(owners),
+        num_topk=_NUM_TOPK,
+        num_channels=_C100_NUM_CHANNELS,
+        num_max_tokens_per_rank=_C100_NUM_TOKENS,
+        num_experts=_C100_NUM_DESTINATIONS * experts_per_destination,
+        num_scaleout_ranks=_C100_NUM_DESTINATIONS,
+        local_scaleout_rank=0,
+        proxy_capacity_per_egress=_C100_PROXY_CAPACITY,
+        remainder_seed=100,
+    )
+
+
+def _c100_profile_cases() -> tuple[ShuffleCase, ShuffleCase]:
+    small_plan = _c100_volume_case("c100_volume_h256")
+    large_plan = replace(small_plan, name="c100_volume_h7168")
+    small = ShuffleCase(
+        small_plan, _SMALL_HIDDEN, 100, False,
+        _C100_PROXY_CAPACITY * _WORLD_SIZE,
+    )
+    large = ShuffleCase(
+        large_plan, _LARGE_HIDDEN, 100, False,
+        _C100_PROXY_CAPACITY * _WORLD_SIZE,
+    )
+    small_schedule = _schedule(small.plan)
+    large_schedule = _schedule(large.plan)
+    assert small_schedule == large_schedule
+    assert small.plan.topk_idx == large.plan.topk_idx
+    assert small.plan.remainder_seed == large.plan.remainder_seed
+    assert small.plan.num_tokens_per_rank == \
+        (_C100_NUM_TOKENS,) * _WORLD_SIZE
+    assert small_schedule.enabled and small_schedule.failure_reason is None
+    assert small_schedule.moved_copies == 7168
+    assert small_schedule.proxy_required == \
+        (_C100_PROXY_CAPACITY,) * _WORLD_SIZE
+    assert small_schedule.num_segments == \
+        (0,) + (_WORLD_SIZE - 1,) * _WORLD_SIZE
+    records = _moved_copies(small.plan, small_schedule)
+    assert Counter(record.copy.owner for record in records) == \
+        Counter({_owner: _C100_PROXY_CAPACITY
+                 for _owner in range(_WORLD_SIZE)})
+    assert Counter(record.resolution.egress for record in records) == \
+        Counter({_egress: _C100_PROXY_CAPACITY
+                 for _egress in range(_WORLD_SIZE)})
+    for owner in range(_WORLD_SIZE):
+        destination = owner + 1
+        owner_records = [
+            record for record in records if record.copy.owner == owner
+        ]
+        assert len({record.resolution.source_channel
+                    for record in owner_records}) == \
+            _C100_NUM_CHANNELS * (_WORLD_SIZE - 1) // _WORLD_SIZE
+        assert small_schedule.count[owner][destination] == \
+            _C100_NUM_TOKENS
+        assert small_schedule.keep_count[owner][destination] == \
+            _C100_NUM_TOKENS // _WORLD_SIZE
+    return small, large
+
+
 def _copies_by_egress(
     records: Sequence[ResolvedHybridDestinationCopy],
 ) -> tuple[dict[int, ResolvedHybridDestinationCopy], ...]:
@@ -191,7 +275,10 @@ def _copies_by_egress(
     return tuple(result)
 
 
-def _assert_shuffle_oracle() -> tuple[ShuffleCase, ...]:
+def _assert_shuffle_oracle(
+    *,
+    include_c100_profiles: bool = False,
+) -> tuple[ShuffleCase, ...]:
     first = _skew_case(
         capacity=_PROXY_CAPACITY,
         seed=62,
@@ -225,6 +312,8 @@ def _assert_shuffle_oracle() -> tuple[ShuffleCase, ...]:
         # large transaction; no stale large-layout payload may stay live.
         ShuffleCase(first, _SMALL_HIDDEN, 7, True, 21),
     )
+    if include_c100_profiles:
+        cases += _c100_profile_cases()
     for spec in cases:
         case = spec.plan
         schedule = _schedule(case)
@@ -379,6 +468,7 @@ def _verify_local_snapshot(
     assert torch.equal(snapshot[required:], baseline[required:])
 
     coverage = []
+    expected_sources: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
     for proxy_slot in range(required):
         record = by_slot[proxy_slot]
         copy = record.copy
@@ -394,8 +484,10 @@ def _verify_local_snapshot(
         )
 
         row = snapshot[proxy_slot]
-        expected_x, expected_weights = _cpu_source_inputs(
-            case, copy.owner, iteration, hidden)
+        if copy.owner not in expected_sources:
+            expected_sources[copy.owner] = _cpu_source_inputs(
+                case, copy.owner, iteration, hidden)
+        expected_x, expected_weights = expected_sources[copy.owner]
         hidden_values = _reinterpret(row, 0, hidden, torch.bfloat16)
         topk_idx = _reinterpret(
             row, topk_offset, case.num_topk, torch.int32)
@@ -729,6 +821,7 @@ def _worker(local_rank: int, num_local_ranks: int,
     try:
         cases = _assert_shuffle_oracle()
         if args.case_name is not None:
+            cases = _assert_shuffle_oracle(include_c100_profiles=True)
             cases = tuple(
                 spec for spec in cases if spec.plan.name == args.case_name)
             assert len(cases) == 1
@@ -743,12 +836,16 @@ def _worker(local_rank: int, num_local_ranks: int,
             layouts.append(layout)
         arena_bytes = max(layout[-1] for layout in layouts)
         max_hidden = max(spec.hidden for spec in cases)
+        max_tokens = max(
+            spec.plan.num_max_tokens_per_rank for spec in cases)
+        max_topk = max(spec.plan.num_topk for spec in cases)
+        assert all(spec.plan.num_topk == max_topk for spec in cases)
         alignment = int(_C.get_elastic_buffer_alignment())
         base_bytes = deep_ep.ElasticBuffer.get_buffer_size_hint(
             ep_group,
-            num_max_tokens_per_rank=_MAX_TOKENS,
+            num_max_tokens_per_rank=max_tokens,
             hidden=max_hidden,
-            num_topk=_NUM_TOPK,
+            num_topk=max_topk,
             use_fp8_dispatch=False,
             allow_hybrid_mode=False,
             allow_multiple_reduction=True,
@@ -758,9 +855,9 @@ def _worker(local_rank: int, num_local_ranks: int,
         buffer = deep_ep.ElasticBuffer(
             ep_group,
             num_bytes=arena_offset + arena_bytes,
-            num_max_tokens_per_rank=_MAX_TOKENS,
+            num_max_tokens_per_rank=max_tokens,
             hidden=max_hidden,
-            num_topk=_NUM_TOPK,
+            num_topk=max_topk,
             allow_hybrid_mode=False,
             allow_multiple_reduction=True,
             prefer_overlap_with_compute=False,
@@ -805,16 +902,28 @@ def _worker(local_rank: int, num_local_ranks: int,
             buffer = None
             _monitored_barrier(control_group, args.timeout)
             if rank == 0:
-                print(
-                    "PASS C080-D Hybrid source shuffle: true 8-GPU LSA, "
-                    "C061 skew/zero-N/multi-destination/multi-copy plus "
-                    "all-owner C1024/D32/K4, H7168 moved, balanced/zero-"
-                    "move and single-token cases, exact-capacity, exact "
-                    "legacy TokenLayout bytes, unused unchanged, reusable "
-                    "transaction, H256/H7168/H256 arena reuse, and explicit "
-                    "non-default stream ordering",
-                    flush=True,
-                )
+                if len(cases) == 1 and cases[0].plan.name.startswith("c100_"):
+                    spec = cases[0]
+                    print(
+                        "PASS C100 controlled Hybrid source fixture: "
+                        f"{spec.plan.name}, true 8-GPU LSA, "
+                        f"moved={spec.expected_moved_copies}, "
+                        f"per-owner/egress={_C100_PROXY_CAPACITY}, "
+                        "exact legacy TokenLayout bytes and immutable inputs "
+                        "(functionality only)",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        "PASS C080-D Hybrid source shuffle: true 8-GPU LSA, "
+                        "C061 skew/zero-N/multi-destination/multi-copy plus "
+                        "all-owner C1024/D32/K4, H7168 moved, balanced/zero-"
+                        "move and single-token cases, exact-capacity, exact "
+                        "legacy TokenLayout bytes, unused unchanged, reusable "
+                        "transaction, H256/H7168/H256 arena reuse, and explicit "
+                        "non-default stream ordering",
+                        flush=True,
+                    )
             dist.destroy_process_group()
 
 
@@ -870,24 +979,36 @@ def main() -> None:
     if arguments.timeout <= 0 or arguments.watchdog_seconds <= 0:
         parser.error("timeouts must be positive")
 
-    cases = _assert_shuffle_oracle()
+    include_c100_profiles = arguments.oracle_only or \
+        arguments.case_name in _C100_CASE_NAMES
+    cases = _assert_shuffle_oracle(
+        include_c100_profiles=include_c100_profiles)
     by_name = {spec.plan.name: spec for spec in cases}
     if arguments.case_name is not None and arguments.case_name not in by_name:
         parser.error(
             "unknown --case-name; expected one of "
-            + ", ".join(sorted(by_name)))
+            + ", ".join(sorted(set(by_name) | set(_C100_CASE_NAMES))))
     first = by_name["c061_source_shuffle_seed62"].plan
     second = by_name["c061_source_shuffle_reuse_seed63"].plan
     wide = by_name["all_owner_c1024_d32_k4"].plan
-    print(
+    message = (
         "PASS C080-D CPU oracle: C061-like 8-rail source shuffle, "
         "zero-N owners, multi-destination/multi-copy, moved=21, "
         f"Pcap={_PROXY_CAPACITY}, seeds="
         f"{first.remainder_seed}/{second.remainder_seed}; all-owner "
         f"C={wide.num_channels}/D={wide.num_scaleout_ranks}/K={wide.num_topk}; "
-        "H256/H7168/H256 reuse, balanced zero-move, global single-token",
-        flush=True,
+        "H256/H7168/H256 reuse, balanced zero-move, global single-token"
     )
+    if include_c100_profiles:
+        c100_small = by_name["c100_volume_h256"]
+        c100_large = by_name["c100_volume_h7168"]
+        assert _schedule(c100_small.plan) == _schedule(c100_large.plan)
+        message += (
+            f"; C100 controlled H256/H7168 "
+            f"moved={c100_small.expected_moved_copies}, "
+            f"Pcap={c100_small.plan.proxy_capacity_per_egress} (named only)"
+        )
+    print(message, flush=True)
     if arguments.oracle_only:
         return
 
