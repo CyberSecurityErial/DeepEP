@@ -13,6 +13,10 @@ from deep_ep.buffers import elastic as elastic_module
 
 _INVALID_PREFIX = '[DeepEP rail_balance:InvalidConfiguration] '
 _UNSUPPORTED_PREFIX = '[DeepEP rail_balance:UnsupportedConfiguration] '
+_INTERNAL_PREFIX = '[DeepEP rail_balance:InternalInvariant] '
+
+_LEGACY_BYTES = 4 * 1024 * 1024
+_ARENA_BYTES = 2 * 1024 * 1024
 
 
 def _expect_error(error_type, expected_message, function):
@@ -22,6 +26,118 @@ def _expect_error(error_type, expected_message, function):
         assert str(error) == expected_message, str(error)
     else:
         raise AssertionError(f'expected {error_type.__name__}: {expected_message}')
+
+
+def _run_force_constructor(legacy_helper=None, layout_helper=None,
+                           force_size_helper=None):
+    calls = {'order': []}
+
+    class FakeGroup:
+        def rank(self):
+            return 3
+
+        def size(self):
+            return 8
+
+        def barrier(self):
+            calls['barrier'] = calls.get('barrier', 0) + 1
+
+    class FakeCommHandle:
+        def get(self):
+            return 1234
+
+    class FakeRuntime:
+        def __init__(self, *args):
+            calls['order'].append('runtime')
+            calls['runtime_args'] = args
+
+        def get_logical_domain_size(self):
+            return 1, 8
+
+        def get_physical_domain_size(self):
+            return 1, 8
+
+    if legacy_helper is None:
+        legacy_helper = lambda *_args: _LEGACY_BYTES
+    if layout_helper is None:
+        layout_helper = lambda *_args: (0,) * 9 + (_ARENA_BYTES,)
+    if force_size_helper is None:
+        force_size_helper = lambda *_args: _LEGACY_BYTES + _ARENA_BYTES
+
+    def fake_get_comm(group, force_new_comm=False):
+        calls['order'].append('comm')
+        calls['comm'] = (group, force_new_comm)
+        return FakeCommHandle()
+
+    def fake_legacy(*args):
+        calls['order'].append('legacy')
+        calls['legacy_args'] = args
+        return legacy_helper(*args)
+
+    def fake_layout(*args):
+        calls['order'].append('layout')
+        calls['layout_args'] = args
+        return layout_helper(*args)
+
+    def fake_force_size(*args):
+        calls['order'].append('force_size')
+        calls['force_size_args'] = args
+        return force_size_helper(*args)
+
+    capability_name = '_rail_balance_force_available'
+    names = (
+        'get_nccl_comm_handle', 'check_nvlink_connections',
+        'check_fast_rdma_atomic_support')
+    originals = {name: getattr(elastic_module, name) for name in names}
+    original_legacy = elastic_module._C.calculate_elastic_buffer_size
+    original_layout = elastic_module._C._get_rail_balance_hybrid_layout
+    original_force_size = elastic_module._C._calculate_rail_balance_hybrid_buffer_size
+    original_runtime = elastic_module._C.ElasticBuffer
+    original_synchronize = elastic_module.torch.cuda.synchronize
+    old_host_capability = elastic_module._RAIL_BALANCE_FORCE_HOST_AVAILABLE
+    had_capability = hasattr(elastic_module._C, capability_name)
+    old_capability = getattr(elastic_module._C, capability_name, None)
+    original_override = os.environ.pop('EP_OVERRIDE_RDMA_SL', None)
+    buffer = error = None
+    try:
+        elastic_module._RAIL_BALANCE_FORCE_HOST_AVAILABLE = True
+        setattr(elastic_module._C, capability_name,
+                lambda: calls['order'].append('capability') or True)
+        elastic_module.get_nccl_comm_handle = fake_get_comm
+        elastic_module.check_nvlink_connections = lambda _group: None
+        elastic_module.check_fast_rdma_atomic_support = lambda: False
+        elastic_module._C.calculate_elastic_buffer_size = fake_legacy
+        elastic_module._C._get_rail_balance_hybrid_layout = fake_layout
+        elastic_module._C._calculate_rail_balance_hybrid_buffer_size = fake_force_size
+        elastic_module._C.ElasticBuffer = FakeRuntime
+        elastic_module.torch.cuda.synchronize = lambda: None
+
+        try:
+            buffer = elastic_module.ElasticBuffer(
+                FakeGroup(),
+                num_max_tokens_per_rank=128,
+                hidden=1024,
+                num_topk=4,
+                rail_balance='force',
+                rail_balance_proxy_slots_per_rank=32)
+        except Exception as caught:
+            error = caught
+    finally:
+        for name, value in originals.items():
+            setattr(elastic_module, name, value)
+        elastic_module._C.calculate_elastic_buffer_size = original_legacy
+        elastic_module._C._get_rail_balance_hybrid_layout = original_layout
+        elastic_module._C._calculate_rail_balance_hybrid_buffer_size = original_force_size
+        elastic_module._C.ElasticBuffer = original_runtime
+        elastic_module.torch.cuda.synchronize = original_synchronize
+        elastic_module._RAIL_BALANCE_FORCE_HOST_AVAILABLE = old_host_capability
+        if had_capability:
+            setattr(elastic_module._C, capability_name, old_capability)
+        else:
+            delattr(elastic_module._C, capability_name)
+        if original_override is not None:
+            os.environ['EP_OVERRIDE_RDMA_SL'] = original_override
+    return calls, buffer, error
 
 
 def test_config_parser_is_strict_and_deterministic():
@@ -251,11 +367,16 @@ def test_off_path_uses_exact_legacy_size_and_runtime_arguments():
         calls['calculate_args'] = args
         return 2 * 1024 * 1024
 
+    def force_helper_tripwire(*_args):
+        raise AssertionError('off path called a force-only sizing helper')
+
     names = (
         'get_nccl_comm_handle', 'check_nvlink_connections',
         'check_fast_rdma_atomic_support')
     originals = {name: getattr(elastic_module, name) for name in names}
     original_calculate = elastic_module._C.calculate_elastic_buffer_size
+    original_layout = elastic_module._C._get_rail_balance_hybrid_layout
+    original_force_size = elastic_module._C._calculate_rail_balance_hybrid_buffer_size
     original_runtime = elastic_module._C.ElasticBuffer
     original_synchronize = elastic_module.torch.cuda.synchronize
     original_override = os.environ.pop('EP_OVERRIDE_RDMA_SL', None)
@@ -264,6 +385,8 @@ def test_off_path_uses_exact_legacy_size_and_runtime_arguments():
         elastic_module.check_nvlink_connections = lambda _group: None
         elastic_module.check_fast_rdma_atomic_support = lambda: False
         elastic_module._C.calculate_elastic_buffer_size = fake_calculate
+        elastic_module._C._get_rail_balance_hybrid_layout = force_helper_tripwire
+        elastic_module._C._calculate_rail_balance_hybrid_buffer_size = force_helper_tripwire
         elastic_module._C.ElasticBuffer = FakeRuntime
         elastic_module.torch.cuda.synchronize = lambda: None
 
@@ -277,6 +400,8 @@ def test_off_path_uses_exact_legacy_size_and_runtime_arguments():
         for name, value in originals.items():
             setattr(elastic_module, name, value)
         elastic_module._C.calculate_elastic_buffer_size = original_calculate
+        elastic_module._C._get_rail_balance_hybrid_layout = original_layout
+        elastic_module._C._calculate_rail_balance_hybrid_buffer_size = original_force_size
         elastic_module._C.ElasticBuffer = original_runtime
         elastic_module.torch.cuda.synchronize = original_synchronize
         if original_override is not None:
@@ -292,8 +417,73 @@ def test_off_path_uses_exact_legacy_size_and_runtime_arguments():
     assert buffer.num_bytes == 2 * 1024 * 1024
     assert 'rail_balance' not in buffer.__dict__
     assert 'rail_balance_proxy_slots_per_rank' not in buffer.__dict__
+    assert not any(name.startswith('_rail_balance_') for name in buffer.__dict__)
     assert buffer.num_scaleout_ranks == 1
     assert buffer.num_scaleup_ranks == 8
+
+
+def test_force_path_owns_checked_tail_arena_and_runtime_total():
+    calls, buffer, error = _run_force_constructor()
+    assert error is None, error
+    assert buffer is not None
+    assert calls['order'] == [
+        'capability', 'comm', 'legacy', 'layout', 'force_size', 'runtime']
+    assert calls['comm'][1] is False
+    assert calls['legacy_args'] == (
+        1234, 128, 1024, 4, False, True, True)
+    assert calls['layout_args'] == (1024, 4, 32)
+    assert calls['force_size_args'] == (1234, 128, 1024, 4, 32)
+    assert calls['runtime_args'] == (
+        3, 8, 1234, [], _LEGACY_BYTES + _ARENA_BYTES, 0,
+        True, True, True, 3, 129, 300, 100, False)
+    assert calls['barrier'] == 1
+    assert buffer.num_bytes == _LEGACY_BYTES + _ARENA_BYTES
+    assert {
+        name for name in buffer.__dict__ if name.startswith('_rail_balance_')
+    } == {
+        '_rail_balance_mode',
+        '_rail_balance_proxy_slots_per_rank',
+        '_rail_balance_arena_offset',
+        '_rail_balance_arena_bytes',
+    }
+    assert buffer._rail_balance_mode == 'force'
+    assert buffer._rail_balance_proxy_slots_per_rank == 32
+    assert buffer._rail_balance_arena_offset == _LEGACY_BYTES
+    assert buffer._rail_balance_arena_bytes == _ARENA_BYTES
+
+
+def test_force_size_mismatch_fails_before_runtime_construction():
+    calls, buffer, error = _run_force_constructor(
+        force_size_helper=lambda *_args: _LEGACY_BYTES + _ARENA_BYTES + 1)
+    assert buffer is None
+    assert type(error) is RuntimeError
+    assert str(error) == (
+        _INTERNAL_PREFIX +
+        'force-v1 buffer size must equal legacy bytes plus arena bytes')
+    assert calls['order'] == [
+        'capability', 'comm', 'legacy', 'layout', 'force_size']
+    assert 'runtime_args' not in calls
+
+
+def test_force_sizing_helper_exceptions_fail_before_runtime_construction():
+    for failing_helper in ('legacy', 'layout', 'force_size'):
+        marker = RuntimeError(f'{failing_helper} helper failed')
+
+        def fail(*_args, marker=marker):
+            raise marker
+
+        overrides = {
+            'legacy_helper': None,
+            'layout_helper': None,
+            'force_size_helper': None,
+        }
+        overrides[f'{failing_helper}_helper'] = fail
+        calls, buffer, error = _run_force_constructor(**overrides)
+        assert buffer is None
+        assert error is marker
+        assert calls['order'][-1] == failing_helper
+        assert 'runtime' not in calls['order']
+        assert 'runtime_args' not in calls
 
 
 def run_all():
@@ -304,6 +494,9 @@ def run_all():
         test_default_ep_handle_fields_are_unchanged,
         test_force_capability_rejects_before_group_cuda_or_collectives,
         test_off_path_uses_exact_legacy_size_and_runtime_arguments,
+        test_force_path_owns_checked_tail_arena_and_runtime_total,
+        test_force_size_mismatch_fails_before_runtime_construction,
+        test_force_sizing_helper_exceptions_fail_before_runtime_construction,
     )
     for test in tests:
         test()

@@ -403,11 +403,29 @@ class ElasticBuffer:
                 self.nccl_comm_handle.get(),
                 num_max_tokens_per_rank, hidden, num_topk, use_fp8_dispatch,
                 allow_hybrid_mode, allow_multiple_reduction)
+            if rail_balance == 'force':
+                legacy_num_bytes = num_bytes
+                rail_balance_arena_bytes = _C._get_rail_balance_hybrid_layout(
+                    hidden, num_topk, rail_balance_proxy_slots_per_rank)[-1]
+                num_bytes = _C._calculate_rail_balance_hybrid_buffer_size(
+                    self.nccl_comm_handle.get(),
+                    num_max_tokens_per_rank, hidden, num_topk,
+                    rail_balance_proxy_slots_per_rank)
+                if num_bytes != legacy_num_bytes + rail_balance_arena_bytes:
+                    raise RuntimeError(_rail_balance_error(
+                        'InternalInvariant',
+                        'force-v1 buffer size must equal legacy bytes plus arena bytes'))
 
         if os.environ.get('EP_BUFFER_DEBUG', 0):
             print(f'Initializing EP elastic buffer with {num_bytes} bytes '
                   f'(cpu: {num_cpu_bytes}) at rank EP {group.rank()}/{group.size()}')
         self.num_bytes = num_bytes
+
+        if rail_balance == 'force':
+            self._rail_balance_mode = rail_balance
+            self._rail_balance_proxy_slots_per_rank = rail_balance_proxy_slots_per_rank
+            self._rail_balance_arena_offset = legacy_num_bytes
+            self._rail_balance_arena_bytes = rail_balance_arena_bytes
 
         # Store default values
         self.num_max_tokens_per_rank = num_max_tokens_per_rank
