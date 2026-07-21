@@ -1029,3 +1029,26 @@ H4c still poisons state before the adjacent source/main submissions.  It must
 also pass the dispatch prefix storage base to the persistent kernel but the
 inclusive `base+1` view to the non-expanded epilogue.  These are correctness
 constraints, not reasons to add another abstraction.
+
+## Host-path decision O050 — poison once, then submit exactly twice
+
+H4c does not add a coordinator, CUDA graph, callback, extra gate, or status
+round trip.  After all fallible validation and raw capture, it marks the
+transaction Invalid and issues source shuffle followed immediately by the
+existing force Hybrid dispatch on the same comm stream.  Only two accepted
+host submissions promote the owner to DispatchLive.  This preserves stream
+ordering from final proxy writes into Tag0 without an extra local barrier or
+device-wide synchronization.
+
+The remaining low-level launch calls are checked and may fail asymmetrically.
+Preconstructing launch config could remove `FuncSetAttribute` from the window
+but cannot make `cuLaunchKernelEx` infallible; a graph would merely move the
+same fatal boundary while adding machinery.  The private proof therefore
+records partial submission as job-fatal and permanently poisoned.  Production
+fusion remains the only way to remove the between-kernel host boundary if real
+cluster evidence requires it.
+
+Expert-prefix storage has two frozen views rather than post-gate pointer
+arithmetic hidden in H5: base for persistent dispatch writes and base+1 for
+the inclusive non-expanded epilogue.  The extra host pointer has no device
+traffic, allocation, JIT key, or hot-path branch.

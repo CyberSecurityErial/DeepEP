@@ -3131,3 +3131,75 @@ inclusive `base+1` view.
 
 Implementation commit `4e48b84` and gate commit `7ab382b` are pushed to
 `fork/feat/rail-balance-prototype`.
+
+## 2026-07-21 — D051: commit source shuffle directly into Hybrid dispatch
+
+H4c adds the smallest private post-Gate2 commit.  All invocation/state/status,
+runtime-owner, and device checks plus `CUDAGuard` execute while the transaction
+is still `PlanReady`.  The method then snapshots only prepared references,
+raw pointers, NCCL handles, and POD geometry.  Its committed interval is:
+
+```text
+state = Invalid
+submit prepared source shuffle on comm_stream
+launch prepared force Hybrid dispatch on comm_stream
+shuffled = true
+state = DispatchLive
+```
+
+There is no branch, Tensor accessor, JIT, allocation, peer lookup, barrier,
+D2H read, event, or synchronization in that interval.  Poisoning first makes
+either synchronous launch failure non-replayable.  Success means both kernels
+were accepted by the host stream; it does not claim GPU, Gin, or remote
+completion.
+
+The expert-prefix address was also made explicit before Gate1.  Main dispatch
+receives `psum_num_recv_tokens_per_expert_storage` at the allocation base,
+while H5's non-expanded epilogue will consume the separately frozen
+`psum_num_recv_tokens_per_expert_inclusive = base + 1`.  H5 is forbidden from
+recovering that view through a post-gate Tensor accessor.
+
+Accepted evidence:
+
+```text
+PASS H4c source/ordering/raw-ABI contract
+PASS full extension rebuild after the H4c C++ change
+PASS production-shaped G8xD2/H7168/K8 force dispatch codegen
+PASS true EP8 H7168 direct-final source LSA shuffle
+PASS vnode 4x2/H7168 full dispatch/expert/combine round trip
+PASS H4b truthful D=1 fail-close/recovery: 3 fixed MAX gates
+PASS canonical H3b planner transaction: 18 fixed MAX gates
+PASS source and epilogue raw-submit adapter gates
+PASS API 9/9 and legacy Hybrid identity 4/4
+PASS py_compile and git diff --check
+PASS independent H4c audit: Blocker = 0
+```
+
+Failures, resource actions, and audit boundaries retained:
+
+- four positively identified `megatron-lm-gpu/bin/python` processes occupied
+  GPUs 0-3 at roughly 36 GiB each.  They were terminated under the user's
+  standing authorization; all eight GPUs returned to zero MiB before tests;
+- one direct H4b CPU invocation omitted the required checkout `PYTHONPATH` and
+  failed with `ModuleNotFoundError`; the pinned corrected command passed;
+- H3b's source guard originally delimited `finish` by the later source-test
+  method.  Inserting H4c between them made the static test see H4c's submit and
+  fail before GPU spawn.  Its endpoint now names H4c itself; CPU and eighteen-
+  gate EP8 reruns pass;
+- generic `LaunchRuntime::launch` still constructs a config and performs a
+  checked kernel launch after state is Invalid.  A one-rank source-success/
+  main-launch failure can strand peers at Tag0 until the job timeout; this is a
+  job-fatal boundary, not recoverable abort.  An overstrong header comment was
+  corrected;
+- source device status is intentionally not synchronized before main dispatch.
+  Gate2 inputs/plan must remain immutable through commit, and H5's first safe
+  synchronization must turn any asynchronous source/main failure into a
+  permanently poisoned handle.
+
+No virtual production topology, empty Gin launch, loopback main kernel, public
+force call, epilogue, or combine path was added.  Local evidence labels remain
+`H4C_COMMIT_SOURCE_PASS`, `HYBRID_CODEGEN_PASS`, and
+`VNODE_FUNCTIONAL_PASS`; real Hybrid runtime remains untested.  Implementation
+commit `edb1a0e` and gate commit `ba82134` are pushed to the fork.  H5 next
+owns dispatch CPU-count completion, exact receive allocation, dispatch
+epilogue, handle publication, and the symmetric combine lifecycle.

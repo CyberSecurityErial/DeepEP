@@ -485,3 +485,10 @@ Out of scope until evidence expands the project:
   green. No source/main launch or `DispatchLive` transition exists yet. H4c
   must submit those two stages adjacently, poison before the still-fallible
   launch boundary, and preserve the expert-prefix base versus `base+1` views.
+- H4c now implements that private adjacent commit. All checks, device guard,
+  raw captures, and prefix-view separation precede `Invalid`; the critical
+  window is source submit, main force dispatch, shuffled, then DispatchLive.
+  There is no epilogue, handle publication, combine, public force, or truthful
+  local D>1 execution yet. A low-level one-rank launch failure is explicitly
+  job-fatal, and H5 must observe asynchronous device faults at its first safe
+  synchronization while keeping the object poisoned.
