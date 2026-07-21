@@ -441,6 +441,8 @@ Out of scope until evidence expands the project:
   launch-only raw argument binders. Combine freezes the checked legacy reduce
   offset `min(G,K)*D*M*stride`; dispatch copy epilogue prebuilds the exact
   legacy BF16/noncached/nonexpanded specialization on all physical SMs. No
-  public behavior changed. H4 must still freeze raw shuffle/unshuffle state,
-  split assertion-free combine-epilogue submit, and connect fixed-tensor WORLD
-  gates plus owning transaction state before capability activation.
+  public behavior changed. H1b now also freezes source H/K/C/N and return H/K/C
+  geometry, exposes assertion-free raw source/return/combine-epilogue submits,
+  and preserves the existing launch-only local barrier. Grid and source token
+  count have one Prepared owner. H4 must still connect fixed-tensor WORLD gates
+  plus owning transaction state before capability activation.

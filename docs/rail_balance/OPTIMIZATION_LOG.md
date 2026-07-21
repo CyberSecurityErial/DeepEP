@@ -882,3 +882,26 @@ submit layers before production connection.
 No queue, callback, event graph, generic transaction framework, or new public
 operator was introduced. The adapter code is control-plane only and produces
 the same CUDA specializations and resource counts as C080-E/F.
+
+## Host-path decision O043 — one frozen geometry owner per raw launch
+
+Every liveness-sensitive stage now follows the native DeepEP prepare/launch
+split. TokenLayout construction, shared-memory arithmetic, active-grid
+selection, JIT compilation, and all Tensor pointer extraction happen before a
+collective epoch. The committed submit constructs only the existing runtime's
+Args and launches it on `comm_stream`; checked wrappers exist only for private
+standalone tests.
+
+Source N is deliberately stored once in the Prepared specialization and reused
+for both active-grid selection and the kernel Args. Passing a second dynamic N
+was rejected because it enlarged the ABI and could make the grid and traversal
+bound disagree. Return C follows the same single-owner rule. This is a host
+reliability optimization, not a kernel speed claim: no CUDA loop, persistent
+warp allocation, JIT key, queue, event graph, public operator, or default-off
+path changed.
+
+The production-integration style is now explicit: extend `ElasticBuffer`, the
+existing symmetric buffer, TokenLayout, JIT runtime, streams, and handle
+lifetime in place. Vnode remains disposable validation scaffolding; it must not
+become a second transport/runtime framework or contribute a branch to the
+production Hybrid hot path.

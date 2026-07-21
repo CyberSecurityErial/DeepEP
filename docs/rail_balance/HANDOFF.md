@@ -13,9 +13,9 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Latest pushed checkpoints are `7a5bd9c` (prepared force dispatch),
-  `5b9df10` (prepared force combine/reduce base), and `e2ee1fa` (prebuilt
-  dispatch epilogue) on `fork/feat/rail-balance-prototype`.
+- Latest pushed checkpoints are `6a6dc02` (raw combine epilogue) and `d5a60a9`
+  (frozen source/return shuffle submits), following `7a5bd9c`, `5b9df10`, and
+  `e2ee1fa`, on `fork/feat/rail-balance-prototype`.
 - Public force still fails closed and no result claims real Gin/RDMA behavior.
 - Resume from the working tree and the newest entries in `DEVELOPMENT_LOG.md`;
   do not restore the obsolete sidecar/descriptor/ring draft.
@@ -65,6 +65,10 @@ the exact file snapshots without inventing commit identity.
 - H1 prepared adapters: root fresh-cache dispatch/combine smoke, prebuilt
   dispatch epilogue source gate, API 6/6, legacy goldens 4/4, and independent
   adapter review pass with Blocker/High 0/0. Public force remains false.
+- H1b raw-submit closure: source and return true eight-GPU LSA cases, three
+  adapter gates, a real header-triggered extension rebuild, API 6/6, legacy
+  goldens 4/4, and independent final review pass. A reviewed N/grid mismatch
+  was fixed by making Prepared N the sole owner; final audit is 0/0/0/0.
 
 ## Mandatory retained boundary
 
@@ -85,10 +89,11 @@ No C070 timing is performance evidence.
 2. Verify branch and state with `git status --short --branch` and run
    `git diff --cached --check`.
 3. Do not redo C061/C070 unless the relevant code changes.
-4. Resume at the production C080 host transaction, not at vnode or the obsolete
-   CPU-manifest/sidecar path. Derive C/topology in C++, prebuild every runtime,
-   use fixed-tensor WORLD Gate1/Gate2, and then launch shuffle→force dispatch in
-   one C++ commit call.
+4. Resume with the minimal H2 force-only constructor sizing/ownership slice,
+   then the production C080 host transaction; do not return to vnode or the
+   obsolete CPU-manifest/sidecar path. Keep off byte/field/control identity,
+   derive C/topology in C++, prebuild every runtime, use fixed-tensor WORLD
+   Gate1/Gate2, and launch shuffle→force dispatch in one C++ commit call.
 5. Keep public force unavailable until force combine is connected as one
    main-combine→return-unshuffle→local-barrier→legacy-epilogue commit and handle
    ownership/consumption is fail-closed.

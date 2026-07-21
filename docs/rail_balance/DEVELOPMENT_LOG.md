@@ -2714,3 +2714,68 @@ not the production transaction. Before H4 can commit a collective epoch, the
 source shuffle and return-unshuffle need frozen raw-pointer submit layers, and
 the existing combine epilogue's launch-time assertions must move into
 precommit validation. Public force remains false.
+
+## 2026-07-21 — D044: close the H1b raw-submit boundary
+
+H1b completes the launch boundary required before the production WORLD
+transaction can be connected. Source shuffle now prepares and owns its JIT
+runtime, H/K/C/N specialization, TokenLayout shared-memory size, active grid,
+and LaunchArgs. Return-unshuffle similarly freezes H/K/C, shared memory, grid,
+and runtime. Their raw submit functions accept only previously captured
+pointers and validated dynamic topology values, construct the runtime Args,
+and launch on the existing communication stream. Checked wrappers remain for
+the private LSA tests and unwrap owning plan tensors before entering the raw
+path.
+
+The combine reduction epilogue now has the same split: its checked private test
+wrapper retains all six host checks, while the committed submit is only an
+Args bind plus launch. The existing local LSA barrier was audited and already
+had that property, so no redundant wrapper was added. The return-unshuffle
+private transaction captures the arena, plan, seed, and snapshot pointers
+before B1; B1 through B4 contain only the two prebound D2D copies, prepared
+barriers, and the raw unshuffle submit. Status readback and synchronization
+remain after B4.
+
+Independent review found one High before acceptance: source prepare froze an
+active grid from N, but the first raw ABI also accepted a second dynamic N. A
+mismatch could make the kernel loop bound exceed the frozen grid and omit
+tokens. The dynamic argument was removed; both grid and kernel N now come only
+from `prepared.spec.num_tokens`. A persistent source adapter gate freezes this
+invariant. The same review found one Low wording mismatch around the one-shot
+state bit; the comment now accurately states that replay is disabled before
+either copy is queued. Final review is Blocker 0 / High 0 / Medium 0 / Low 0.
+
+Accepted evidence on the final tree:
+
+```text
+PASS true header-triggered python_api.o rebuild, device link, and shared link
+PASS C080-H1b prepared source-shuffle raw submit
+PASS C080-H1 prepared return-unshuffle raw submit
+PASS C080-H1b prepared epilogue/barrier submit adapters
+PASS 6/6 C080-A Hybrid API tests
+PASS 4/4 legacy Hybrid identity goldens
+PASS true 8-GPU source LSA, 21 moved copies, non-default stream
+PASS true 8-GPU return-unshuffle C061 H256 and abort/recovery
+PASS py_compile and git diff --check
+```
+
+Failures and corrections retained:
+
+- the first source GPU command selected `c061_source_shuffle_seed62`; that
+  name occurs twice in the existing source fixture table, so the selector's
+  `len == 1` assertion failed before any GPU stage. The uniquely named
+  `c061_source_shuffle_reuse_seed63` case then passed the real eight-GPU path;
+- one return-unshuffle `--help` command omitted `PYTHONPATH=.` and failed at
+  import. It was rerun with the pinned environment before the real GPU case;
+- the first main-thread build after agent builds reported Ninja no work and
+  only relinked. After the N/grid correction changed the header, the accepted
+  build visibly recompiled `csrc/python_api.o`, device-linked, and copied the
+  extension;
+- the N/grid High and the one-shot comment Low were fixed before commit rather
+  than waived.
+
+Commits `6a6dc02` and `d5a60a9` are pushed to the fork. They do not modify a
+CUDA hot loop, public operator, Python dispatch/combine, capability bit, or
+legacy JIT identity. H2 is the minimal force-only constructor sizing/ownership
+slice; H3/H4 still own the pre-window/fixed-tensor WORLD decisions and the
+actual uninterrupted dispatch/combine transaction.
