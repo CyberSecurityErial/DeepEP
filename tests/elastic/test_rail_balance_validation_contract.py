@@ -1,0 +1,429 @@
+#!/usr/bin/env python3
+
+import copy
+import json
+import unittest
+
+from rail_balance_validation_common import (
+    CANONICAL_CASES,
+    RESULT_SCHEMA_VERSION,
+    build_deterministic_topk,
+    count_distinct_remote_destinations,
+    new_result_record,
+)
+
+
+class DeterministicRouteTest(unittest.TestCase):
+    D = 3
+    G = 4
+    N = 3
+    K = 4
+    E = 48
+
+    def build(self, case):
+        return build_deterministic_topk(
+            case,
+            num_scaleout_ranks=self.D,
+            num_scaleup_ranks=self.G,
+            num_tokens_per_rank=self.N,
+            num_topk=self.K,
+            num_experts=self.E,
+        )
+
+    def test_routes_are_deterministic_valid_and_distinct(self):
+        expected_active_rails = {"balanced": self.G, "two_hot": 2, "one_hot": 1}
+        experts_per_server = self.E // self.D
+        for case in CANONICAL_CASES:
+            with self.subTest(case=case):
+                routes = self.build(case)
+                self.assertEqual(routes, self.build(case))
+                self.assertEqual(len(routes), self.D * self.G)
+                for rank, rank_routes in enumerate(routes):
+                    self.assertEqual(len(rank_routes), self.N)
+                    source_server = rank // self.G
+                    local_rank = rank % self.G
+                    expected_server = (
+                        (source_server + 1) % self.D
+                        if local_rank < expected_active_rails[case]
+                        else source_server
+                    )
+                    for token_route in rank_routes:
+                        self.assertEqual(len(token_route), self.K)
+                        self.assertEqual(len(set(token_route)), self.K)
+                        self.assertTrue(all(0 <= expert < self.E for expert in token_route))
+                        self.assertEqual(
+                            {expert // experts_per_server for expert in token_route},
+                            {expected_server},
+                        )
+
+    def test_canonical_remote_counts_and_server_deduplication(self):
+        expected_active_rails = {"balanced": 4, "two_hot": 2, "one_hot": 1}
+        for case, active_rails in expected_active_rails.items():
+            with self.subTest(case=case):
+                counts = count_distinct_remote_destinations(
+                    self.build(case),
+                    num_scaleout_ranks=self.D,
+                    num_scaleup_ranks=self.G,
+                    num_experts=self.E,
+                )
+                for source_server in range(self.D):
+                    remote_server = (source_server + 1) % self.D
+                    for local_rank in range(self.G):
+                        expected = self.N if local_rank < active_rails else 0
+                        self.assertEqual(counts[source_server][local_rank][remote_server], expected)
+                        self.assertEqual(sum(counts[source_server][local_rank]), expected)
+
+    def test_canonical_cases_intentionally_have_different_remote_totals(self):
+        # Future traffic records must report these different payload volumes;
+        # the fixtures must not be padded to make their Gin traffic equal.
+        expected_totals = {"balanced": 36, "two_hot": 18, "one_hot": 9}
+        actual_totals = {}
+        for case in CANONICAL_CASES:
+            counts = count_distinct_remote_destinations(
+                self.build(case),
+                num_scaleout_ranks=self.D,
+                num_scaleup_ranks=self.G,
+                num_experts=self.E,
+            )
+            actual_totals[case] = sum(
+                count
+                for server_counts in counts
+                for rail_counts in server_counts
+                for count in rail_counts
+            )
+        self.assertEqual(actual_totals, expected_totals)
+
+    def test_force_v1_domain_boundaries_and_exact_integer_types(self):
+        minimum = build_deterministic_topk(
+            "balanced",
+            num_scaleout_ranks=2,
+            num_scaleup_ranks=2,
+            num_tokens_per_rank=0,
+            num_topk=1,
+            num_experts=4,
+        )
+        maximum = build_deterministic_topk(
+            "balanced",
+            num_scaleout_ranks=32,
+            num_scaleup_ranks=32,
+            num_tokens_per_rank=0,
+            num_topk=32,
+            num_experts=1024,
+        )
+        expert_maximum = build_deterministic_topk(
+            "balanced",
+            num_scaleout_ranks=2,
+            num_scaleup_ranks=4,
+            num_tokens_per_rank=0,
+            num_topk=32,
+            num_experts=2048,
+        )
+        self.assertEqual(len(minimum), 4)
+        self.assertEqual(len(maximum), 1024)
+        self.assertEqual(len(expert_maximum), 8)
+
+        defaults = {
+            "case": "balanced",
+            "num_scaleout_ranks": self.D,
+            "num_scaleup_ranks": self.G,
+            "num_tokens_per_rank": 0,
+            "num_topk": self.K,
+            "num_experts": self.E,
+        }
+        invalid_boundaries = (
+            {"num_scaleout_ranks": 1},
+            {"num_scaleout_ranks": 33},
+            {"num_scaleout_ranks": True},
+            {"num_scaleup_ranks": 1},
+            {"num_scaleup_ranks": 33},
+            {"num_scaleup_ranks": False},
+            {"num_topk": 0},
+            {"num_topk": 33},
+            {"num_topk": True},
+            {"num_tokens_per_rank": True},
+            {"num_tokens_per_rank": -1},
+            {"num_tokens_per_rank": 1 << 31},
+            {"num_tokens_per_rank": (1 << 31) // (self.D * self.G) + 1},
+            {"num_experts": True},
+            {"num_experts": 0},
+            {"num_experts": 4096},
+        )
+        for override in invalid_boundaries:
+            with self.subTest(override=override):
+                args = dict(defaults)
+                args.update(override)
+                with self.assertRaises(ValueError):
+                    build_deterministic_topk(**args)
+
+        with self.assertRaises(ValueError):
+            build_deterministic_topk(
+                "balanced",
+                num_scaleout_ranks=2,
+                num_scaleup_ranks=2,
+                num_tokens_per_rank=0,
+                num_topk=1,
+                num_experts=2048,
+            )
+        with self.assertRaises(ValueError):
+            build_deterministic_topk(
+                "balanced",
+                num_scaleout_ranks=2,
+                num_scaleup_ranks=8,
+                num_tokens_per_rank=0,
+                num_topk=1,
+                num_experts=4096,
+            )
+        with self.assertRaises(ValueError):
+            build_deterministic_topk(
+                "balanced",
+                num_scaleout_ranks=2,
+                num_scaleup_ranks=2,
+                num_tokens_per_rank=(1 << 31) // (4 * 32) + 1,
+                num_topk=32,
+                num_experts=1024,
+            )
+
+    def test_two_hot_canonical_fixture_requires_an_inactive_rail(self):
+        # G=2 is a valid force-v1 dimension.  This restriction only keeps the
+        # two_hot fixture observably different from balanced.
+        with self.assertRaises(ValueError):
+            build_deterministic_topk(
+                "two_hot",
+                num_scaleout_ranks=2,
+                num_scaleup_ranks=2,
+                num_tokens_per_rank=0,
+                num_topk=2,
+                num_experts=8,
+            )
+
+    def test_invalid_route_inputs_are_rejected(self):
+        invalid_calls = (
+            {"case": "unknown"},
+            {"num_tokens_per_rank": -1},
+            {"num_topk": 0},
+            {"num_topk": 17},
+            {"num_experts": 47},
+        )
+        defaults = {
+            "case": "balanced",
+            "num_scaleout_ranks": self.D,
+            "num_scaleup_ranks": self.G,
+            "num_tokens_per_rank": self.N,
+            "num_topk": self.K,
+            "num_experts": self.E,
+        }
+        for override in invalid_calls:
+            with self.subTest(override=override):
+                args = dict(defaults)
+                args.update(override)
+                with self.assertRaises(ValueError):
+                    build_deterministic_topk(**args)
+
+
+class CountOracleTest(unittest.TestCase):
+    def test_non_square_three_server_handwritten_oracle(self):
+        # This fixture is deliberately handwritten rather than produced by
+        # build_deterministic_topk.  D=3 and G=2 expose swapped dimensions.
+        routes = [
+            [[12, 13], [24, 25]],
+            [[12, 24], [14, 15]],
+            [[0, 1], [2, 3]],
+            [[0, 24], [2, 3]],
+            [[0, 1], [12, 13]],
+            [[0, 12], [14, 15]],
+        ]
+        expected = [
+            [[0, 1, 1], [0, 2, 1]],
+            [[2, 0, 0], [2, 0, 1]],
+            [[1, 1, 0], [1, 2, 0]],
+        ]
+        self.assertEqual(
+            count_distinct_remote_destinations(
+                routes,
+                num_scaleout_ranks=3,
+                num_scaleup_ranks=2,
+                num_experts=36,
+            ),
+            expected,
+        )
+
+    def test_invalid_and_ragged_routes_raise_value_error(self):
+        valid = [
+            [[0, 1]],
+            [[0, 1]],
+            [[4, 5]],
+            [[4, 5]],
+        ]
+        invalid_routes = []
+        invalid_routes.append(tuple(valid))
+        invalid_routes.append(valid[:-1])
+
+        rank_tuple = copy.deepcopy(valid)
+        rank_tuple[0] = tuple(rank_tuple[0])
+        invalid_routes.append(rank_tuple)
+
+        token_count_ragged = copy.deepcopy(valid)
+        token_count_ragged[0].append([0, 1])
+        invalid_routes.append(token_count_ragged)
+
+        token_tuple = copy.deepcopy(valid)
+        token_tuple[0][0] = tuple(token_tuple[0][0])
+        invalid_routes.append(token_tuple)
+
+        topk_ragged = copy.deepcopy(valid)
+        topk_ragged[0][0].append(2)
+        invalid_routes.append(topk_ragged)
+
+        topk_zero = [[[]] for _ in range(4)]
+        invalid_routes.append(topk_zero)
+
+        bool_expert = copy.deepcopy(valid)
+        bool_expert[0][0][0] = True
+        invalid_routes.append(bool_expert)
+
+        out_of_range = copy.deepcopy(valid)
+        out_of_range[0][0][0] = 8
+        invalid_routes.append(out_of_range)
+
+        duplicate_expert = copy.deepcopy(valid)
+        duplicate_expert[0][0] = [0, 0]
+        invalid_routes.append(duplicate_expert)
+
+        for routes in invalid_routes:
+            with self.subTest(routes=routes):
+                with self.assertRaises(ValueError):
+                    count_distinct_remote_destinations(
+                        routes,
+                        num_scaleout_ranks=2,
+                        num_scaleup_ranks=2,
+                        num_experts=8,
+                    )
+
+        for invalid_dimension in (True, 1, 33):
+            with self.subTest(invalid_dimension=invalid_dimension):
+                with self.assertRaises(ValueError):
+                    count_distinct_remote_destinations(
+                        valid,
+                        num_scaleout_ranks=invalid_dimension,
+                        num_scaleup_ranks=2,
+                        num_experts=8,
+                    )
+
+
+class ResultContractTest(unittest.TestCase):
+    def test_result_record_has_stable_json_contract(self):
+        topology = {"world_size": 8, "num_scaleout_ranks": 2, "num_scaleup_ranks": 4}
+        config = {"num_tokens_per_rank": 3, "num_topk": 4, "num_experts": 32}
+        record = new_result_record(
+            run_id="cpu-contract",
+            case="one_hot",
+            mode="force",
+            topology=topology,
+            config=config,
+        )
+
+        self.assertEqual(record["schema_version"], RESULT_SCHEMA_VERSION)
+        self.assertEqual(record["evidence_label"], "REAL_HYBRID_RUNTIME_UNTESTED")
+        self.assertEqual(
+            set(record),
+            {
+                "schema_version",
+                "run_id",
+                "evidence_label",
+                "case",
+                "mode",
+                "topology",
+                "config",
+                "correctness",
+                "plan",
+                "traffic",
+                "runtime",
+                "error",
+                "claim_scope",
+            },
+        )
+        self.assertEqual(record["claim_scope"], "validation_only")
+        self.assertEqual(record["traffic"]["scope"], "payload_only")
+        self.assertEqual(record["runtime"]["availability"], "not_instrumented")
+        self.assertIsNone(record["runtime"]["wait_cycles"])
+        self.assertIsNone(record["runtime"]["qp_utilization"])
+        self.assertIsNone(record["runtime"]["nic_bytes"])
+        self.assertIsNone(record["error"])
+        json.dumps(record, sort_keys=True)
+
+        topology["world_size"] = 16
+        config["num_topk"] = 8
+        self.assertEqual(record["topology"]["world_size"], 8)
+        self.assertEqual(record["config"]["num_topk"], 4)
+
+    def test_result_metadata_is_strict(self):
+        defaults = {
+            "run_id": "cpu-contract",
+            "case": "one_hot",
+            "mode": "force",
+            "topology": {},
+            "config": {},
+        }
+        invalid_metadata = (
+            {"run_id": 1},
+            {"run_id": True},
+            {"run_id": "   "},
+            {"case": True},
+            {"case": "capacity"},
+            {"mode": True},
+            {"mode": "auto"},
+        )
+        for override in invalid_metadata:
+            with self.subTest(override=override):
+                args = dict(defaults)
+                args.update(override)
+                with self.assertRaises(ValueError):
+                    new_result_record(**args)
+
+    def test_nested_inputs_are_json_roundtrip_copied(self):
+        topology = {"nodes": [{"ranks": [0, 1]}]}
+        config = {"shape": {"topk": [2, 4]}}
+        record = new_result_record(
+            run_id="cpu-contract",
+            case="balanced",
+            mode="off",
+            topology=topology,
+            config=config,
+        )
+        topology["nodes"][0]["ranks"].append(2)
+        config["shape"]["topk"].append(8)
+        self.assertEqual(record["topology"], {"nodes": [{"ranks": [0, 1]}]})
+        self.assertEqual(record["config"], {"shape": {"topk": [2, 4]}})
+
+    def test_non_dict_or_non_json_inputs_are_rejected(self):
+        class ListSubclass(list):
+            pass
+
+        recursive = {}
+        recursive["self"] = recursive
+        invalid_pairs = (
+            ([], {}),
+            ({}, []),
+            ({"bad": {1, 2}}, {}),
+            ({}, {"bad": object()}),
+            ({1: "bad-key"}, {}),
+            ({"nested": {1: "bad-key"}}, {}),
+            ({"nested": ListSubclass([{1: "bad-key"}])}, {}),
+            (recursive, {}),
+            ({"bad": float("nan")}, {}),
+            ({}, {"bad": float("inf")}),
+        )
+        for topology, config in invalid_pairs:
+            with self.subTest(topology=topology, config=config):
+                with self.assertRaises(ValueError):
+                    new_result_record(
+                        run_id="cpu-contract",
+                        case="balanced",
+                        mode="off",
+                        topology=topology,
+                        config=config,
+                    )
+
+
+if __name__ == "__main__":
+    unittest.main()
