@@ -25,6 +25,11 @@ from ..utils.comm import get_nccl_comm_handle
 _RAIL_BALANCE_MODES = ('off', 'force')
 _RAIL_BALANCE_MAX_PROXY_SLOTS = (1 << 31) - 1
 _RAIL_BALANCE_FORCE_HOST_AVAILABLE = False
+_RAIL_BALANCE_WORLD_GATE_WORDS = 128
+_RAIL_BALANCE_WORLD_GATE_MAX_FIELDS = 63
+_RAIL_BALANCE_WORLD_GATE_INT64_MAX = (1 << 63) - 1
+_RAIL_BALANCE_WORLD_GATE_RANK_MASK = (1 << 32) - 1
+_RAIL_BALANCE_WORLD_GATE_MAX_ERROR_PRIORITY = (1 << 31) - 1
 
 
 def _rail_balance_error(code: str, detail: str) -> str:
@@ -96,6 +101,100 @@ def _rail_balance_force_available() -> bool:
         return compiled_capability() is True
     except Exception:
         return False
+
+
+def _make_rail_balance_world_gate_error_key(priority: int, rank: int) -> int:
+    """Encode an error so MAX selects higher priority, then the lowest rank."""
+    if type(priority) is not int or not (
+            0 <= priority <= _RAIL_BALANCE_WORLD_GATE_MAX_ERROR_PRIORITY):
+        raise ValueError('rail-balance WORLD gate error priority is out of range')
+    if type(rank) is not int or not (
+            0 <= rank <= _RAIL_BALANCE_WORLD_GATE_RANK_MASK):
+        raise ValueError('rail-balance WORLD gate error rank is out of range')
+    if priority == 0:
+        return 0
+    return (priority << 32) | (_RAIL_BALANCE_WORLD_GATE_RANK_MASK - rank)
+
+
+def _decode_rail_balance_world_gate_error_key(error_key: int) -> Tuple[int, int]:
+    """Return ``(priority, rank)`` for a nonnegative WORLD-gate error key."""
+    if type(error_key) is not int or not (
+            0 <= error_key <= _RAIL_BALANCE_WORLD_GATE_INT64_MAX):
+        raise ValueError('rail-balance WORLD gate error key is out of range')
+    if error_key == 0:
+        return 0, -1
+    return (error_key >> 32,
+            _RAIL_BALANCE_WORLD_GATE_RANK_MASK -
+            (error_key & _RAIL_BALANCE_WORLD_GATE_RANK_MASK))
+
+
+def _validate_rail_balance_world_gate_storage(
+        device_words: torch.Tensor, host_words: torch.Tensor) -> None:
+    """Validate the fixed storage once, before it enters a force transaction."""
+    if device_words.dtype != torch.int64 or device_words.device.type != 'cuda' or \
+            tuple(device_words.shape) != (_RAIL_BALANCE_WORLD_GATE_WORDS,) or \
+            not device_words.is_contiguous():
+        raise ValueError(
+            'rail-balance WORLD gate device storage must be contiguous '
+            'CUDA int64[128]')
+    if host_words.dtype != torch.int64 or host_words.device.type != 'cpu' or \
+            tuple(host_words.shape) != (_RAIL_BALANCE_WORLD_GATE_WORDS,) or \
+            not host_words.is_contiguous() or not host_words.is_pinned():
+        raise ValueError(
+            'rail-balance WORLD gate host storage must be contiguous pinned '
+            'CPU int64[128]')
+
+
+def _encode_rail_balance_world_gate(
+        host_words: torch.Tensor,
+        local_error_key: int,
+        common_fields: Sequence[int]) -> None:
+    """Encode one checked fixed gate payload into caller-owned host storage."""
+    if type(local_error_key) is not int or not (
+            0 <= local_error_key <= _RAIL_BALANCE_WORLD_GATE_INT64_MAX):
+        raise ValueError('rail-balance WORLD gate error key is out of range')
+    if len(common_fields) > _RAIL_BALANCE_WORLD_GATE_MAX_FIELDS:
+        raise ValueError('rail-balance WORLD gate has more than 63 fields')
+
+    checked_fields = []
+    for value in common_fields:
+        if type(value) is not int or not (
+                0 <= value <= _RAIL_BALANCE_WORLD_GATE_INT64_MAX):
+            raise ValueError(
+                'rail-balance WORLD gate fields must be nonnegative int64')
+        checked_fields.append(value)
+
+    host_words.zero_()
+    host_words[0] = local_error_key
+    for index, value in enumerate(checked_fields):
+        host_words[2 + 2 * index] = value
+        host_words[3 + 2 * index] = -value
+
+
+def _decode_rail_balance_world_gate(
+        host_words: torch.Tensor) -> Tuple[int, int, int, int]:
+    """Return ``(error_key, field, minimum, maximum)`` without rank-local throws."""
+    error_key = int(host_words[0].item())
+    if error_key != 0:
+        return error_key, -1, 0, 0
+    for index in range(_RAIL_BALANCE_WORLD_GATE_MAX_FIELDS):
+        maximum = int(host_words[2 + 2 * index].item())
+        minimum = -int(host_words[3 + 2 * index].item())
+        if minimum != maximum:
+            return 0, index, minimum, maximum
+    return 0, -1, 0, 0
+
+
+def _run_rail_balance_world_gate(
+        device_words: torch.Tensor,
+        host_words: torch.Tensor,
+        group: dist.ProcessGroup) -> Tuple[int, int, int, int]:
+    """Run one prevalidated fixed-tensor WORLD consensus on the caller stream."""
+    device_words.copy_(host_words, non_blocking=True)
+    dist.all_reduce(device_words, op=dist.ReduceOp.MAX, group=group)
+    host_words.copy_(device_words, non_blocking=True)
+    torch.cuda.current_stream(device_words.device).synchronize()
+    return _decode_rail_balance_world_gate(host_words)
 
 
 class EPHandle:
