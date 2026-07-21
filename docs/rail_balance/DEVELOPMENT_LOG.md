@@ -5508,3 +5508,48 @@ it incorrectly looked for an extra `jit_cache` child below
 report schema showed `artifacts` is a direct child; the corrected generator
 then completed all assertions.  This failure changed no report, cubin, source
 file or GPU process.
+
+## 2026-07-22 — D096: pause after read-only O079/O080 design audit
+
+The accepted O078 evidence was committed and pushed as `afb3278`.  The next
+work was deliberately limited to read-only CPU-oracle and source audits; no
+CUDA, JIT, runtime or benchmark file changed and no GPU workload was started.
+
+The transfer-matrix audit found a matched fixture family that should replace
+the earlier confounded draft.  Every candidate can use exactly
+G8/D9/N2048-per-rank/K4/C256/Pcap7168, H256 or H7168, and 7,168 moved copies:
+
+- fan-out: owner 0 sends 1,024 copies to each other egress;
+- fan-in: owners 1--7 each send 1,024 copies to egress 0;
+- full mesh: every owner sends 128 copies to every other egress;
+- rotation: every owner sends 896 copies to `(owner + shift) % 8`, with
+  shifts 1 and 4 as the minimum performance representatives and all shifts
+  available to the CPU/function oracle.
+
+The CPU oracle proved the resulting owner-to-egress matrices, quotas,
+segments, per-rank token counts, capacity and moved total.  This common shape
+keeps token scan count, K/D/C, grid ceiling and arena geometry fixed; the
+previous N1024/N1792/N2048 mixed-shape draft must not be used for a
+matrix-only claim.  Before measurement, the benchmark report must also record
+the complete owner-to-egress matrix plus outgoing row and incoming column
+sums.  Its current rank-local logical-byte field uses incoming
+`proxy_required`; source must use outgoing bytes while return uses incoming
+bytes.  Aggregate moved bytes are already correct.
+
+The compute-interference audit recommends extending the existing audited
+benchmark behind a default-off `--interference-mode`, not duplicating its
+eight-rank lifecycle.  The minimal H7168 fixture is one preallocated BF16
+`torch.mm([1024,7168], [7168,7168], out=[1024,7168])` on an independent
+stream.  Fresh stage-only, compute-only and concurrent groups must share the
+same allocations, cuBLAS warmup and CUDA-event resources.  Primary quantities
+are stage slowdown, compute slowdown and
+`(Ts + Tc - Tx) / min(Ts, Tc)`; Gloo gates stay outside the local timers.
+Three 100-steady repetitions rotate group order.  Nsys must verify actual
+kernel overlap; if start skew exceeds 10% of the shorter task, no overlap-
+efficiency claim is accepted.  Historical O078 reports cannot be reused as
+the stage-only side because they lack the matched GEMM setup.
+
+Resume by pre-registering O079's exact report schema and gates, then add only
+Python fixture/report instrumentation and functional oracles.  Do not change
+the production kernel before matrix evidence exists.  O080 compute
+interference follows O079 rather than being bundled with it.

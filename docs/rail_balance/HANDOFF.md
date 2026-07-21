@@ -277,9 +277,15 @@ No C070 timing is performance evidence.
    immutable-plan contract and all current fault recovery.  Do not add an O(C)
    validation pass, TMA rewrite, queue/atomic, new workspace, block-geometry,
    barrier, ABI, capability or default-off change without a new evidence chain.
-10. Next freeze and run the smallest transfer-matrix and compute-interference
-   experiments.  Performance work still requires idle GPUs.  C105 packages the
-   fastest real-cluster bring-up; truthful D>1 Gin remains C080-H/C110.
+10. Resume at D096.  First pre-register O079, then add only Python fixtures and
+   report instrumentation for the matched G8/D9/N2048/K4/C256/Pcap7168,
+   moved-7168 fan-out/fan-in/full-mesh/rotation matrices.  Record outgoing and
+   incoming bytes separately; the current asymmetric source rank-local byte
+   field is not valid.  Do not bundle production-kernel changes.
+11. After O079, pre-register O080's default-off, same-allocation H7168
+   stage-only/compute-only/concurrent GEMM experiment.  Performance work still
+   requires idle GPUs.  C105 packages the fastest real-cluster bring-up;
+   truthful D>1 Gin remains C080-H/C110.
 
 Pinned runtime for accepted commands:
 
