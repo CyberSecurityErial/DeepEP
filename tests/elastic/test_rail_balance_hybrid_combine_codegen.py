@@ -225,6 +225,18 @@ def _run_case(name: str) -> None:
     assert result["num_channels"] == 256
     assert result["num_forward_metadata_dims"] == 3 + 2 * topk
     assert result["combine_token_bytes"] > hidden * 2
+    # Independently reconstruct TokenLayout<false>: BF16 hidden is already
+    # 32-byte aligned for every supported H and combine metadata is 8*K bytes.
+    metadata_bytes = ((8 * topk + 31) // 32) * 32
+    expected_token_bytes = hidden * 2 + metadata_bytes
+    expected_reduce_rows = min(scaleup, topk)
+    expected_reduce_offset = (
+        expected_reduce_rows * scaleout * 8192 * expected_token_bytes
+    )
+    assert result["combine_token_bytes"] == expected_token_bytes
+    assert result["legacy_reduce_rows"] == expected_reduce_rows
+    assert result["legacy_reduce_buffer_offset_bytes"] == \
+        expected_reduce_offset
 
     code = result["code"]
     assert "#include <deep_ep/impls/rail_balance_hybrid_combine.cuh>" in code
@@ -251,6 +263,48 @@ def _run_case(name: str) -> None:
     assert "RailBalanceHybridLegacyCombineProbeRuntime::generate" in \
         runtime_header
     assert "rail_balance_hybrid_combine_legacy_probe_v1_" in runtime_header
+    assert "struct PreparedRailBalanceHybridCombine" in runtime_header
+    assert "launch_prepared_rail_balance_hybrid_combine(" in runtime_header
+    assert (
+        "get_rail_balance_hybrid_legacy_reduce_buffer_offset_bytes("
+        in runtime_header
+    )
+    assert "get_rail_balance_hybrid_legacy_reduce_buffer_base(" in \
+        runtime_header
+    assert "rail_balance::checked_mul_i64(" in runtime_header
+    reduce_base_begin = runtime_header.index(
+        "static void* get_rail_balance_hybrid_legacy_reduce_buffer_base(")
+    reduce_base_end = runtime_header.index(
+        "static RailBalanceHybridCombineRuntime::Args", reduce_base_begin)
+    reduce_base_helper = runtime_header[reduce_base_begin:reduce_base_end]
+    assert "return math::advance_ptr(" in reduce_base_helper
+    assert (
+        "prepared.legacy_reduce_buffer_offset_bytes"
+        in reduce_base_helper
+    )
+    assert "TokenLayout(" not in reduce_base_helper
+    assert "EP_UNIFIED_ASSERT(" not in reduce_base_helper
+
+    # The committed adapter is deliberately launch-only. Validation, JIT,
+    # allocation, synchronization, and status inspection belong to prepare or
+    # the outer transaction gates.
+    launch_begin = runtime_header.index(
+        "static void launch_prepared_rail_balance_hybrid_combine(")
+    launch_end = runtime_header.index(
+        "// Probe the immutable legacy root", launch_begin)
+    launch_adapter = runtime_header[launch_begin:launch_end]
+    assert "RailBalanceHybridCombineRuntime::launch(" in launch_adapter
+    for forbidden in (
+        "validate_rail_balance_hybrid_combine_spec(",
+        "jit::compiler->build(",
+        "torch::",
+        ".data_ptr",
+        "cudaMemcpy",
+        "cudaStreamSynchronize",
+        "cudaDeviceSynchronize",
+        "EP_HOST_ASSERT(",
+    ):
+        assert forbidden not in launch_adapter
     assert "constexpr int kNumForwardMetadataDims = 3 + kNumTopk * 2;" in header
     assert "i * kNumForwardMetadataDims + 2);" in header
     assert "i * kNumForwardMetadataDims + 3 + lane_idx" in header

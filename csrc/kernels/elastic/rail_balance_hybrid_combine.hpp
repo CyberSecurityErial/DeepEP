@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <climits>
 #include <memory>
 
@@ -9,6 +10,7 @@
 #include <deep_ep/common/compiled.cuh>
 #include <deep_ep/common/exception.cuh>
 #include <deep_ep/common/layout.cuh>
+#include <deep_ep/common/rail_balance_hybrid_layout.cuh>
 
 #include "../../jit/compiler.hpp"
 #include "../../jit/launch_runtime.hpp"
@@ -30,6 +32,16 @@ struct RailBalanceHybridCombineSpec {
     int num_qps;
     int64_t num_timeout_cycles;
     int num_smem_bytes;
+};
+
+// Everything that may validate geometry, allocate, or build JIT code is
+// frozen before the committed Hybrid epoch. The launch adapter below only
+// supplies invocation-specific pointers/counts to this prepared runtime.
+struct PreparedRailBalanceHybridCombine {
+    std::shared_ptr<jit::KernelRuntime> runtime;
+    RailBalanceHybridCombineSpec spec;
+    jit::LaunchArgs launch_args;
+    int64_t legacy_reduce_buffer_offset_bytes;
 };
 
 class RailBalanceHybridCombineRuntime final:
@@ -151,6 +163,40 @@ static void validate_rail_balance_hybrid_combine_spec(
             spec.num_smem_bytes);
 }
 
+// In the force-v1 non-expanded, multiple-reduction layout, the scale-up
+// staging region preceding Hybrid's final scale-out receive/reduce buffer has
+// one row per scale-up rank when G <= K, otherwise one row per top-k lane.
+// Keep this byte calculation in one place for combine, return-unshuffle, and
+// the unchanged legacy reduce epilogue. It is a pre-commit prepare operation:
+// the checked result is frozen into PreparedRailBalanceHybridCombine.
+static int64_t
+get_rail_balance_hybrid_legacy_reduce_buffer_offset_bytes(
+        const RailBalanceHybridCombineSpec& spec) {
+    const auto token_layout = layout::TokenLayout(
+        spec.hidden * sizeof(nv_bfloat16), 0, spec.num_topk, false);
+    const auto tokens_per_row = rail_balance::checked_mul_i64(
+        spec.num_scaleout_ranks, spec.num_max_tokens_per_rank);
+    EP_UNIFIED_ASSERT(tokens_per_row <= INT_MAX);
+    const auto scaleup_buffer = layout::BufferLayout<false>(
+        token_layout,
+        std::min(spec.num_scaleup_ranks, spec.num_topk),
+        static_cast<int>(tokens_per_row));
+    const auto checked_num_bytes = rail_balance::checked_mul_i64(
+        rail_balance::checked_mul_i64(
+            scaleup_buffer.num_ranks,
+            scaleup_buffer.num_max_tokens_per_rank),
+        scaleup_buffer.get_num_bytes_per_token());
+    EP_UNIFIED_ASSERT(checked_num_bytes == scaleup_buffer.get_num_bytes());
+    return checked_num_bytes;
+}
+
+static void* get_rail_balance_hybrid_legacy_reduce_buffer_base(
+        const PreparedRailBalanceHybridCombine& prepared,
+        void* buffer) {
+    return math::advance_ptr(
+        buffer, prepared.legacy_reduce_buffer_offset_bytes);
+}
+
 static RailBalanceHybridCombineRuntime::Args
 make_rail_balance_hybrid_combine_args(
         const RailBalanceHybridCombineSpec& spec) {
@@ -180,7 +226,7 @@ make_rail_balance_hybrid_combine_args(
     };
 }
 
-static std::shared_ptr<jit::KernelRuntime>
+static PreparedRailBalanceHybridCombine
 prepare_rail_balance_hybrid_combine(
         const RailBalanceHybridCombineSpec& spec) {
     const auto args = make_rail_balance_hybrid_combine_args(spec);
@@ -192,8 +238,58 @@ prepare_rail_balance_hybrid_combine(
         spec.hidden, spec.num_max_tokens_per_rank,
         spec.num_experts, spec.num_topk,
         spec.num_qps, spec.num_timeout_cycles);
-    return jit::compiler->build(
-        key, RailBalanceHybridCombineRuntime::generate(args));
+    return {
+        .runtime = jit::compiler->build(
+            key, RailBalanceHybridCombineRuntime::generate(args)),
+        .spec = spec,
+        .launch_args = args.launch_args,
+        .legacy_reduce_buffer_offset_bytes =
+            get_rail_balance_hybrid_legacy_reduce_buffer_offset_bytes(spec),
+    };
+}
+
+// Committed-stage adapter: no validation, allocation, JIT, synchronization,
+// or status inspection is permitted here. All static state comes from the
+// prepared object; this function only launches on the caller-owned stream.
+static void launch_prepared_rail_balance_hybrid_combine(
+        const PreparedRailBalanceHybridCombine& prepared,
+        void* x,
+        float* topk_weights,
+        int* src_metadata,
+        int* psum_num_recv_tokens_per_scaleup_rank,
+        int* token_metadata_at_forward,
+        int* channel_linked_list,
+        const jit::NoRefPtr& nccl_dev_comm,
+        const ncclWindow_t& nccl_window,
+        void* buffer,
+        void* workspace,
+        void* rail_balance_proxy_return_base,
+        const int& scaleout_rank_idx,
+        const int& scaleup_rank_idx,
+        const int& num_reduced_tokens,
+        const at::cuda::CUDAStream& stream) {
+    const RailBalanceHybridCombineRuntime::Args args = {
+        .spec = prepared.spec,
+        .x = static_cast<nv_bfloat16*>(x),
+        .topk_weights = topk_weights,
+        .src_metadata = src_metadata,
+        .psum_num_recv_tokens_per_scaleup_rank =
+            psum_num_recv_tokens_per_scaleup_rank,
+        .token_metadata_at_forward = token_metadata_at_forward,
+        .channel_linked_list = channel_linked_list,
+        .nccl_dev_comm = nccl_dev_comm,
+        .nccl_window = nccl_window,
+        .buffer = buffer,
+        .workspace = workspace,
+        .rail_balance_proxy_return_base =
+            rail_balance_proxy_return_base,
+        .scaleout_rank_idx = scaleout_rank_idx,
+        .scaleup_rank_idx = scaleup_rank_idx,
+        .num_reduced_tokens = num_reduced_tokens,
+        .launch_args = prepared.launch_args,
+    };
+    RailBalanceHybridCombineRuntime::launch(
+        prepared.runtime, args, stream);
 }
 
 // Probe the immutable legacy root without touching CombineRuntime::generate:
@@ -286,7 +382,7 @@ static pybind11::dict rail_balance_hybrid_combine_codegen_test(
     const auto force_code =
         RailBalanceHybridCombineRuntime::generate(force_args);
     const auto force_runtime = prepare_rail_balance_hybrid_combine(spec);
-    EP_HOST_ASSERT(force_runtime != nullptr);
+    EP_HOST_ASSERT(force_runtime.runtime != nullptr);
 
     const RailBalanceHybridLegacyCombineProbeRuntime::Args legacy_args = {
         .spec = spec,
@@ -306,6 +402,9 @@ static pybind11::dict rail_balance_hybrid_combine_codegen_test(
     result["num_channels"] = num_sms * num_channels_per_sm;
     result["num_forward_metadata_dims"] = 3 + 2 * num_topk;
     result["combine_token_bytes"] = token_layout.get_num_bytes<false>();
+    result["legacy_reduce_rows"] = std::min(num_scaleup_ranks, num_topk);
+    result["legacy_reduce_buffer_offset_bytes"] =
+        force_runtime.legacy_reduce_buffer_offset_bytes;
     result["use_expanded_layout"] = false;
     result["allow_multiple_reduction"] = true;
     result["direct_proxy_return_base"] = true;
