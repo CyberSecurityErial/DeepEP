@@ -6,9 +6,10 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 
 ## Safe pause state
 
-- H5a dispatch completion is implemented, independently audited, and split
-  into implementation/test commits; no half-written H5a file remains. The next
-  slice is H5b one-shot handle ownership plus combine.
+- H5a dispatch completion and H5b private combine completion are implemented,
+  independently audited, and split into implementation/test commits; no
+  half-written C++ lifecycle file remains. The next slice is the minimal public
+  Python `EPHandle` ownership/consumption and WORLD-gate wiring.
 - C000 through C070 remain complete for the agreed single-node PoC scope.
 - C080-A/B are complete; C080-D shared source/return cores and vnode closure
   pass their current local gates. C080-C remains open only for the production
@@ -16,8 +17,9 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Latest pushed implementation checkpoints are `81ecb86` (owning dispatch finish) and
-  `7bd17a4` (H5a source gate), following `edb1a0e`/`ba82134` (adjacent Hybrid
+- Latest local implementation checkpoints are `ffe4fd4` (owning combine
+  lifecycle) and `403e725` (H5b source gate), following `81ecb86`/`7bd17a4`
+  (owning dispatch finish), `edb1a0e`/`ba82134` (adjacent Hybrid
   dispatch commit) and `4e48b84`/`7ab382b` (owning prepare), on
   `fork/feat/rail-balance-prototype`.
 - Public force still fails closed and no result claims real Gin/RDMA behavior.
@@ -108,6 +110,13 @@ the exact file snapshots without inventing commit identity.
   truthful EP8 D1 fail-close/recovery, 4x2/H7168 vnode, true EP8 return LSA,
   and G8xD2/H7168 dispatch codegen pass. Local production success remains
   impossible at D=1; this is not Gin runtime evidence.
+- H5b private combine ownership is committed at `ffe4fd4` with its exact source
+  contract at `403e725`. Prepare is retryable before the future WORLD combine
+  gate; abort releases only the new combine owner; commit poisons once and
+  submits main combine, return-unshuffle, local barrier, and native epilogue
+  adjacently before one correctness sync. Adapter, codegen, API/legacy, build,
+  truthful D1 fail-close, and independent C++ audit pass. Public `EPHandle`
+  identity/consumption and force capability are deliberately still closed.
 
 ## Mandatory retained boundary
 
@@ -128,12 +137,15 @@ No C070 timing is performance evidence.
 2. Verify branch and state with `git status --short --branch` and run
    `git diff --cached --check`.
 3. Do not redo C061/C070 unless the relevant code changes.
-4. H3/H4/H5a now reach a synchronized private DispatchLive result. Implement
-   H5b in native DeepEP order: bind that result to a buffer/invocation-owned,
-   one-shot non-cached handle, then connect main combine → return unshuffle →
-   local barrier → legacy epilogue as one fail-closed lifecycle.
-   Do not return to vnode or add a descriptor/ring/coordinator. Preserve the
-   distinction between host launch acceptance and real Gin completion.
+4. H3/H4/H5a/H5b now reach a synchronized private DispatchLive result and a
+   complete private combine transaction. Wire the smallest public force path:
+   dispatch prepare → fixed WORLD Gate1 → finish/Gate2 → commit/finish → exact
+   native tuple; bind the result to a buffer/invocation-owned, one-shot,
+   non-cached handle. Combine must validate that handle, prepare before its
+   WORLD gate, abort retryably on gate rejection, atomically consume on gate
+   acceptance, then call the existing private commit. Do not return to vnode
+   or add a descriptor/ring/coordinator. Preserve the distinction between host
+   launch acceptance and real Gin completion.
    Its accepted evidence is in
    `tests/elastic/test_rail_balance_hybrid_plan_world_gate.py`: CPU and EP8
    watchdog, four abort/retry states, capacity/asymmetric fail-close,

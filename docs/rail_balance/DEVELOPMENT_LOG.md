@@ -3276,3 +3276,71 @@ checkpoint.  H5b next owns buffer/invocation-bound one-shot handle publication
 and the uninterrupted main-combine → return-unshuffle → local barrier → native
 epilogue transaction.  Public force remains disabled and no local result
 claims a truthful D>1 Gin runtime.
+
+## 2026-07-21 — D053: close the private one-shot Hybrid combine transaction
+
+H5b adds three private C++ boundaries without opening the public force path:
+`_rail_balance_hybrid_combine_prepare`, `_abort`, and `_commit`. Prepare checks
+the live H5a owner and every prebuilt stage/raw dependency, requires the
+force-v1 BF16 expert payload plus FP32 top-k weights, allocates exact
+owner-token outputs, freezes their pointers, orders compute before comm, and
+installs the completion owner as its final operation. A future WORLD-gate
+failure can call the idempotent abort; it releases only that new owner and
+leaves the older synchronized dispatch handle retryable.
+
+Commit captures all references, pointers, handles, and POD geometry while the
+transaction is still live. Its committed interval contains exactly:
+
+```text
+state = Invalid
+main Hybrid combine
+return-unshuffle
+local LSA barrier
+native non-expanded combine epilogue
+```
+
+All four submissions use the same `comm_stream` with no intervening allocation,
+JIT, Tensor accessor, synchronization, or branch. The epilogue replays H5a's
+owned `copied_topk_idx`, never the caller's mutable original. One status D2H
+and one stream synchronization observe the complete chain. Only success first
+constructs the native three-item result and then resets the whole pending
+transaction; any post-submit failure retains `Invalid` plus every owner.
+
+Accepted evidence:
+
+```text
+PASS full extension rebuild and all three pybind symbols
+PASS H5b exact owner/prepare/abort/four-call commit source contract
+PASS H5a, H4c, and H4b source contracts
+PASS prepared epilogue/barrier and return-unshuffle adapter regressions
+PASS production-shaped G8xD2/H7168/K8 combine codegen
+PASS truthful EP8 D1 H4b fail-close/recovery: 3 fixed MAX gates
+PASS API 9/9 and legacy Hybrid identity 4/4
+PASS independent H5b ABI/lifetime audit: no C++ blocker
+PASS git diff --check
+```
+
+Failures, fixes, and resource decisions retained:
+
+- the first prepare draft accepted missing top-k weights although force-v1's
+  combine specialization requires FP32 weights; prepare now rejects `None`;
+- the first epilogue draft replayed the mutable original top-k tensor instead
+  of H5a's owned copy; the raw ABI and source gate now freeze
+  `copied_topk_idx`;
+- the first abort draft asserted that every rank had installed an owner. A
+  rank can fail prepare earlier than its peers, so abort is now stale-safe and
+  idempotent while preserving `DispatchLive`;
+- the first focused codegen command used the nonexistent shorthand case name
+  `8x2_h7168_k8` and exited in argparse. The canonical
+  `8x2_h7168_k8_rank_tt` case passed;
+- positively identified Megatron PIDs 3806509-3806512, each holding roughly
+  36 GiB, were terminated under standing authorization. The unrelated
+  `/home/w00809645/repos/CUDA_Kernel_Samples/elementwise/add` process was left
+  running because it uses only about 528 MiB and is not in the authorized
+  Megatron scope.
+
+Implementation commit `ffe4fd4` and source-gate commit `403e725` form the H5b
+checkpoint. This is private host/C++ closure, not public `EPHandle` closure:
+Python buffer identity, cached-handle rejection, consumed-state atomicity,
+constructor/dispatch WORLD consensus, and capability activation remain next.
+No local result claims a truthful D>1 Gin/RDMA run.

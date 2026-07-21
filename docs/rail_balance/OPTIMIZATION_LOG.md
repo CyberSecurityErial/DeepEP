@@ -1076,3 +1076,20 @@ were preferred over trusting the legal-kernel bound because H5a runs before its
 first safe status read and must remain defined under partial/asynchronous
 failure.  The checks have no effect on the communication kernel or successful
 GPU schedule.
+
+## Host-path decision O052 — make ticket transfer metadata-only
+
+H5b does not copy the dispatch handle or send it through NVLink/RDMA. The
+future public `EPHandle` will carry only buffer identity, invocation identity,
+and one-shot consumption state while C++ retains the owning tensors. Handing
+the ticket back to combine is therefore a host lookup/validation operation;
+the payload stays where dispatch placed it.
+
+The nonzero control-plane cost is the WORLD agreement before publication and
+before irreversible combine submission. Each gate reduces a fixed 1 KiB
+buffer with one MAX; its byte volume is negligible, but rank rendezvous waits
+for the slowest participant. It is retained for force-v1 correctness and must
+be timed separately from prepare, ticket validation, stream dependency, and
+the four device stages. Removing or overlapping a gate is C100 work and
+requires the user's NCU/Nsys procedure plus real measurements; no extra
+collective or generic transaction layer is added speculatively.

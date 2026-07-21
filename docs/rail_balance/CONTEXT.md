@@ -502,3 +502,16 @@ Out of scope until evidence expands the project:
   remains `Invalid`. The synchronized force-v1 returns no event. Public Python
   force and one-shot combine ownership remain H5b/public work, and the local
   D=1 machine still cannot execute a truthful production Hybrid success path.
+- H5b now closes the private symmetric combine transaction. Prepare validates
+  the synchronized H5a `DispatchLive` owner, requires native force-v1 FP32
+  weights, allocates exact owner-shaped outputs, freezes every raw dependency,
+  and installs one owning completion before the future WORLD combine gate.
+  Gate rejection can call an idempotent abort that releases only this new
+  completion and preserves the dispatch handle. Commit first poisons the
+  transaction, then submits main combine, return-unshuffle, the existing local
+  barrier, and the native epilogue adjacently on `comm_stream`; only one final
+  status read/sync can reset the entire transaction and return the native
+  three-item ABI. Public Python still does not call these methods, so buffer
+  identity, cached rejection, atomic handle consumption, and capability
+  opening remain the next host slice. Local D=1 still supplies no successful
+  production Gin evidence.
