@@ -4962,3 +4962,45 @@ The codegen command used one visible GPU and ran the complete dispatch then
 combine scripts with their 900-second watchdogs in the same initially empty
 cache.  No failure occurred in D087.  Focused sanitizer remains the final
 correctness gate before B-side timing.
+
+## 2026-07-22 — D088: pass focused O077 Compute Sanitizer
+
+Compute Sanitizer 2025.1.0.0 ran the smallest B1 matrix that still includes
+the partial-deficit fallback, pure-deficit wrap, exact C100 rotation,
+C1024/D32, capacity failure, invalid inputs and non-default stream.  Every tool
+used one visible GPU, one independent fresh JIT cache, the pinned interpreter,
+`--error-exitcode 86`, and `--target-processes all`.
+
+| Tool | Filter/option | JIT cache | Result | Log SHA256 |
+| --- | --- | --- | --- | --- |
+| memcheck | `kns=rail_balance_hybrid_prefix_impl` | `/tmp/deepep-o077-memcheck.kukjmk` | `ERROR SUMMARY: 0 errors` | `a9d061cee538182f762e132abeea7bac7bddb844338f25751bbbb043f242c425` |
+| synccheck | `kns=rail_balance_hybrid_prefix_impl` | `/tmp/deepep-o077-synccheck.QM7ukU` | `ERROR SUMMARY: 0 errors` | `a9d061cee538182f762e132abeea7bac7bddb844338f25751bbbb043f242c425` |
+| initcheck | unfiltered, `--check-api-memory-access no` | `/tmp/deepep-o077-initcheck.ajKhF3` | `ERROR SUMMARY: 0 errors` | `a9d061cee538182f762e132abeea7bac7bddb844338f25751bbbb043f242c425` |
+| racecheck | prefix filter, detect info, report all | `/tmp/deepep-o077-racecheck.cdldC9` | `0 hazards displayed (0 errors, 0 warnings)` | `91dbb142f8feb8786cd6fde6ac035e816b67db14e4b7b400a01386ec106b75c4` |
+
+Raw tool logs are retained under
+`.cache/rail_balance/c100/o077/sanitizer-bf68130/`.  The first three logs have
+the same hash because each contains only the identical sanitizer banner and
+zero-error summary; this is not a copy/paste inference.  Initcheck remains
+unfiltered so predecessor count/plan writes are tracked, while disabling only
+API-memory shadow checking avoids unrelated allocator/IPC instrumentation.
+Racecheck checks shared-memory hazards and therefore cannot prove peer-memory
+or system-scope ordering; those semantics are covered by the completed LSA
+functional matrix, not relabelled as racecheck evidence.
+
+The exact command shape was:
+
+```bash
+env OMP_NUM_THREADS=1 EP_DISABLE_GIN=1 \
+  EP_JIT_CACHE_DIR=<fresh-cache> CUDA_VISIBLE_DEVICES=0 \
+  PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 \
+  compute-sanitizer --tool <tool> --error-exitcode 86 \
+  --target-processes all [tool-specific-options] \
+  --log-file <absolute-log-path> \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/test_rail_balance_hybrid_plan_cuda.py \
+  --device 0 --random-seeds 1
+```
+
+No sanitizer command failed in D088.  O077 can now enter profiler-free B-side
+measurement on an eligibility-gated idle eight-GPU window.

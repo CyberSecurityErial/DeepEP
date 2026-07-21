@@ -1776,3 +1776,11 @@ WORLD gates, default-off native EP8 smoke, and force dispatch/combine codegen
 all pass from fresh JIT caches.  This closes the ordinary local functional
 matrix for O077.  The changed prefix kernel still requires a focused sanitizer
 rerun before profiler-free B-side collection.
+
+Sanitizer status: Compute Sanitizer 2025.1.0.0 ran the 13-case focused B1
+matrix against four fresh JIT caches.  Prefix-filtered memcheck and synccheck,
+unfiltered device initcheck with only API-memory shadow checking disabled, and
+prefix-filtered racecheck all pass.  The first three report zero errors;
+racecheck reports zero hazards, zero errors and zero warnings.  This is the
+final correctness gate for O077; it is not performance evidence and does not
+claim that racecheck proves cross-GPU system-scope ordering.
