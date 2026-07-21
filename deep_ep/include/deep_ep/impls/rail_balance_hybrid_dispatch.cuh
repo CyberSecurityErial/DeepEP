@@ -73,6 +73,14 @@ rail_balance_hybrid_dispatch_impl(
                      "Invalid force Hybrid scale-out size");
     EP_STATIC_ASSERT(kNumScaleupRanks >= 2 and kNumScaleupRanks <= 32,
                      "Invalid force Hybrid scale-up size");
+    EP_STATIC_ASSERT(kNumRanks <= layout::WorkspaceLayout::kNumMaxRanks,
+                     "Force Hybrid rank geometry exceeds workspace capacity");
+    EP_STATIC_ASSERT(kNumExperts <= layout::WorkspaceLayout::kNumMaxExperts,
+                     "Force Hybrid expert geometry exceeds workspace capacity");
+    EP_STATIC_ASSERT(
+        kNumExpertsPerRank <=
+            layout::WorkspaceLayout::kNumMaxExpertsPerRank,
+        "Force Hybrid per-rank experts exceed workspace capacity");
     EP_STATIC_ASSERT(kNumChannels <= rail_balance::kNumHybridMaxChannels,
                      "Force Hybrid channel count exceeds the legacy ceiling");
     EP_STATIC_ASSERT(

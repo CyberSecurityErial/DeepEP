@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -23,6 +24,9 @@ from deep_ep import _C
 _ROOT = Path(__file__).resolve().parents[2]
 _FORCE_HEADER = (
     _ROOT / "deep_ep/include/deep_ep/impls/rail_balance_hybrid_dispatch.cuh"
+)
+_RUNTIME_HEADER = (
+    _ROOT / "csrc/kernels/elastic/rail_balance_hybrid_dispatch.hpp"
 )
 _LEGACY_HEADER = _ROOT / "deep_ep/include/deep_ep/impls/hybrid_dispatch.cuh"
 
@@ -94,12 +98,21 @@ def _run_case(name: str) -> None:
     # Freeze the transit snapshot and 3+2K metadata ABI at the source boundary
     # as well as through the runtime-returned dimension above.
     header = _FORCE_HEADER.read_text()
+    runtime_header = _RUNTIME_HEADER.read_text()
     legacy_header = _LEGACY_HEADER.read_text()
     assert "constexpr int kNumForwardMetadataDims = 3 + kNumTopk * 2;" in header
     assert "metadata_ptr[2] = stored_proxy_slot;" in header
     assert "metadata_ptr[3 + lane_idx]" in header
     assert "metadata_ptr[3 + kNumTopk + lane_idx]" in header
     assert "rail_balance_group_prefix" in header
+    for workspace_limit in (
+        "layout::WorkspaceLayout::kNumMaxRanks",
+        "layout::WorkspaceLayout::kNumMaxExperts",
+        "layout::WorkspaceLayout::kNumMaxExpertsPerRank",
+    ):
+        token = rf"\b{re.escape(workspace_limit)}\b"
+        assert re.search(token, header)
+        assert re.search(token, runtime_header)
     # proxy_required is intentionally ABI-only in C080-E. Gate2 validates it;
     # the committed kernel must never read it and diverge after Tag0.
     assert header.count("rail_balance_proxy_required") == 1
@@ -181,7 +194,10 @@ def _test_constraint_rejections() -> None:
     _expect_codegen_rejection(2, 4, 256, 4, 1, 4, 16)
     _expect_codegen_rejection(2, 4, 256, 4, 64, 0, 16)
     _expect_codegen_rejection(2, 4, 256, 4, 64, 4, 0)
-    print("PASS C080-E dispatch codegen constraint rejections 6/6")
+    # E=2112 is total-only: 2112/64=33 remains below the per-rank ceiling.
+    _expect_codegen_rejection(2, 32, 256, 4, 64, 4, 16, 2112)
+    _expect_codegen_rejection(2, 2, 256, 4, 64, 4, 16, 2048)
+    print("PASS C080-E dispatch codegen constraint rejections 8/8")
 
 
 def _run_watchdog(case: str, watchdog_seconds: int) -> None:

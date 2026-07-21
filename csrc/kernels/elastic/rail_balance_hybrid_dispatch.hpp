@@ -316,6 +316,15 @@ static void validate_rail_balance_hybrid_dispatch_spec(
     EP_HOST_ASSERT(spec.num_experts > 0 and
                    spec.num_experts %
                        (spec.num_scaleout_ranks * spec.num_scaleup_ranks) == 0);
+    const int num_ranks =
+        spec.num_scaleout_ranks * spec.num_scaleup_ranks;
+    EP_HOST_ASSERT(
+        num_ranks <= layout::WorkspaceLayout::kNumMaxRanks);
+    EP_HOST_ASSERT(
+        spec.num_experts <= layout::WorkspaceLayout::kNumMaxExperts);
+    EP_HOST_ASSERT(
+        spec.num_experts / num_ranks <=
+            layout::WorkspaceLayout::kNumMaxExpertsPerRank);
     EP_HOST_ASSERT(spec.num_topk >= 1 and spec.num_topk <= 32);
     EP_HOST_ASSERT(spec.expert_alignment == 1);
     EP_HOST_ASSERT(spec.num_qps > 0);
@@ -471,7 +480,8 @@ static pybind11::dict rail_balance_hybrid_dispatch_codegen_test(
     const int& num_topk,
     const int& num_sms,
     const int& num_channels_per_sm,
-    const int& proxy_capacity) {
+    const int& proxy_capacity,
+    const int& num_experts) {
     EP_HOST_ASSERT(hidden > 0 and hidden % 256 == 0 and
                    hidden <= INT_MAX /
                        static_cast<int>(sizeof(nv_bfloat16)));
@@ -480,8 +490,7 @@ static pybind11::dict rail_balance_hybrid_dispatch_codegen_test(
     EP_HOST_ASSERT(num_scaleout_ranks <=
                    INT_MAX / num_scaleup_ranks);
     const int num_ranks = num_scaleout_ranks * num_scaleup_ranks;
-    constexpr int kSyntheticNumExperts = 256;
-    EP_HOST_ASSERT(kSyntheticNumExperts % num_ranks == 0);
+    EP_HOST_ASSERT(num_experts > 0 and num_experts % num_ranks == 0);
     const RailBalanceHybridDispatchSpec spec = {
         .num_sms = num_sms,
         .num_notify_warps = 4,
@@ -492,7 +501,7 @@ static pybind11::dict rail_balance_hybrid_dispatch_codegen_test(
         .num_hidden_bytes = hidden *
             static_cast<int>(sizeof(nv_bfloat16)),
         .num_max_tokens_per_rank = 8192,
-        .num_experts = kSyntheticNumExperts,
+        .num_experts = num_experts,
         .num_topk = num_topk,
         .expert_alignment = 1,
         .num_qps = 9,
@@ -1033,7 +1042,8 @@ static void register_rail_balance_hybrid_plan_apis(pybind11::module_& m) {
         pybind11::arg("num_topk"),
         pybind11::arg("num_sms") = 64,
         pybind11::arg("num_channels_per_sm") = 4,
-        pybind11::arg("proxy_capacity") = 16);
+        pybind11::arg("proxy_capacity") = 16,
+        pybind11::arg("num_experts") = 256);
 }
 
 }  // namespace deep_ep::elastic
