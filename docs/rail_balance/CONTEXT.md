@@ -423,3 +423,16 @@ Out of scope until evidence expands the project:
   existing plan tensors. Each cold-compile case runs under its own process-
   group watchdog. Public force remains disabled, and no local result claims
   real Gin/RDMA execution.
+- C080-F now has the symmetric isolated force Hybrid combine specialization.
+  Replay metadata is `3+2K`; moved records select the registered symmetric
+  `proxy_return_base+p*stride`, while retained records and all reduction,
+  staging, aggregation, flush, and completion behavior stay legacy. The
+  sentinel is checked before `p`/2K reads, and dispatch/combine both reject
+  fixed WorkspaceLayout geometry on the host before JIT plus statically before
+  layout construction. Six force/legacy pairs cover the full
+  `(D<=K,G<=K)` truth table with identical REG216/STACK96/SHARED1024/LOCAL0 and
+  zero spill; only the new pointer adds 8B constant memory. Public force is
+  still false. The next essential unit is the production host transaction:
+  fixed-tensor WORLD gates, owning pending/handle state, exact legacy/arena
+  offsets, uninterrupted shuffle→dispatch and combine→unshuffle→barrier→
+  epilogue commit calls, then local sanitizer/regression/performance closure.

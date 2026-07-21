@@ -2566,3 +2566,77 @@ High 0, and Medium implementation defects 0. It keeps two environment/host
 boundaries explicit: this machine cannot launch truthful Rail/Gin peers, and
 the production WORLD transaction, force buffer/metadata ownership, and
 combine path are not connected yet.
+
+## 2026-07-21 — D042: compile the isolated force Hybrid combine
+
+C080-F now has a separate BF16, non-expanded, multiple-reduction Hybrid
+combine specialization. The immutable legacy `hybrid_combine.cuh` and
+`combine.hpp` remain unchanged. Force dispatch carries one additional transit
+integer `p`, so the replay metadata is exactly
+`[src,last,p,src_scaleup[K],dst_slot[K]]` (`3+2K`). A retained record keeps the
+legacy owner/token destination. A moved record changes only the remote receive
+pointer to the symmetric source-egress address
+`proxy_return_base + p * combine_token_bytes`; reduction, TMA staging,
+aggregated Gin issue, final flush, rail completion, and tail protocol remain
+legacy behavior.
+
+The sentinel row initializes only `src`. An early draft read `p` and the 2K
+replay fields before checking `src < 0`; review caught this sanitizer-visible
+uninitialized read before acceptance. The uniform sentinel break now precedes
+every force-only metadata read. A second review found that `WorkspaceLayout`
+could assert while being constructed if rank/expert geometry exceeded its
+fixed maxima. Both force dispatch and combine now reject total ranks, total
+experts, and experts per rank on the host before JIT/launch and repeat those
+limits as static kernel gates before either workspace layout construction.
+The total-expert rejection was made independent with `D=2,G=32,E=2112`
+(33 experts per rank), while `D=2,G=2,E=2048` independently exercises the
+per-rank ceiling. Dispatch and combine constraint matrices both pass 8/8.
+
+The final build and compile commands were:
+
+```text
+TORCH_CUDA_ARCH_LIST=9.0 PYTHONPATH=. \
+  /home/chen/.cache/deepep-sjlgpt/bin/python setup.py build_ext --inplace
+
+CUDA_VISIBLE_DEVICES=0 \
+EP_JIT_CACHE_DIR=/tmp/deepep-c080f-combine-final.eSgcac \
+EP_JIT_PTXAS_VERBOSE=1 EP_JIT_PTXAS_CHECK=1 \
+EP_JIT_DUMP_PTX=1 EP_JIT_DUMP_SASS=1 PYTHONPATH=. \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/test_rail_balance_hybrid_combine_codegen.py \
+  --watchdog-seconds 900
+```
+
+The extension build passed. Six force and six independently cached legacy
+cubins, PTX files, and SASS files were emitted. The first four cases cover the
+complete `(D<=K,G<=K)` truth table; the remaining two match dispatch codegen
+geometries. Every shape reports `REG216 / STACK96 / SHARED1024 / LOCAL0` and
+zero spill for both force and legacy. Force uses 860 bytes of constant bank 0
+versus legacy 852, exactly the added eight-byte proxy-base ABI argument; no
+register, stack, shared-memory, local-memory, or spill regression is hidden.
+API 6/6, recursive legacy goldens 4/4, exact force-to-legacy normalization,
+post-Tag0 control checks, and `git diff --check` pass. Independent final review
+reports Blocker 0, High 0, and Medium 0.
+
+Failures and corrections are retained:
+
+- a nonexistent `/home/chen/miniconda3/envs/py311_cuda129/bin/python` and then
+  the incompatible generic sjlgpt environment were tried for syntax/import;
+  only `/home/chen/.cache/deepep-sjlgpt/bin/python` is accepted evidence;
+- the first exact normalizer differed from legacy by one blank line, and the
+  immutable legacy root contains two whitespace-only lines; the new file stays
+  diff-clean and the test restores those bytes only for the exact golden;
+- the initial layout-coverage assertion was tautological and was replaced by
+  explicit TT/FT/TF/FF expectations plus a complete-set assertion;
+- an include-cache guard committed with an over-broad substring also matched a
+  comment and failed one cached smoke; commit `2ec61c6` replaced it with a
+  token-boundary regex and the same H7168/K8 case passed;
+- one attempted nested audit worker hit the environment thread limit; the
+  primary and independent audit agents instead inspected the complete 12-cubin
+  cache and repeated the critical cold cases.
+
+Commits `9f22083`, `8abc90e`, and `2ec61c6` are pushed to the fork. This is
+`HYBRID_CODEGEN_PASS`, not a truthful multi-node Rail/Gin runtime result. The
+public force capability remains false until the production WORLD transaction,
+owning handle state, symmetric arena offsets, and uninterrupted committed
+dispatch/combine sequences are connected.

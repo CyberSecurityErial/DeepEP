@@ -835,3 +835,30 @@ is the liveness boundary. The H256 specialization costs two registers versus
 legacy (69 versus 67), while H7168 saves three to four; all retain the same
 96-byte stack, zero spill, 384-thread/full-smem launch class. No optimization
 is selected from these compiler counts alone.
+
+## Hot-path decision O041 — change only the combine return destination
+
+Force combine does not add a proxy consumer, descriptor, ready flag, queue, or
+plan lookup. Dispatch already transported the immutable proxy slot `p`, and the
+current destination ingress GPU is the same rail identity as the source
+egress. Therefore the persistent combine kernel needs only one pointer select:
+
+```text
+p < 0  -> legacy owner/token receive slot
+p >= 0 -> proxy_return_base + p * combine_token_bytes
+```
+
+The existing aggregated `gin.put`, final `gin.flush`, and rail completion cover
+both targets. After it completes, the already validated static
+return-unshuffle maps proxy rows back to `(owner,reduce-row,token)` and the
+unchanged local reduction epilogue finishes the result. `D>K` row selection
+stays in unshuffle, where the preserved proxy-dispatch record can choose the
+highest matching top-k lane; duplicating that logic in persistent combine was
+rejected.
+
+All six force cubins have the same 216-register, 96-byte-stack,
+1,024-byte-static-shared, zero-local, zero-spill resource profile as their
+legacy twins. The only binary resource increase is eight bytes in constant
+bank 0 for `proxy_return_base`. This establishes that the selected design adds
+no occupancy cost at codegen. It does not establish network latency or
+throughput; those remain real Rail/Gin measurements.

@@ -7,14 +7,15 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 ## Safe pause state
 
 - C000 through C070 remain complete for the agreed single-node PoC scope.
-- C080-A is complete: default-off identity, strict constructor config, disabled
-  capability gate, checked force arena ABI, and EP8 size agreement pass.
-- C080-B1 is complete: the private stacked-owner GPU count/plan/prefix
-  materializer matches 69 exact H200 cases and final independent review reports
-  0 Blocker/High. C080-B2 still needs the per-rank LSA count snapshot; C080-C
-  still needs cross-rank preflight/status.
-- Latest pushed checkpoints are `87cfcc5` (GPU materializer) and `e46b701`
-  (strict CUDA tests) on `fork/feat/rail-balance-prototype`.
+- C080-A/B are complete; C080-D shared source/return cores and vnode closure
+  pass their current local gates. C080-C remains open only for the production
+  fixed-tensor WORLD transaction/state machine.
+- C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
+  force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
+  resources except the expected eight-byte constant pointer argument.
+- Latest pushed checkpoints are `9f22083` (workspace geometry gates),
+  `8abc90e` (force combine), and `2ec61c6` (cache-guard test) on
+  `fork/feat/rail-balance-prototype`.
 - Public force still fails closed and no result claims real Gin/RDMA behavior.
 - Resume from the working tree and the newest entries in `DEVELOPMENT_LOG.md`;
   do not restore the obsolete sidecar/descriptor/ring draft.
@@ -55,14 +56,21 @@ the exact file snapshots without inventing commit identity.
     invalid seeds, and a non-default stream pass exact CPU comparison.
   - Each count/plan/prefix cubin exports exactly one kernel symbol.
   - Independent audit after fixes: 0 Blocker / 0 High.
+- C080-E force dispatch codegen: four production-shaped force/legacy pairs,
+  zero spill, API 6/6, legacy goldens 4/4, independent review PASS.
+- C080-F force combine codegen: six production-shaped force/legacy pairs cover
+  all four rank-layout combinations. All are REG216/STACK96/SHARED1024/LOCAL0
+  with zero spill; force adds only 8B constant memory. Independent review is
+  0 Blocker / 0 High / 0 Medium.
 
 ## Mandatory retained boundary
 
-The remaining Medium is production reliability, not valid-snapshot
-correctness: `_rail_balance_vnode_replay` performs rank-local host validation
-before the first collective. A malformed input on only one rank can throw while
-peers enter a barrier. C080 must add bounded cross-rank preflight consensus or a
-common abort protocol before exposing this path.
+The remaining boundary is production reliability, not CUDA codegen: force must
+use fixed CUDA tensor WORLD consensus before publication and one uninterrupted
+C++ committed sequence on every rank. No rank may throw between source shuffle
+and Hybrid dispatch Tag0, or between main combine and the post-unshuffle local
+barrier/legacy epilogue. Post-publication failure invalidates the force object;
+precommit abort must not destroy an older live dispatch handle.
 
 No current result claims real Gin/RDMA/QP/NIC behavior or a multi-node speedup.
 No C070 timing is performance evidence.
@@ -74,18 +82,16 @@ No C070 timing is performance evidence.
 2. Verify branch and state with `git status --short --branch` and run
    `git diff --cached --check`.
 3. Do not redo C061/C070 unless the relevant code changes.
-4. Resume at C080-B2/C, not at the obsolete CPU-manifest or sidecar paths:
-   - count one local owner per rank into the force arena;
-   - establish a real LSA-team barrier and compact `[G,C,D]` snapshot;
-   - feed the existing B1 plan/prefix semantics unchanged.
-5. Keep public force unavailable until dispatch and combine both exist. Add
-   world-consensed Gate1 before any local barrier and Gate2 after capacity
-   status but before payload publication; do not let a rank-local throw strand
-   peers.
-6. Prioritize the direct-final 8x1 skewed source-shuffle path, then 4x2/2x4
-   closure and isolated Hybrid codegen. Performance runs require idle GPUs;
-   controlled C100 profiling uses NCU/Nsys and retains negative/tool-failure
-   evidence.
+4. Resume at the production C080 host transaction, not at vnode or the obsolete
+   CPU-manifest/sidecar path. Derive C/topology in C++, prebuild every runtime,
+   use fixed-tensor WORLD Gate1/Gate2, and then launch shuffle→force dispatch in
+   one C++ commit call.
+5. Keep public force unavailable until force combine is connected as one
+   main-combine→return-unshuffle→local-barrier→legacy-epilogue commit and handle
+   ownership/consumption is fail-closed.
+6. After host closure, run C080-G/C090 compatibility and sanitizer gates. Run
+   controlled C100 NCU/Nsys only while GPUs are idle and retain negative/tool-
+   failure evidence.
 
 Pinned runtime for accepted commands:
 
