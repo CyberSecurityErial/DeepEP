@@ -3203,3 +3203,76 @@ force call, epilogue, or combine path was added.  Local evidence labels remain
 commit `edb1a0e` and gate commit `ba82134` are pushed to the fork.  H5 next
 owns dispatch CPU-count completion, exact receive allocation, dispatch
 epilogue, handle publication, and the symmetric combine lifecycle.
+
+## 2026-07-21 — D052: own and finish the committed Hybrid dispatch
+
+H5a adds the private `_rail_balance_hybrid_dispatch_finish` boundary without
+opening public force or touching combine.  The main dispatch has already been
+published by H4c, so only invocation/state/owner checks execute while the
+transaction is retryable.  Finish then poisons the state, reads the mapped
+rank/expert counters frozen before Gate1, allocates the exact receive shape,
+installs `RailBalanceHybridDispatchCompletion`, and launches the prebuilt
+native BF16 non-expanded copy epilogue.  The epilogue receives expert prefix
+`storage + 1`; main dispatch continues to own the allocation base.
+
+The first safe post-H4c status read is deliberately after the epilogue on the
+same `comm_stream`.  One D2H status copy and one host stream synchronization
+therefore expose asynchronous source, main-dispatch, and epilogue failures
+before the method restores `DispatchLive`.  Force-v1 is fixed synchronous for
+correctness and returns `event=None`; removing that sync belongs to measured
+C100 work, not H5a.  The returned tuple is exactly the native sixteen-item
+dispatch ABI, including the inclusive expert prefix, K+2 source metadata,
+3+2K forward metadata, and linked-list handle fields.
+
+Independent review found that the first draft narrowed mapped int64 counters
+and accumulated in signed int before the safe status sync.  A ready-looking
+corrupt/partial value could therefore overflow or request an invalid large
+allocation before the device error was observed.  The final code uses int64
+decode/accumulation, checks each addition against `D*G*M` and
+`D*G*M*min(K,local_experts)`, and narrows only after all totals are bounded.
+This work is host-only and adds no CUDA hot-path instruction.
+
+Accepted evidence:
+
+```text
+PASS full extension rebuild and pybind finish symbol
+PASS C080-H5a exact ownership/order/16-item source contract
+PASS C080-H4c adjacent-commit source contract
+PASS C080-H4b owning-prepare CPU contract
+PASS C080-H4b truthful D1 fail-close/recovery on EP8: 3 fixed MAX gates
+PASS C080-D true eight-GPU source-shuffle regression
+PASS C080-D 4x2/H7168 vnode full round trip
+PASS C080-F true eight-GPU return-unshuffle, H256/H7168 and D32>K4
+PASS C080-E G8xD2/H7168/K8 dispatch codegen
+PASS API 9/9 and legacy Hybrid identity 4/4
+PASS independent H5a ABI/lifetime audit: no blocker
+```
+
+Failures and resource actions retained:
+
+- the first H5a source-gate run looked for the result alias in the pending
+  header although the `EventHandle`-bearing host alias correctly lives in
+  `buffer.hpp`; a second run matched the completion raw-pointer prefix, and a
+  third assumed the balanced-section helper included the return type.  These
+  were test-only format defects; each was corrected before the gate passed;
+- review then found two genuine gate blind spots: adjacent Tensor result items
+  and adjacent pointer epilogue arguments could be interchanged while a type-
+  only/contains test stayed green.  The final gate freezes all sixteen result
+  expressions and all fourteen epilogue arguments in exact order;
+- one initial review suggestion placed `CUDAGuard` before poison.  Rechecking
+  the already-published H4c boundary showed that only pure caller validation
+  is retryable; guard/device/allocation failure must remain fail-closed.  The
+  accepted order is `Invalid` then guard;
+- four positively identified `megatron-lm-gpu/bin/python` processes, PIDs
+  3697293-3697296, each held about 36 GiB on GPUs 0-3.  They were terminated
+  under the user's standing authorization before EP8 tests; all GPU process
+  allocations cleared;
+- the first vnode subprocess completed while its polling session handle was
+  already closed, so its exit status was not accepted as evidence.  The same
+  4x2/H7168 case was rerun and printed an explicit PASS with exit code zero.
+
+Implementation commit `81ecb86` and source-gate commit `7bd17a4` are the H5a
+checkpoint.  H5b next owns buffer/invocation-bound one-shot handle publication
+and the uninterrupted main-combine → return-unshuffle → local barrier → native
+epilogue transaction.  Public force remains disabled and no local result
+claims a truthful D>1 Gin runtime.

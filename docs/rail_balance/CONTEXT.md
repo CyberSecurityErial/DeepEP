@@ -492,3 +492,13 @@ Out of scope until evidence expands the project:
   local D>1 execution yet. A low-level one-rank launch failure is explicitly
   job-fatal, and H5 must observe asynchronous device faults at its first safe
   synchronization while keeping the object poisoned.
+- H5a now owns that first safe completion boundary. It reads only the mapped
+  int64 counter pointers frozen before Gate1, bounds every decoded addition by
+  the topology-derived receive/expanded maxima, allocates exact BF16/top-k/src
+  outputs, installs their owner, launches the unchanged non-expanded dispatch
+  epilogue with the inclusive expert-prefix view, then copies status and
+  synchronizes `comm_stream`. Only a zero status and a fully constructed native
+  16-item result restore private `DispatchLive`; every post-publication failure
+  remains `Invalid`. The synchronized force-v1 returns no event. Public Python
+  force and one-shot combine ownership remain H5b/public work, and the local
+  D=1 machine still cannot execute a truthful production Hybrid success path.

@@ -1052,3 +1052,27 @@ Expert-prefix storage has two frozen views rather than post-gate pointer
 arithmetic hidden in H5: base for persistent dispatch writes and base+1 for
 the inclusive non-expanded epilogue.  The extra host pointer has no device
 traffic, allocation, JIT key, or hot-path branch.
+
+## Host-path decision O051 — exact post-main allocation, one correctness sync
+
+H5a does not preallocate worst-case receive payloads merely to make dispatch a
+single host call.  Main Hybrid dispatch already publishes exact mapped rank and
+expert counts; allocating after those counts preserves native DeepEP memory
+behavior and avoids a potentially large permanent force-only buffer.  The four
+exact outputs are installed in the pending owner before the epilogue sees a raw
+pointer, so no launch or asynchronous failure can release in-flight storage.
+
+The correctness version uses one status D2H followed by one `comm_stream`
+synchronization after the native epilogue.  This is intentionally not presented
+as the final performance shape: it is the first point that can jointly observe
+source shuffle, main Hybrid dispatch, and epilogue failure without inserting a
+barrier into the critical source→Tag0 path.  C100 may replace it with an event-
+owned asynchronous completion only after NCU/Nsys evidence and the user's
+profiling procedure are available.  H5a adds no CUDA kernel, device branch,
+metadata field, JIT specialization, arena byte, or default-off work.
+
+Mapped counter hardening stays on the CPU polling path.  Int64 checked totals
+were preferred over trusting the legal-kernel bound because H5a runs before its
+first safe status read and must remain defined under partial/asynchronous
+failure.  The checks have no effect on the communication kernel or successful
+GPU schedule.

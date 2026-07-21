@@ -6,8 +6,9 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 
 ## Safe pause state
 
-- H4c is implemented, audited, committed, and pushed; no half-written H4c
-  file remains. The next slice is H5 dispatch completion/handle plus combine.
+- H5a dispatch completion is implemented, independently audited, and split
+  into implementation/test commits; no half-written H5a file remains. The next
+  slice is H5b one-shot handle ownership plus combine.
 - C000 through C070 remain complete for the agreed single-node PoC scope.
 - C080-A/B are complete; C080-D shared source/return cores and vnode closure
   pass their current local gates. C080-C remains open only for the production
@@ -15,9 +16,9 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Latest pushed implementation checkpoints are `edb1a0e` (adjacent Hybrid
-  dispatch commit) and `ba82134` (H4c gate), following `4e48b84`/`7ab382b`
-  (owning prepare) and the earlier H3/H2/H1b closures, on
+- Latest pushed implementation checkpoints are `81ecb86` (owning dispatch finish) and
+  `7bd17a4` (H5a source gate), following `edb1a0e`/`ba82134` (adjacent Hybrid
+  dispatch commit) and `4e48b84`/`7ab382b` (owning prepare), on
   `fork/feat/rail-balance-prototype`.
 - Public force still fails closed and no result claims real Gin/RDMA behavior.
 - Resume from the working tree and the newest entries in `DEVELOPMENT_LOG.md`;
@@ -99,6 +100,14 @@ the exact file snapshots without inventing commit identity.
   codegen, true EP8 H7168 source LSA, 4x2/H7168 vnode, H4b three gates, H3b
   eighteen gates, API/legacy, build, and independent audit pass. This is not
   a real Gin runtime result; low-level partial launch is job-fatal.
+- H5a owning finish is committed at `81ecb86` with its source gate at
+  `7bd17a4`. It preserves the native 16-item dispatch result order, owns exact
+  receive storage before the epilogue, bounds mapped int64 counters before any
+  narrowing/allocation, and performs the first safe status readback plus
+  `comm_stream` sync. Full build, H5a/H4c/H4b CPU gates, API 9/9, legacy 4/4,
+  truthful EP8 D1 fail-close/recovery, 4x2/H7168 vnode, true EP8 return LSA,
+  and G8xD2/H7168 dispatch codegen pass. Local production success remains
+  impossible at D=1; this is not Gin runtime evidence.
 
 ## Mandatory retained boundary
 
@@ -119,11 +128,10 @@ No C070 timing is performance evidence.
 2. Verify branch and state with `git status --short --branch` and run
    `git diff --cached --check`.
 3. Do not redo C061/C070 unless the relevant code changes.
-4. H3/H4 now reach private DispatchLive. Implement H5 in native DeepEP order:
-   observe dispatch CPU counts, allocate exact receive tensors, submit the
-   prebuilt dispatch epilogue with the frozen inclusive expert prefix, and
-   publish one owning non-cached handle. Then connect main combine → return
-   unshuffle → local barrier → legacy epilogue as one fail-closed lifecycle.
+4. H3/H4/H5a now reach a synchronized private DispatchLive result. Implement
+   H5b in native DeepEP order: bind that result to a buffer/invocation-owned,
+   one-shot non-cached handle, then connect main combine → return unshuffle →
+   local barrier → legacy epilogue as one fail-closed lifecycle.
    Do not return to vnode or add a descriptor/ring/coordinator. Preserve the
    distinction between host launch acceptance and real Gin completion.
    Its accepted evidence is in
