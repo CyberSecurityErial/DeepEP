@@ -264,6 +264,46 @@ prepare_rail_balance_hybrid_combine_epilogue(
     };
 }
 
+// Assertion-free submit for the committed combine -> return-unshuffle ->
+// local-barrier -> epilogue chain. The prepared specialization and every
+// pointer/count must have passed the caller's precommit checks already.
+static void submit_prepared_rail_balance_hybrid_combine_epilogue(
+        const PreparedRailBalanceHybridCombineEpilogue& prepared,
+        void* combined_x,
+        float* combined_topk_weights,
+        topk_idx_t* combined_topk_idx,
+        void* reduce_buffer,
+        const int& num_combined_tokens,
+        const int& scaleout_rank_idx,
+        const int& scaleup_rank_idx,
+        const at::cuda::CUDAStream& stream) {
+    const CombineReduceEpilogueRuntime::Args args = {
+        .use_expanded_layout = false,
+        .allow_multiple_reduction = true,
+        .num_scaleout_ranks = prepared.num_scaleout_ranks,
+        .num_scaleup_ranks = prepared.num_scaleup_ranks,
+        .hidden = prepared.hidden,
+        .num_max_tokens_per_rank = prepared.num_max_tokens_per_rank,
+        .num_experts = prepared.num_experts,
+        .num_topk = prepared.num_topk,
+        .combined_x = static_cast<nv_bfloat16*>(combined_x),
+        .combined_topk_weights = combined_topk_weights,
+        .combined_topk_idx = combined_topk_idx,
+        .reduce_buffer = reduce_buffer,
+        .bias_0 = nullptr,
+        .bias_1 = nullptr,
+        .num_combined_tokens = num_combined_tokens,
+        .scaleout_rank_idx = scaleout_rank_idx,
+        .scaleup_rank_idx = scaleup_rank_idx,
+        .launch_args = prepared.launch_args,
+    };
+    CombineReduceEpilogueRuntime::launch(
+        prepared.runtime, args, stream);
+}
+
+// Checked wrapper retained for the existing private standalone test hook.
+// The production committed chain must call the raw submit above after its
+// precommit validation, never this wrapper.
 static void launch_prepared_rail_balance_hybrid_combine_epilogue(
         const PreparedRailBalanceHybridCombineEpilogue& prepared,
         void* combined_x,
@@ -287,29 +327,10 @@ static void launch_prepared_rail_balance_hybrid_combine_epilogue(
                    scaleout_rank_idx < prepared.num_scaleout_ranks);
     EP_HOST_ASSERT(scaleup_rank_idx >= 0 and
                    scaleup_rank_idx < prepared.num_scaleup_ranks);
-
-    const CombineReduceEpilogueRuntime::Args args = {
-        .use_expanded_layout = false,
-        .allow_multiple_reduction = true,
-        .num_scaleout_ranks = prepared.num_scaleout_ranks,
-        .num_scaleup_ranks = prepared.num_scaleup_ranks,
-        .hidden = prepared.hidden,
-        .num_max_tokens_per_rank = prepared.num_max_tokens_per_rank,
-        .num_experts = prepared.num_experts,
-        .num_topk = prepared.num_topk,
-        .combined_x = static_cast<nv_bfloat16*>(combined_x),
-        .combined_topk_weights = combined_topk_weights,
-        .combined_topk_idx = combined_topk_idx,
-        .reduce_buffer = reduce_buffer,
-        .bias_0 = nullptr,
-        .bias_1 = nullptr,
-        .num_combined_tokens = num_combined_tokens,
-        .scaleout_rank_idx = scaleout_rank_idx,
-        .scaleup_rank_idx = scaleup_rank_idx,
-        .launch_args = prepared.launch_args,
-    };
-    CombineReduceEpilogueRuntime::launch(
-        prepared.runtime, args, stream);
+    submit_prepared_rail_balance_hybrid_combine_epilogue(
+        prepared, combined_x, combined_topk_weights, combined_topk_idx,
+        reduce_buffer, num_combined_tokens,
+        scaleout_rank_idx, scaleup_rank_idx, stream);
 }
 
 }  // namespace deep_ep::elastic

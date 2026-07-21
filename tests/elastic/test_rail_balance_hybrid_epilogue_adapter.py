@@ -1,7 +1,7 @@
-"""Source gate for the private C080 prepared dispatch-copy epilogue.
+"""Source gate for the private C080 prepared epilogue adapters.
 
-The adapter deliberately reuses the unchanged production kernel and JIT cache
-identity.  Its committed half must remain a pure argument bind plus launch.
+The adapters deliberately reuse unchanged production kernels and JIT cache
+identities. Their raw submit halves must remain pure argument binds + launch.
 """
 
 from __future__ import annotations
@@ -13,6 +13,9 @@ _ROOT = Path(__file__).resolve().parents[2]
 _ADAPTER = _ROOT / "csrc/kernels/elastic/rail_balance_hybrid_epilogue.hpp"
 _LEGACY = _ROOT / "csrc/kernels/elastic/dispatch.hpp"
 _LEGACY_CALLSITE = _ROOT / "csrc/elastic/buffer.hpp"
+_LOCAL_BARRIER = (
+    _ROOT / "csrc/kernels/elastic/rail_balance_hybrid_dispatch.hpp"
+)
 
 
 def _section(source: str, begin: str, end: str) -> str:
@@ -24,6 +27,7 @@ def main() -> None:
     source = _ADAPTER.read_text()
     legacy = _LEGACY.read_text()
     legacy_callsite = _LEGACY_CALLSITE.read_text()
+    local_barrier_source = _LOCAL_BARRIER.read_text()
     prepare = _section(
         source,
         "prepare_rail_balance_hybrid_dispatch_epilogue(",
@@ -103,7 +107,61 @@ def main() -> None:
     ):
         assert forbidden not in committed, forbidden
 
-    print("PASS C080-H1 prepared dispatch-copy epilogue adapter")
+    raw_combine = _section(
+        source,
+        "submit_prepared_rail_balance_hybrid_combine_epilogue(",
+        "// Checked wrapper retained for the existing private standalone test hook.",
+    )
+    checked_combine = _section(
+        source,
+        "launch_prepared_rail_balance_hybrid_combine_epilogue(",
+        "}  // namespace deep_ep::elastic",
+    )
+    assert (
+        "CombineReduceEpilogueRuntime::launch(\n"
+        "        prepared.runtime, args, stream);"
+    ) in raw_combine
+    for forbidden in (
+        "EP_HOST_ASSERT",
+        "jit::compiler",
+        "::generate(",
+        "torch::",
+        ".data_ptr",
+        "cudaMalloc",
+        "cudaMemcpy",
+        "cudaStreamSynchronize",
+        "status",
+    ):
+        assert forbidden not in raw_combine, forbidden
+    assert checked_combine.count("EP_HOST_ASSERT") == 6
+    assert (
+        "submit_prepared_rail_balance_hybrid_combine_epilogue("
+        in checked_combine
+    )
+    assert "CombineReduceEpilogueRuntime::launch(" not in checked_combine
+
+    # The local LSA barrier was audited rather than modified: its existing
+    # prepared launch is already an assertion-free Args + launch submit.
+    local_barrier_submit = _section(
+        local_barrier_source,
+        "launch_prepared_rail_balance_hybrid_local_barrier(",
+        "struct PreparedRailBalanceHybridPlan",
+    )
+    assert "RailBalanceHybridLocalBarrierRuntime::launch(" in local_barrier_submit
+    for forbidden in (
+        "EP_HOST_ASSERT",
+        "jit::compiler",
+        "::generate(",
+        "torch::",
+        ".data_ptr",
+        "cudaMalloc",
+        "cudaMemcpy",
+        "cudaStreamSynchronize",
+        "status",
+    ):
+        assert forbidden not in local_barrier_submit, forbidden
+
+    print("PASS C080-H1b prepared epilogue/barrier submit adapters")
 
 
 if __name__ == "__main__":
