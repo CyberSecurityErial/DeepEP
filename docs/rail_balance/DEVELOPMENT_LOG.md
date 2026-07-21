@@ -3783,3 +3783,78 @@ unchanged historical matrix or the two new checkpoints. It reports Blocker 0,
 High 0, Medium 0; its sole Low was the stale checkpoint text corrected here.
 C090 is therefore PASS. No additional CPU, GPU, full-suite, or sanitizer rerun
 is required before the next controlled C100 profiling run.
+
+## 2026-07-21 — D061: audit the Goal boundary and network-readiness gap
+
+A fresh requirement-to-evidence audit maps every C080 integration requirement
+in the active long-running Goal to the final tree.  GPU assignment
+materialization, bounded static proxy slots,
+direct-final source shuffle, proxy-return combine, owner return-unshuffle,
+fixed WORLD preflight, the shared-core vnode oracle, isolated Hybrid codegen,
+and recoverable Git/log checkpoints are present.  The audit reports zero
+Blocker and zero High findings.  C080 remains accurately labelled
+`LOCAL_COMPLETE / MULTINODE_PENDING`: truthful D>1 Rail/Gin execution, QP
+behaviour, and RDMA completion are the deliberate environment gate, not local
+evidence.
+
+Two activation boundaries are retained rather than hidden.  Both production
+capability bits remain hard false.  While the host bit is false, an ordinary
+off rank does not join a new constructor collective merely because another
+rank incorrectly asks for the unavailable force mode; this preserves the
+default-off contract.  When every rank test-enables or eventually production-
+enables the host capability, the already implemented universal constructor
+gate runs before communicator/window creation and owns mixed off/force
+consensus.  Therefore the hard-false development branch must not itself be
+described as mixed-mode-safe.  The gate does not first prove that all processes
+enabled the host bit: unanimous capability activation is an external safety
+precondition for every validation or production run.
+
+The same audit found two stale user-facing descriptions.  The constructor
+docstring said off was fully identical even though local configuration parsing
+and mode guards exist, and `FeatureUnavailable` still claimed that dispatch
+and combine had not been installed.  They now state the narrower frozen
+identity and the actual D>1 validation gate.  The first API run failed because
+its exact error-string assertion still expected the obsolete message;
+updating that assertion produced:
+
+```text
+PASS 9/9 C080-A Hybrid API tests
+PASS 4/4 legacy Hybrid identity goldens
+PASS 9/9 H6 constructor preflight tests
+PASS C080-H6 public lifecycle CPU fake runtime
+PASS git diff --check
+```
+
+This exact-string failure is a test maintenance failure, not a product or GPU
+failure.  No CUDA source, JIT specialization, ABI, layout, capability value,
+or hot-path instruction changed.
+
+The C100 inventory confirms that the only accepted runtime profile so far is
+the tiny three-record source-shuffle fixture.  It established peer-TMA fixed
+latency and rejected a slower binary resolver, but cannot select a throughput
+optimization.  The next controlled experiment must use large moved-volume
+H7168 source-shuffle and return-unshuffle cases, pin one rank/kernel/launch,
+and exclude vnode validation scaffolding.  Existing raw NCU/Nsys reports still
+live under `/tmp`; their reported metrics are already preserved in D032/O031,
+but the binary reports are not a checked-in dependency.  Six accepted reports
+were also copied, without modification, to the ignored persistent workspace
+directory `.cache/rail_balance/c100/`; `SHA256SUMS` records their checksums.
+This local backup prevents a `/tmp` cleanup from erasing the raw evidence while
+keeping 74 MiB of profiler binaries out of Git history.
+
+C105 has no one-command multi-node runner yet.  `test_ep.py` cannot simply be
+reused because its expanded, cached, FP8, event, and alignment matrix exceeds
+force-v1's deliberately narrow contract.  The smallest future package is a
+dedicated BF16/noncached/synchronous validation harness.  It may test-enable
+both hard-false capabilities only inside that process, assert and restore the
+original values, and emit an explicit unreleased-validation evidence label;
+production defaults remain closed until C080-H passes.  Real Gin wait/QP
+counters do not exist yet and must be emitted as unavailable rather than
+invented from planner counts.
+
+No new NCU, Nsys, throughput, or GPU correctness run was started in this
+checkpoint.  The next controlled profiler invocation still waits for the
+user's promised workflow and an idle-GPU check.  The unrelated light CUDA
+sample remains untouched as requested.  C100 is still `IN_PROGRESS` and C105
+is still `PLANNED`; this audit closes only the C080 local-integration slice, not
+the full long-running Goal.

@@ -609,3 +609,32 @@ Out of scope until evidence expands the project:
   only after the user supplies the promised profiling workflow, and do not time
   under unrelated GPU load. C080-H/Gin remains deferred to a truthful D>1
   environment.
+
+## Post-C090 Goal and readiness audit (2026-07-21)
+
+- The C080 integration slice of the active long-running Goal is locally
+  satisfied with Blocker 0 / High 0.  Its only C080 hard gap is the explicitly
+  allowed truthful D>1 Rail/Gin environment gate; C100 remains in progress and
+  C105 remains planned.  Both production capability bits therefore stay false.
+- Each process with the host capability enabled enters the universal mixed-
+  mode constructor gate; the gate does not first prove that all processes made
+  the same activation choice.  The hard-false default-off branch deliberately
+  avoids that new collective.  Collective safety therefore requires unanimous
+  activation, and the disabled branch is not mixed-mode consensus evidence.
+- Stale public wording was corrected: off preserves native sizing/runtime/JIT/
+  handle/result identity but still has local configuration parsing and mode
+  guards, and force is gated by D>1 correctness rather than missing dispatch/
+  combine code.  API 9/9 and legacy identity 4/4 pass after updating the exact
+  error-string test; the first stale-string assertion failure is retained in
+  D061.
+- C100's next meaningful target is a large moved-volume H7168 source and return
+  profile.  Tiny three-record source evidence only measured peer-TMA fixed
+  latency.  Six accepted raw reports are backed up under the ignored
+  `.cache/rail_balance/c100/` with a SHA256 manifest.  Do not optimize host
+  ticket/gate micro-cost or planner structure before the user's profiler
+  workflow and attribution justify it.
+- C105 still needs a dedicated narrow multi-node harness; the broad official
+  `test_ep.py` matrix is not force-v1-compatible.  A validation-only unanimous
+  capability override can exercise public D>1 code while leaving production
+  defaults false, but it must restore both values and label unavailable Gin/QP
+  counters honestly.

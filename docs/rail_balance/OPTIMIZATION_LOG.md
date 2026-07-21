@@ -1241,3 +1241,26 @@ full extension rebuild, exact EP8 fault/status/recovery, API/legacy identity,
 and the existing B1 materializer. Repeating Compute Sanitizer or codegen would
 not exercise a changed device instruction. Resume the next C100 NCU/Nsys and
 controlled-timing run only after the user provides the profiling workflow.
+
+## Profiling decision O058 — measure payload volume before control-plane polish
+
+The post-C090 inventory does not promote the 127-word gate decode or ticket
+checks into C100 blockers.  Neither is on the device payload loop, and the only
+accepted runtime profile moved three 576-byte records.  That fixture showed
+fixed peer-TMA completion latency and cannot distinguish a bandwidth
+optimization.
+
+The next measurement therefore constructs H256 and H7168 cases with identical
+top-k routes, remainder seed, plan/egress assignment, and moved-record count,
+using enough moved records to expose payload scaling.  It then isolates source-
+shuffle and return-unshuffle.  Nsys first establishes launch, barrier, copy,
+and overlap boundaries; NCU then pins one device, one named kernel, and one
+launch.  Planner/count/prefix, alternate slot allocation, and host decode remain
+untouched unless this attribution makes them material.  No new profile was run
+while recording this decision; execution waits for the user's supplied
+workflow and idle GPUs.
+
+C105 likewise uses a dedicated narrow force-v1 harness instead of adding
+conditionals to the broad `test_ep.py` matrix.  Planner-derived puts and bytes
+may be reported as derived values, but missing physical Gin wait/QP counters
+must remain explicitly unavailable until the real runtime exposes them.
