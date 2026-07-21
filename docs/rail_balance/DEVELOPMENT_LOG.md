@@ -3974,3 +3974,80 @@ Low observations are either resolved by documenting the two named commands or
 explicitly accepted test structure: the CPU-only probe is intentionally
 lighter while GPU bytes remain exhaustive, and the return harness imports the
 already committed source fixture instead of duplicating its private schedule.
+
+## 2026-07-21 — D064: freeze the C100 measurement environment and claim scope
+
+The user supplied a profiler-free → Nsys → targeted NCU → single-variable
+change → profiler-free retest contract.  It is saved in the active Codex
+profile as the validated `gpu-performance-evidence-chain` skill: a 61-line
+core and a 325-line detailed reference.  The project-facing audit surface is
+`C100_PERFORMANCE_EVIDENCE.md`; it starts with every new performance field
+explicitly `NOT_COLLECTED` rather than backfilling old tiny-fixture results.
+
+The exact host, package, linked-library, topology, profiler-version, section,
+recipe, clock, power, temperature, MIG/MPS, and process state were read from
+the installed environment.  The operational target remains the user's 8-GPU
+H200/NVSwitch node.  A management-plane discrepancy is retained as missing
+evidence: `nvidia-smi` labels the devices L20X/CC8.9, NCU labels them
+L20X(GH100), executed cubins are sm90a, topology reports NV18, and the P2P
+query says `NS` even though exact true-EP8 LSA kernels pass.  This does not
+block same-machine paired timing, but published H200 peaks will not be used as
+an efficiency denominator until the alias/P2P reporting is explained.
+
+The manifest also separates PyTorch's NCCL API version 2.28.9 from the pip
+NCCL 2.30.4 `libnccl.so.2` actually selected by the DeepEP extension.  Nsys is
+2024.6.2 and NCU is 2025.1.1; installed help, recipes, sets, sections, and the
+5,364-metric query were inspected before constructing future commands.
+Official NVIDIA H200, CUDA 12.8 TMA, NCCL Device API/GIN, Nsys 2024.6, and NCU
+2025.1 references are linked directly in the evidence file.
+
+A source/runtime audit establishes the next measurement boundary.  Each
+private transaction is one-shot: prepare synchronizes, finish synchronizes and
+publishes PlanReady, source synchronizes after status readback, return includes
+test B1/B4 barriers and snapshot/status copies, and abort synchronizes before
+releasing the transaction.  Therefore the first no-profiler result must be
+named `source_shuffle_checked_adapter` or `return_unshuffle_test_adapter`.
+Calling either result raw production-kernel latency would be false.  Nsys will
+later split launch, kernel, barrier, copies and host gaps.
+
+No profiler, timing loop, CUDA/runtime edit, or performance claim was made in
+this checkpoint.  The old six reports remain tiny-fixture evidence only.  The
+next code change is a standalone measurement harness that reuses the exact
+C100 schedule and leaves production source untouched.
+
+## 2026-07-21 — D065: freeze the C105 validation contract before a runner
+
+C105 now has a CPU-only contract module and test, not yet a real multi-node
+runner.  It generates deterministic `balanced`, `two_hot`, and `one_hot`
+routes, counts distinct remote destination servers, and constructs a stable
+JSON result skeleton whose label is fixed to
+`REAL_HYBRID_RUNTIME_UNTESTED`.  Missing QP, NIC, wait, plan, and traffic
+evidence stays null/not-available; callers cannot supply a stronger label.
+
+Two independent reviews forced the helper to match the executable force-v1
+domain rather than a convenient test domain: D/G are 2--32, K is 1--32,
+E is at most 2,048, E/world is at most 256, and both token and contribution
+flattened products fit int32.  `C080_PLAN.md` had incorrectly said G could be
+one and omitted the workspace expert/contribution bounds; it now matches the
+dispatch/combine/epilogue host and CUDA asserts.  `two_hot` additionally needs
+G>=3 only so it differs from balanced.
+
+The destination counter is checked by a handwritten non-square D3/G2 oracle,
+while builder output is independently checked for its expert server.  JSON
+input is deep-copied, finite, recursively string-keyed even through list/dict
+subclasses, and stable under caller mutation.  Canonical remote volumes are
+deliberately different (36/18/9) and must be reported rather than normalized.
+
+Retained failures:
+
+- an initial bare `python` command did not exist in the environment;
+- one review command omitted `tests/elastic` from `PYTHONPATH` and raised
+  ImportError;
+- the first non-square hand oracle expected `[1,0,1]` where both source tokens
+  actually target server zero; both Python interpreters reported the same
+  failure, and the manually recomputed expectation is `[2,0,0]`.
+
+After those corrections, system Python and the fixed ABI Python each pass
+12/12 tests plus `py_compile`.  This checkpoint proves only route/schema
+contracts; capability bits remain false and real runtime execution remains
+untested.

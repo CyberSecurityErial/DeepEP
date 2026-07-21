@@ -677,3 +677,33 @@ Out of scope until evidence expands the project:
   one-variable change → profiler-free retest contract.  Fixture correctness is
   now ready for the environment manifest and baseline; no new performance
   evidence has yet been collected.
+
+## C100 measurement-contract context (2026-07-21)
+
+- `C100_PERFORMANCE_EVIDENCE.md` freezes the local workload, logical bytes,
+  environment, installed tool capabilities, official-source boundaries,
+  native DeepEP mechanisms, old-report scope, and missing evidence.  Every new
+  baseline/profiler field is still uncollected.
+- The operational target remains the user-declared H200/NVSwitch node.  The
+  inconsistent management labels, CC field, sm90a cubin, NV18 topology and P2P
+  output are retained as missing evidence; they do not block same-machine
+  relative timing but forbid an unverified peak-efficiency denominator.
+- The first baseline measures synchronous checked adapters, not raw kernels.
+  Each sample needs a fresh one-shot transaction; rank maximum is the step
+  duration.  Nsys must expose kernel/copy/barrier/host contributions before an
+  NCU target or performance-path change is selected.
+- No new Nsys/NCU or no-profiler timing has run yet.  The next artifact is a
+  standalone harness with full raw samples and no runtime/CUDA modification.
+
+## C105 contract-only context (2026-07-21)
+
+- Deterministic balanced/two-hot/one-hot routes and a stable JSON result
+  skeleton now exist as CPU-only runtime-independent contracts.
+  The evidence label is fixed to `REAL_HYBRID_RUNTIME_UNTESTED` and physical
+  counters remain unavailable.
+- Numeric bounds now match executable force Hybrid: D/G 2--32, K 1--32,
+  E<=2048, E/world<=256, and int32 token/contribution products.  The stale G1
+  and missing expert bounds in C080_PLAN were corrected.
+- System and fixed ABI Python pass 12/12 after a retained handwritten-oracle
+  failure.  A dedicated public multi-node runner, capability override,
+  correctness execution, off/force A/B, and real counters remain C105 work.

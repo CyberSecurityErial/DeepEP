@@ -85,11 +85,14 @@ The first numeric domain is:
 
     1 <= num_topk <= 32
     2 <= num_scaleout_ranks <= 32
-    1 <= num_scaleup_ranks <= 32
-    num_experts > 0
+    2 <= num_scaleup_ranks <= 32
+    0 < num_experts <= 2048
     num_experts % (num_scaleout_ranks * num_scaleup_ranks) == 0
+    num_experts / world_size <= 256
     0 <= num_tokens <= num_max_tokens_per_rank
     world_size * num_max_tokens_per_rank <= INT_MAX
+    world_size * num_max_tokens_per_rank
+        * min(num_topk, num_experts / world_size) <= INT_MAX
     hidden % 256 == 0
     every top-k expert is in [0, num_experts)
     no top-k lane is -1 and expert ids within one token are distinct

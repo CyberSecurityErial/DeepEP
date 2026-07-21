@@ -1313,3 +1313,41 @@ contract, the next sequence is: record the exact environment and tool
 capabilities, collect repeated profiler-free H256/H7168 samples, use Nsys to
 prove the exposed timeline contribution, and only then pin an invocation in
 NCU.  No performance-path code may change before that causal evidence exists.
+
+## Measurement decision O061 — call the first baseline an adapter baseline
+
+The private C100 source and return APIs are correctness-first synchronous
+adapters.  They cannot be repeatedly launched against one prepared plan:
+source consumes the shuffle right once, return consumes its own test right
+once, and abort releases PlanReady.  Every timing sample must therefore use a
+new monotonic invocation and the fixed prepare/finish/gate/stage/abort
+lifecycle while reusing the Buffer and input tensors.
+
+The primary no-profiler timer is host `perf_counter_ns`, because each adapter
+already synchronizes internally.  CUDA events queued after the synchronous
+call would not cleanly surround the kernel.  Per-rank raw samples are retained;
+the eight-rank step value is the maximum rank duration, with min/max skew also
+reported.  Cold, warmup, and steady samples remain separate, and logical
+TokenLayout bytes are never relabelled as hardware NVLink/HBM traffic.
+
+Source timing excludes the post-call visibility/recovery barrier.  Return
+timing includes its mandatory test-adapter B1/B4 barriers and device snapshot/
+status path, but excludes Python `.cpu()` correctness verification.  Nsys is
+required before attributing any part of these wall times to the two kernels.
+This deliberately avoids a speculative CUDA/runtime timer branch or a second
+benchmark-only device path.
+
+## Validation-package decision O062 — make unavailable evidence impossible to fake
+
+The C105 skeleton fixes its evidence label in code and leaves physical Gin,
+QP, NIC, wait, plan, and traffic fields unavailable until a real runner fills
+them from the proper source.  Canonical traffic cases intentionally carry
+different payload volumes, so later comparisons must report volume and cannot
+present their absolute latency as an equal-work A/B.
+
+The route/config bounds mirror the compiled force Hybrid workspace and index
+domain.  Supporting configurations that the real kernel rejects would only
+move bring-up failure from the local contract to the expensive network run.
+Conversely, no sampler, performance policy, buffer planner, or runtime
+instrumentation is added at this stage; the smallest useful artifact is a
+strict deterministic schema plus an independent CPU oracle.
