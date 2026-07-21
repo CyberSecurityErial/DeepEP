@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <climits>
+#include <cstdint>
 #include <memory>
 #include <tuple>
 
@@ -766,12 +767,19 @@ static RailBalanceHybridPlanOutputs allocate_rail_balance_hybrid_plan_outputs(
     };
 }
 
-// One private prepare may be live per ElasticBuffer. PLAN_READY remains live
+enum class RailBalanceHybridPlanState : uint8_t {
+    Preparing,
+    PlanReady,
+    DispatchLive,
+    Invalid,
+};
+
+// One private prepare may be live per ElasticBuffer. PlanReady remains live
 // across the caller's Gate #2 and is released only by the explicit abort for
 // now; C080's source-shuffle commit will own the next state transition.
 struct RailBalanceHybridPlanPending {
     int invocation_id;
-    bool finished;
+    RailBalanceHybridPlanState state;
     bool shuffled;
     bool return_unshuffle_tested;
     bool combine_epilogue_tested;

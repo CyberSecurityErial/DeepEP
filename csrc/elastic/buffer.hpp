@@ -409,7 +409,7 @@ public:
         rail_balance_hybrid_plan_pending.emplace(
             RailBalanceHybridPlanPending{
                 .invocation_id = invocation_id,
-                .finished = false,
+                .state = RailBalanceHybridPlanState::Preparing,
                 .shuffled = false,
                 .return_unshuffle_tested = false,
                 .combine_epilogue_tested = false,
@@ -445,7 +445,10 @@ public:
         EP_HOST_ASSERT(rail_balance_hybrid_plan_pending.has_value());
         auto& pending = rail_balance_hybrid_plan_pending.value();
         EP_HOST_ASSERT(pending.invocation_id == invocation_id);
-        if (pending.finished)
+        EP_HOST_ASSERT(
+            pending.state == RailBalanceHybridPlanState::Preparing or
+            pending.state == RailBalanceHybridPlanState::PlanReady);
+        if (pending.state == RailBalanceHybridPlanState::PlanReady)
             return pending.outputs.as_tuple();
 
         const c10::cuda::CUDAGuard device_guard(device_index);
@@ -512,7 +515,7 @@ public:
         CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
         EP_HOST_ASSERT(host_status == 0 or host_status == 1);
         pending.plan_status = host_status;
-        pending.finished = true;
+        pending.state = RailBalanceHybridPlanState::PlanReady;
         return pending.outputs.as_tuple();
     }
 
@@ -524,7 +527,8 @@ public:
         EP_HOST_ASSERT(rail_balance_hybrid_plan_pending.has_value());
         auto& pending = rail_balance_hybrid_plan_pending.value();
         EP_HOST_ASSERT(pending.invocation_id == invocation_id);
-        EP_HOST_ASSERT(pending.finished);
+        EP_HOST_ASSERT(
+            pending.state == RailBalanceHybridPlanState::PlanReady);
         EP_HOST_ASSERT(pending.plan_status == 0);
         EP_HOST_ASSERT(not pending.shuffled);
 
@@ -608,7 +612,8 @@ public:
         EP_HOST_ASSERT(rail_balance_hybrid_plan_pending.has_value());
         auto& pending = rail_balance_hybrid_plan_pending.value();
         EP_HOST_ASSERT(pending.invocation_id == invocation_id);
-        EP_HOST_ASSERT(pending.finished);
+        EP_HOST_ASSERT(
+            pending.state == RailBalanceHybridPlanState::PlanReady);
         EP_HOST_ASSERT(pending.plan_status == 0);
         EP_HOST_ASSERT(pending.shuffled);
         EP_HOST_ASSERT(not pending.return_unshuffle_tested);
@@ -765,7 +770,8 @@ public:
         EP_HOST_ASSERT(rail_balance_hybrid_plan_pending.has_value());
         auto& pending = rail_balance_hybrid_plan_pending.value();
         EP_HOST_ASSERT(pending.invocation_id == invocation_id);
-        EP_HOST_ASSERT(pending.finished);
+        EP_HOST_ASSERT(
+            pending.state == RailBalanceHybridPlanState::PlanReady);
         EP_HOST_ASSERT(pending.plan_status == 0);
         EP_HOST_ASSERT(pending.shuffled);
         EP_HOST_ASSERT(pending.return_unshuffle_tested);
@@ -810,7 +816,8 @@ public:
         EP_HOST_ASSERT(rail_balance_hybrid_plan_pending.has_value());
         auto& pending = rail_balance_hybrid_plan_pending.value();
         EP_HOST_ASSERT(pending.invocation_id == invocation_id);
-        EP_HOST_ASSERT(pending.finished);
+        EP_HOST_ASSERT(
+            pending.state == RailBalanceHybridPlanState::PlanReady);
         EP_HOST_ASSERT(pending.plan_status == 0);
 
         const c10::cuda::CUDAGuard device_guard(device_index);
@@ -838,8 +845,15 @@ public:
         // newer owner. In particular, never reset the shared legacy barrier
         // workspace; its phase is monotonic across all EP operations.
         if (rail_balance_hybrid_plan_pending.has_value() and
-            rail_balance_hybrid_plan_pending->invocation_id == invocation_id)
-            rail_balance_hybrid_plan_pending.reset();
+            rail_balance_hybrid_plan_pending->invocation_id == invocation_id) {
+            const auto state = rail_balance_hybrid_plan_pending->state;
+            if (state == RailBalanceHybridPlanState::Preparing or
+                state == RailBalanceHybridPlanState::PlanReady)
+                rail_balance_hybrid_plan_pending.reset();
+            else if (state == RailBalanceHybridPlanState::DispatchLive)
+                rail_balance_hybrid_plan_pending->state =
+                    RailBalanceHybridPlanState::Invalid;
+        }
     }
 
     RailBalanceHybridVNodePrepareTensors rail_balance_hybrid_vnode_prepare(

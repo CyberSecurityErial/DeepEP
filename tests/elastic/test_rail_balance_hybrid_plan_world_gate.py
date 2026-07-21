@@ -295,6 +295,7 @@ def _run_success_or_gate2_failure(
     expect_capacity_failure: bool = False,
     injected_gate2_rank: int | None = None,
     nondefault_stream: bool = False,
+    stale_abort_invocation_id: int | None = None,
 ) -> None:
     schedule_enabled = _schedule(case).enabled
     assert schedule_enabled == (not expect_capacity_failure), (
@@ -323,6 +324,12 @@ def _run_success_or_gate2_failure(
         prepare_status, prepare_exception = _prepare(
             runtime, topk_idx, case, arena_offset=arena_offset,
             invocation_id=invocation_id)
+        if prepare_exception is None and stale_abort_invocation_id is not None:
+            try:
+                runtime._rail_balance_hybrid_plan_abort(  # type: ignore[attr-defined]
+                    stale_abort_invocation_id)
+            except BaseException:
+                prepare_exception = traceback.format_exc()
         gate1_error = _status_error(
             prepare_status, prepare_exception, rank=rank,
             exception_priority=_PREPARE_EXCEPTION_PRIORITY,
@@ -559,7 +566,8 @@ def _worker(
             device_words=device_words, host_words=host_words,
             gate_calls=gate_calls, case=success,
             arena_offset=arena_offset, arena_bytes=arena_bytes,
-            invocation_id=8301, label="variable-zero-N success")
+            invocation_id=8301, label="variable-zero-N success",
+            stale_abort_invocation_id=8300)
 
         # Rank five owns N=0, so changing only its physical top-k width is a
         # valid local prepare.  Gate1 must fingerprint the actual tensor K,
