@@ -933,3 +933,28 @@ graph, dynamic tensor, public operator, or semantic manifest of its own. H4
 will supply the small force-v1 field tuple. Per-rank values such as N and local
 rail identity stay out of the equality set and are converted to the fixed
 error key only when local invariants fail.
+
+## Host-path decision O046 — test the real planner transaction before wiring dispatch
+
+H3b remains a focused liveness test, not another runtime abstraction. It will
+reuse the existing private planner, fixed WORLD-gate storage, local LSA barrier,
+and CPU oracle. No generic coordinator, manifest class, callback graph, queue,
+or public operator is justified.
+
+The critical optimization is negative: prevent rank-local work between a
+successful Gate1 and the one required `finish` call. A rank-local assertion or
+allocation there can strand peers in the LSA barrier. Likewise, Gate2 must be
+host-observed before any source payload publication. This ordering is a
+correctness prerequisite for the later zero-extra-barrier hot path; it is not
+a timing claim.
+
+Local N and local rail identity are intentionally absent from WORLD-equal
+fields. Comparing them would reject valid variable-token ranks and real
+multi-node topology. Fixed fields include only operation/version/phase,
+invocation, world topology, H/K/C/M/E/Pcap, arena identity, seed, and flags.
+
+A local EP8 capacity failure is naturally identical on every rank after the
+shared LSA snapshot. It proves real `finish` integration and recovery, but not
+an asymmetric multi-node Gate2 failure by itself. H3b may additionally inject
+one rank's post-finish Gate2 error before publication, then require WORLD-wide
+rejection and abort/retry; the real capacity case remains mandatory.

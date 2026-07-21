@@ -6,6 +6,8 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 
 ## Safe pause state
 
+- Pause archive: 2026-07-21 lunch boundary. All child tasks are stopped, the
+  shared worktree is clean, and no half-written H3b file exists.
 - C000 through C070 remain complete for the agreed single-node PoC scope.
 - C080-A/B are complete; C080-D shared source/return cores and vnode closure
   pass their current local gates. C080-C remains open only for the production
@@ -13,8 +15,9 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Latest pushed checkpoint is `63379bb` (private fixed CUDA WORLD gate),
-  following `c05ff0d` (force-only registered tail sizing) and the H1b raw
+- Latest implementation/docs checkpoint before this pause archive is
+  `dc2b42c` (fixed WORLD-gate record), following `63379bb` (private fixed CUDA
+  WORLD gate), `c05ff0d` (force-only registered tail sizing), and the H1b raw
   submit closure, on
   `fork/feat/rail-balance-prototype`.
 - Public force still fails closed and no result claims real Gin/RDMA behavior.
@@ -78,6 +81,8 @@ the exact file snapshots without inventing commit identity.
   exact field mismatch plus deterministic error convergence, true EP8 and
   non-default-stream evidence, and independent audit 0/0/0/0. It is not yet
   connected to plan/dispatch.
+- The H3a EP8 command was rerun immediately before the pause on port 29951 and
+  passed. H3b was 35% complete in design only; no new file had reached disk.
 
 ## Mandatory retained boundary
 
@@ -103,6 +108,11 @@ No C070 timing is performance evidence.
    obsolete CPU-manifest/sidecar path. Keep the pre-window mixed-mode boundary
    explicit, derive C/topology in C++, and launch shuffle→force dispatch in one
    C++ commit call.
+   The first concrete resume artifact is
+   `tests/elastic/test_rail_balance_hybrid_plan_world_gate.py`; require CPU,
+   true EP8 watchdog, abort/retry, capacity fail-close, fourteen-output oracle,
+   stable storage, non-default stream, and exactly two MAX calls per successful
+   transaction before committing it.
 5. Keep public force unavailable until force combine is connected as one
    main-combine→return-unshuffle→local-barrier→legacy-epilogue commit and handle
    ownership/consumption is fail-closed.

@@ -2893,3 +2893,48 @@ Two design hazards were found before production connection:
 Commit `63379bb` is pushed. H3b next reuses these same stable tensors around the
 private C++ plan prepare/finish as Gate1/Gate2. H4 then consumes successful
 Gate2 state in one C++ source-shuffle to force-dispatch commit.
+
+## 2026-07-21 — D047: lunch-pause archive before H3b lands
+
+The user requested a recoverable pause while H3b was still being designed.
+All child work was stopped before exit. The proposed single new test file,
+`tests/elastic/test_rail_balance_hybrid_plan_world_gate.py`, had not been
+written to the shared worktree, so no incomplete test was staged or committed.
+At the pause boundary the branch and fork were identical at `dc2b42c`, and the
+worktree was clean.
+
+Immediately before the pause, the accepted H3a gate was rerun on all eight idle
+H200 GPUs:
+
+```text
+PYTHONPATH=. /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/test_rail_balance_hybrid_world_gate.py \
+  --num-processes 8 --master-port 29951 --watchdog-seconds 300
+
+PASS C080-H3 fixed WORLD gate CPU reference
+PASS C080-H3 fixed WORLD gate: equal/mismatch/error-first, variable N,
+     stable storage, non-default stream, one MAX/round
+```
+
+The interrupted H3b task was approximately 35% complete in design only. Its
+reviewed restart contract is:
+
+- wrap the real private C++ planner in
+  `prepare -> WORLD Gate1 -> finish -> WORLD Gate2`;
+- use the NCCL EP group for each fixed CUDA gate; Gloo may only supervise the
+  process watchdog and final error reporting;
+- keep one CUDA `int64[128]` tensor and one pinned mirror for every round, and
+  prove exactly one MAX per gate;
+- omit local token count and local scaleout/scaleup identities from the WORLD
+  equality manifest;
+- cover variable/zero local N, a one-rank common-field mismatch, a one-rank
+  invalid route returned by prepare, collective capacity failure after exactly
+  one local barrier, abort/retry after both gates, and exact comparison of all
+  fourteen plan outputs with the CPU oracle;
+- never enter `finish` after Gate1 failure and never publish source payload
+  after Gate2 failure.
+
+The next implementation step is to create only that focused test, run its CPU
+suite and true EP8 watchdog, independently audit its deadlock behavior, then
+commit and push it before starting H4a. No production code is partially edited
+at this checkpoint.

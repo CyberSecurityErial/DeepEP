@@ -458,3 +458,8 @@ Out of scope until evidence expands the project:
   synchronization. Real EP8 fault/stream/reuse tests pass. It is deliberately
   not yet wired into constructor or dispatch, so off and both capability bits
   remain unchanged.
+- Pause boundary 2026-07-21: the branch was clean at `dc2b42c`, the fork
+  matched, all child tasks were stopped, and H3a was freshly rerun on EP8. H3b
+  had reached design review only and left no file on disk. Resume by adding the
+  focused real-planner Gate1/Gate2 test described in `HANDOFF.md`; do not infer
+  that public force or production dispatch was connected.
