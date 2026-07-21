@@ -1425,3 +1425,20 @@ It must stay default-off or benchmark-only, preserve all raw per-rank times,
 and be removed/rejected if it merely hides real work.  Nsys remains the next
 diagnostic layer only if this minimal experiment cannot distinguish host
 release from device execution; NCU still has no justified invocation.
+
+## Measurement decision O066 — prove Gloo/host release before changing the timer
+
+Do not subtract start skew from the accepted C100 timer or add scheduled launch
+alignment yet.  Either could make distributions look stable by redefining the
+measurement before proving that the removed interval is control-plane noise.
+The smaller falsification is a separate CPU-only eight-rank Gloo probe with
+identical post-barrier timestamp semantics.
+
+The decision threshold is registered before the formal run: median CPU-only
+return span must cover at least half of every OMP E1 median start skew, and the
+dominant first/last return ranks must each occur at least 80% of the time.
+Passing shows that the control plane alone is sufficient to create most of the
+skew; failing sends the problem to Nsys OSRT+CUDA rather than to a speculative
+CUDA edit.  This probe cannot prove pure Gloo protocol cost, production Hybrid
+latency, or a kernel speedup because host scheduling is inseparable from the
+observed barrier return.

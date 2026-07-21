@@ -216,6 +216,24 @@ No CUDA/JIT/runtime/hot-path code changed, and no Nsys or NCU was collected.
 The next falsification must isolate the rank-release skew before return
 baselines or kernel attribution are accepted.
 
+### Pre-registered E2 CPU-only gate criterion
+
+E2 removes CUDA, DeepEP, NCCL and ElasticBuffer entirely, but preserves eight
+spawned ranks and a separately created eight-rank Gloo control group.  It
+records common-host timestamps immediately before and after
+`monitored_barrier(wait_all_ranks=True)`.  Every cold/warm/steady rank interval
+is retained by `tests/elastic/bench_rail_balance_gloo_gate.py`; the report
+asserts that CUDA was never initialized.
+
+Before formal collection, the falsification criterion is fixed as follows:
+the steady median barrier-return span must explain at least 50% of each E1 run's
+median stage-start skew, and the dominant earliest and latest return ranks must
+each occur in at least 80% of steady samples.  Meeting both supports the claim
+that Gloo return plus host wakeup is sufficient to create most of the observed
+global-span skew.  Missing either rejects that narrow claim and requires an
+Nsys OS-runtime/CUDA timeline.  Even a positive result is not a pure Gloo
+protocol latency measurement and cannot describe CUDA kernel performance.
+
 ## Environment manifest — 2026-07-21 UTC
 
 ### Host and GPU management view

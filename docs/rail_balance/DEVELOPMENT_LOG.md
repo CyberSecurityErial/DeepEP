@@ -4211,3 +4211,58 @@ three files.  Rerunning from the artifact directory verified all three as OK.
 The verified reports are local ignored artifacts under
 `.cache/rail_balance/c100/stability-omp1/4211bae/`.  No Nsys, NCU, production
 code, CUDA/JIT kernel, or public Hybrid path changed.
+
+## 2026-07-22 — D069: add a CPU-only Gloo release probe
+
+The next diagnostic is isolated in
+`tests/elastic/bench_rail_balance_gloo_gate.py`; it does not import DeepEP,
+call `init_dist`, set a CUDA device, or create NCCL.  Eight spawned processes
+create a default Gloo rendezvous group and a separate all-rank Gloo control
+group matching the benchmark's control-plane shape.  The only timed window is
+the interval around `monitored_barrier`; all-gather and JSON work occur after
+the exit timestamp.
+
+The report preserves cold/warm/steady raw intervals, entry and return spans,
+the complete rank order, last-arrival-to-first-exit time, host/thread affinity,
+context-switch/scheduler snapshots, cgroup state, Git/source identity, and the
+full command.  Both pre/post rank manifests must report CUDA uninitialized.
+The parent watchdog owns a new process group, handles HUP/INT/TERM/QUIT,
+performs TERM/KILL cleanup, and writes JSON through fsync plus atomic replace.
+
+Two dirty-tree 0+3 smokes pass.  The second uses
+`CUDA_VISIBLE_DEVICES='' OMP_NUM_THREADS=1`, reports 43.624 us median Gloo
+return span, and returns the exact order `[1,2,3,4,5,6,0,7]` in all three
+samples.  A standalone reader recomputed every timestamp/span/permutation and
+verified all eight ranks remained CUDA-uninitialized.  These smokes validate
+the instrument only; they are not formal evidence.
+
+A forced SIGTERM during the spawn window exits 124 through the outer timeout,
+leaves no JSON, and leaves no probe/spawn/GPU process.  The visible traceback
+is retained as expected interruption evidence rather than hidden as success.
+
+The first independent code audit found one High watchdog race: signals were
+handled but not blocked across `Popen` and PGID assignment, and cleanup itself
+could be interrupted.  Before commit, the probe adopted the already audited
+C100 signal-mask/two-phase TERM→KILL/PGID-disappearance sequence.  The same
+audit's three Medium findings were also closed: report build/write errors now
+converge across ranks before PASS, the actual `se.nr_migrations` field is
+captured, and pre/post Git/source identity plus run/config hashes must match.
+The cgroup snapshot now discloses `/proc/self/cgroup`, and raw JSON invariants
+are asserted in the producer.  No finding was waived to obtain a clean audit.
+The pinned environment has neither `black` nor `ruff`; both version/check
+attempts failed with `No module named ...`.  Validation therefore uses
+`py_compile`, `git diff --check`, the explicit JSON invariant reader, watchdog
+fault injection, and independent source review rather than silently switching
+Python environments.
+Final read-only re-audit on source SHA
+`e0f68b42380a415708c97f3f855efeedb014665374dc2c2ba421782e48d8f45b`
+reports Blocker0/High0/Medium0/Low0 and confirms the only `torch.cuda` calls
+are two non-initializing `is_initialized()` assertions.
+
+During this work, a positively identified training launch using the
+`megatron-lm-gpu` environment occupied four GPUs.  Under the user's explicit
+standing authorization, only its resolved process group 983614 (launcher,
+torchrun, four workers, compiler helpers and W&B children) received TERM and
+fully exited.  A separate DLB/NVSHMEM test briefly appeared afterward; it was
+not Megatron, was left untouched, and exited on its own.  All GPUs were empty
+before the second smoke.
