@@ -3064,3 +3064,70 @@ and both capability bits remain disabled. Commit `52b165e` is the recoverable
 H4a code checkpoint; H4b next prepares the complete owning dispatch bundle
 before Gate1, and H4c performs the uninterrupted raw commit and enters
 `DispatchLive`.
+
+## 2026-07-21 — D050: own the complete Hybrid dispatch prepare transaction
+
+H4b adds one private production-shaped
+`_rail_balance_hybrid_dispatch_prepare` without connecting public force.  The
+method derives physical D/G/local identities, H/K, and the exact legacy Hybrid
+channel formula inside C++; checks both legacy layouts against `arena_offset`;
+allocates the non-cached BF16 handle tensors with force metadata width `3+2K`;
+and prebuilds plan, barrier, source shuffle, main dispatch, dispatch epilogue,
+main combine, return unshuffle, and combine epilogue before WORLD Gate1.
+
+The pending object owns every Tensor and prepared runtime whose address will
+survive the gate.  All fourteen plan pointers, all LSA peer count pointers,
+the main dispatch ABI pointers, and LaunchArgs are frozen before the first
+arena count launch.  `finish` now consumes those frozen values rather than
+calling `data_ptr`, `get_sym_ptr`, or JIT preparation after Gate1.  H4b stops
+at ownership: it launches neither source shuffle nor main Hybrid dispatch and
+cannot enter `DispatchLive`.
+
+An independent audit found one precommit lifetime window: if count had been
+queued and its following D2H enqueue failed, abort could release backing
+tensors while the comm stream still referenced them.  The accepted failure-
+path fix synchronizes `comm_stream`, resets ownership even when CUDA reports an
+asynchronous error, and only then rethrows.  This adds no success-path work.
+The focused audit and re-audit close Blocker/High at 0/0.
+
+Accepted evidence after rebuilding the extension:
+
+```text
+PASS H4b CPU/source ownership and ordering contract
+PASS H4b truthful D=1 fail-close plus exact H3b recovery on EP8: 3 MAX gates
+PASS canonical H3b planner WORLD suite on EP8: 18 MAX gates
+PASS B1 GPU materializer: 70 cases
+PASS B2 local LSA planner transaction
+PASS vnode 4x2 H256 and H7168 round trips
+PASS H3a fixed WORLD gate and source/return raw-submit adapters
+PASS prepared epilogue/barrier adapter
+PASS API 9/9 and legacy Hybrid identity 4/4
+PASS one production-shaped 4x2/H256 force dispatch codegen case
+PASS full extension build, py_compile, and git diff --check
+PASS independent H4b audit and lifetime-fix re-audit: Blocker/High = 0/0
+```
+
+Failures and review fixes retained:
+
+- the first compile used `int*` for two native mapped-host `int64_t*`
+  counters; the types were corrected and the next full build passed;
+- H3b and the epilogue adapter initially matched the old checked barrier helper
+  name.  Their source contracts now separately require one frozen raw submit
+  and one checked-wrapper delegation; CPU and EP8 reruns pass;
+- one H3a regression command included its unsupported `--timeout` option and
+  exited before testing; the corrected command passed;
+- the abort lifetime issue above was found after the first green EP8 run,
+  fixed, rebuilt, and followed by fresh H4b three-gate and H3b eighteen-gate
+  runs.
+
+This machine's truthful physical Hybrid topology is D=1, so it can prove only
+production prepare fail-close, state cleanup, shared-core/vnode behavior, and
+synthetic D>1 code generation.  A successful production prepare and all
+Gin/RDMA claims remain multi-node gates.  H4c next performs only the adjacent
+source-shuffle/main-dispatch commit.  It must poison state before submission,
+account for the still-fallible runtime launch-config construction, and keep the
+expert prefix storage base distinct from the non-expanded epilogue's
+inclusive `base+1` view.
+
+Implementation commit `4e48b84` and gate commit `7ab382b` are pushed to
+`fork/feat/rail-balance-prototype`.

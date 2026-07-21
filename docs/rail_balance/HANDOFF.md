@@ -6,8 +6,8 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 
 ## Safe pause state
 
-- The lunch archive was resumed. H3b is now implemented, audited, committed,
-  and pushed; no half-written test remains.
+- H4b is implemented, audited, committed, and pushed; no half-written H4b
+  file remains. The next code slice is H4c's adjacent dispatch commit.
 - C000 through C070 remain complete for the agreed single-node PoC scope.
 - C080-A/B are complete; C080-D shared source/return cores and vnode closure
   pass their current local gates. C080-C remains open only for the production
@@ -15,9 +15,9 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Latest pushed implementation checkpoint is `878b0db` (real planner WORLD
-  gate test), following `2f39a46` (prevalidated Gate2 word patch), `dc2b42c`
-  (H3a record), and the earlier H2/H1b closures, on
+- Latest pushed implementation checkpoints are `4e48b84` (owning Hybrid
+  dispatch prepare) and `7ab382b` (H4b gates), following `52b165e` (explicit
+  transaction states) and the earlier H3/H2/H1b closures, on
   `fork/feat/rail-balance-prototype`.
 - Public force still fails closed and no result claims real Gin/RDMA behavior.
 - Resume from the working tree and the newest entries in `DEVELOPMENT_LOG.md`;
@@ -87,6 +87,12 @@ the exact file snapshots without inventing commit identity.
   H3b's eighteen-gate EP8 suite (including stale abort), true 8-GPU source and
   return LSA paths, source faults, raw adapters, combine codegen, API 9/9, and
   legacy 4/4 all pass. Independent state audit found no blocking issue.
+- H4b owning prepare is committed at `4e48b84` with gates at `7ab382b`.
+  Production D/G/C and all round-trip runtime/tensor/raw ownership are frozen
+  before Gate1; precommit abort drains in-flight comm work before releasing
+  storage. Full build, H4b three-gate EP8 fail-close/recovery, canonical H3b
+  eighteen gates, B1/B2/vnode, API/legacy, and focused codegen pass. The local
+  machine cannot execute a truthful D>1 production prepare.
 
 ## Mandatory retained boundary
 
@@ -107,13 +113,14 @@ No C070 timing is performance evidence.
 2. Verify branch and state with `git status --short --branch` and run
    `git diff --cached --check`.
 3. Do not redo C061/C070 unless the relevant code changes.
-4. H3b already connects H3a storage to private plan Gate1/Gate2, and H4a owns
-   explicit fail-closed states. Implement H4b's complete owning dispatch
-   prepare bundle next, then H4c's production commit; do not return to vnode or
-   the obsolete CPU-manifest/sidecar path. Keep the pre-window mixed-mode
-   boundary explicit, derive C/topology in C++, and launch shuffle→force
-   dispatch in one C++ commit call. Only that successful commit may enter
-   `DispatchLive`.
+4. H3b connects H3a storage to private plan Gate1/Gate2, H4a owns explicit
+   fail-closed states, and H4b owns/freezes the complete round trip before
+   Gate1. Implement only H4c's adjacent source-shuffle→force-dispatch commit;
+   do not return to vnode or the obsolete CPU-manifest/sidecar path. Mark the
+   transaction invalid before the still-fallible raw submissions, use the
+   storage base for main dispatch but the inclusive `base+1` expert prefix for
+   its non-expanded epilogue, and enter `DispatchLive` only after both launches
+   return.
    Its accepted evidence is in
    `tests/elastic/test_rail_balance_hybrid_plan_world_gate.py`: CPU and EP8
    watchdog, four abort/retry states, capacity/asymmetric fail-close,

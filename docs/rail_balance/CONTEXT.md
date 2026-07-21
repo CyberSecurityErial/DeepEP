@@ -476,3 +476,12 @@ Out of scope until evidence expands the project:
   live abort poisons it. A true EP8 stale-ID case plus source/return/fault
   regressions pass after the extension rebuild. No CUDA ABI or hot path changed,
   and `DispatchLive` must remain unreachable until H4c commits real dispatch.
+- H4b adds the private production dispatch prepare boundary. It derives
+  D/G/local ranks/H/K/C in C++, checks legacy bytes only before `arena_offset`,
+  owns all pre-dispatch handle tensors and the complete prepared round trip,
+  and freezes every plan/peer/main-dispatch pointer before Gate1. The local
+  truthful D=1 topology fails before publication, aborts cleanly, and recovers
+  the old planner on EP8; B1/B2/vnode and canonical eighteen-gate H3b remain
+  green. No source/main launch or `DispatchLive` transition exists yet. H4c
+  must submit those two stages adjacently, poison before the still-fallible
+  launch boundary, and preserve the expert-prefix base versus `base+1` views.

@@ -1004,3 +1004,28 @@ The permanent invalid state is deliberate fail-closed behavior.
 Making it reachable early was rejected because it would make state evidence
 stronger than the implementation. H4c must set it only after the adjacent raw
 source and main-dispatch launches have been committed successfully.
+
+## Host-path decision O049 — freeze the round trip once before Gate1
+
+The first production force prepare owns the existing native pieces directly:
+plan, local barrier, source shuffle, main dispatch, dispatch epilogue, main
+combine, return unshuffle, combine epilogue, handle tensors, and raw pointers.
+It does not introduce a generic coordinator, callback graph, second buffer, or
+new public operator.  Topology, channel geometry, metadata width, and legacy
+buffer bounds have one C++ owner and are returned only as a fixed Gate1 tuple.
+
+The performance-relevant choice is negative: no allocation, JIT build,
+`data_ptr`, peer-pointer lookup, or LaunchArgs derivation is allowed after
+Gate1.  This removes host variance from the future publication interval while
+adding no device instruction or default-off branch.  Receive tensors whose
+leading dimension depends on completed dispatch counts remain a documented
+post-dispatch allocation; pretending to size them early would waste memory and
+diverge from native DeepEP.
+
+Precommit abort drains the comm stream before releasing ownership.  That sync
+is failure-only and closes an asynchronous lifetime hole without taxing the
+hot path.  Frozen LaunchArgs do not make `LaunchRuntime::launch` infallible;
+H4c still poisons state before the adjacent source/main submissions.  It must
+also pass the dispatch prefix storage base to the persistent kernel but the
+inclusive `base+1` view to the non-expanded epilogue.  These are correctness
+constraints, not reasons to add another abstraction.
