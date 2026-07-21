@@ -2640,3 +2640,77 @@ Commits `9f22083`, `8abc90e`, and `2ec61c6` are pushed to the fork. This is
 public force capability remains false until the production WORLD transaction,
 owning handle state, symmetric arena offsets, and uninterrupted committed
 dispatch/combine sequences are connected.
+
+## 2026-07-21 — D043: freeze prepared Hybrid launch adapters
+
+The first host-integration slice adds no public path. Force main dispatch and
+combine now prepare and own their compiled runtime, specialization spec, and
+launch geometry. Their `launch_prepared_*` adapters only bind invocation raw
+pointers/counts and submit to the caller stream. Source gates reject validation,
+JIT, allocation, tensor `.data_ptr()`, D2H reads, status checks, and stream or
+device synchronization in these committed adapter bodies.
+
+Force combine additionally freezes the legacy reduce-buffer offset during
+prepare with checked 64-bit arithmetic:
+
+```text
+rows              = min(G, K)
+tokens per row    = D * M
+reduce offset     = rows * tokens_per_row * combine_token_bytes
+legacy reduce ptr = legacy_buffer_base + reduce_offset
+```
+
+The final pointer helper performs only the last `advance_ptr`; its input is the
+legacy Hybrid buffer base, never workspace or the force arena. The proxy return
+base remains the separately checked `arena + proxy_return_offset` inside the
+same registered symmetric window.
+
+The ordinary dispatch copy epilogue was also converted into a private prepared
+wrapper. Its force-v1 specialization is the unchanged BF16, non-cached,
+non-expanded, no-SF, no-zero-padding, alignment-one production kernel. It uses
+the same `DispatchCopyEpilogueRuntime::generate` source, the same
+`dispatch_copy_epilogue` cache key, the same TokenLayout/warp formula, and the
+same PDL launch geometry. The actual legacy callsite gives this epilogue every
+physical SM, independently of the main dispatch SM count; prepare therefore
+requires exactly the physical SM count and freezes that callsite contract.
+
+Accepted evidence:
+
+```text
+PASS C080-H1 prepared dispatch-copy epilogue adapter
+PASS 6/6 C080-A Hybrid API tests
+PASS 4/4 legacy Hybrid identity goldens
+PASS dispatch G8/D2/H7168/K8 fresh force+legacy codegen
+PASS combine D4/G2/H7168/K2 fresh force+legacy codegen
+```
+
+Fresh cache `/tmp/deepep-c080-h1-root.OcEXpf` contains four cubins plus PTX and
+SASS. Dispatch force/legacy remain REG64/68, STACK96, zero spill. Combine
+force/legacy remain REG216, STACK96, zero spill. Both codegen constraint
+matrices, the full six-case combine adapter run, Python compilation,
+`git diff --check`, extension builds, and an independent source/ABI audit pass.
+The final audit reports Blocker 0 and High 0. Immutable legacy dispatch,
+combine, and their CUDA roots retain their recorded SHA values.
+
+Failures and corrections retained in this slice:
+
+- the first review incorrectly inferred that dispatch copy epilogue follows
+  the main dispatch's selected SM count; `buffer.hpp` proves it always receives
+  `device_runtime->get_num_sms()`. Allowing a partial-SM specialization under
+  the legacy cache key was classified High and corrected before commit;
+- one syntax command used a nonexistent Python environment and another import
+  used the ABI-incompatible generic sjlgpt environment; accepted commands use
+  `/home/chen/.cache/deepep-sjlgpt/bin/python` only;
+- one API invocation omitted `PYTHONPATH=.` and failed before testing code; it
+  was rerun with the pinned environment and passed 6/6;
+- `setup.py --force` still let Ninja report no work after agent builds had
+  already refreshed the dependency object. Acceptance therefore also includes
+  the agents' successful header-triggered extension builds and independent
+  fresh JIT codegen, not an unsupported claim that `--force` rebuilt every
+  translation unit.
+
+Commits `7a5bd9c`, `5b9df10`, and `e2ee1fa` are pushed. H1 is adapter closure,
+not the production transaction. Before H4 can commit a collective epoch, the
+source shuffle and return-unshuffle need frozen raw-pointer submit layers, and
+the existing combine epilogue's launch-time assertions must move into
+precommit validation. Public force remains false.

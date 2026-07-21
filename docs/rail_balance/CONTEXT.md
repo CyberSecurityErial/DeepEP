@@ -436,3 +436,11 @@ Out of scope until evidence expands the project:
   fixed-tensor WORLD gates, owning pending/handle state, exact legacy/arena
   offsets, uninterrupted shuffle→dispatch and combine→unshuffle→barrier→
   epilogue commit calls, then local sanitizer/regression/performance closure.
+- Host integration H1 is now a pushed, default-inactive adapter layer. Main
+  force dispatch/combine own their prebuilt runtime/spec/LaunchArgs and expose
+  launch-only raw argument binders. Combine freezes the checked legacy reduce
+  offset `min(G,K)*D*M*stride`; dispatch copy epilogue prebuilds the exact
+  legacy BF16/noncached/nonexpanded specialization on all physical SMs. No
+  public behavior changed. H4 must still freeze raw shuffle/unshuffle state,
+  split assertion-free combine-epilogue submit, and connect fixed-tensor WORLD
+  gates plus owning transaction state before capability activation.

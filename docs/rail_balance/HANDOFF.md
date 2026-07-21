@@ -13,9 +13,9 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Latest pushed checkpoints are `9f22083` (workspace geometry gates),
-  `8abc90e` (force combine), and `2ec61c6` (cache-guard test) on
-  `fork/feat/rail-balance-prototype`.
+- Latest pushed checkpoints are `7a5bd9c` (prepared force dispatch),
+  `5b9df10` (prepared force combine/reduce base), and `e2ee1fa` (prebuilt
+  dispatch epilogue) on `fork/feat/rail-balance-prototype`.
 - Public force still fails closed and no result claims real Gin/RDMA behavior.
 - Resume from the working tree and the newest entries in `DEVELOPMENT_LOG.md`;
   do not restore the obsolete sidecar/descriptor/ring draft.
@@ -62,6 +62,9 @@ the exact file snapshots without inventing commit identity.
   all four rank-layout combinations. All are REG216/STACK96/SHARED1024/LOCAL0
   with zero spill; force adds only 8B constant memory. Independent review is
   0 Blocker / 0 High / 0 Medium.
+- H1 prepared adapters: root fresh-cache dispatch/combine smoke, prebuilt
+  dispatch epilogue source gate, API 6/6, legacy goldens 4/4, and independent
+  adapter review pass with Blocker/High 0/0. Public force remains false.
 
 ## Mandatory retained boundary
 

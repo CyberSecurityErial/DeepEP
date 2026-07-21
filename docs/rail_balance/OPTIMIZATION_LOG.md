@@ -862,3 +862,23 @@ legacy twins. The only binary resource increase is eight bytes in constant
 bank 0 for `proxy_return_base`. This establishes that the selected design adds
 no occupancy cost at codegen. It does not establish network latency or
 throughput; those remain real Rail/Gin measurements.
+
+## Host-path decision O042 — prebuild once, submit raw state after the gate
+
+The persistent kernels were already isolated, but calling the old launch
+helpers would still generate/build JIT code in the middle of a force
+transaction. The accepted adapter boundary stores runtime, specialization, and
+LaunchArgs during prepare. A committed submit constructs only the small stack
+Args object and launches on the existing comm stream.
+
+The same rule now covers the dispatch copy epilogue and the combine reduce-base
+offset. It deliberately does not move ordinary dispatch CPU count polling and
+exact output allocation onto the GPU: Hybrid dispatch has already completed its
+collective epoch before that phase, so preserving the legacy control flow is
+simpler and safer. Combine is different; its return-unshuffle, local barrier,
+and epilogue still form one liveness-sensitive chain and will receive unchecked
+submit layers before production connection.
+
+No queue, callback, event graph, generic transaction framework, or new public
+operator was introduced. The adapter code is control-plane only and produces
+the same CUDA specializations and resource counts as C080-E/F.
