@@ -8,9 +8,10 @@ are separate diagnostic experiments.  Raw reports stay under the ignored
 ## Current state
 
 ```text
-environment manifest: FROZEN_DRAFT
+environment manifest: FROZEN
 large source fixture: FUNCTIONAL_PASS, UNPROFILED
 large return fixture: FUNCTIONAL_PASS, UNPROFILED
+checked-adapter benchmark harness: AUDITED_PASS
 profiler-free baseline: NOT_COLLECTED
 new Nsys attribution: NOT_COLLECTED
 new NCU dossier: NOT_COLLECTED
@@ -28,7 +29,7 @@ utilization, or end-to-end MoE speedup.
 | Field | Value |
 | --- | --- |
 | Git branch | `feat/rail-balance-prototype` |
-| Measurement-code base commit | `11dffa090fe0ee78dc8a6b3b39067bedbd44dc4e` |
+| Measurement-code commit | `056ad4d4df7007c3e4927e2f7d096ec5246da571` |
 | Python | `/home/chen/.cache/deepep-sjlgpt/bin/python` |
 | Topology | one process/GPU, world size 8, local LSA team 8 |
 | Scaleout | disabled with `EP_DISABLE_GIN=1`; virtual D=9 plan only |
@@ -63,6 +64,46 @@ Logical payload volumes are fixed before timing:
 
 These values count user-visible `TokenLayout` bytes assigned to moved records.
 They are not hardware NVLink sectors, HBM traffic, or Gin bytes.
+
+## Audited profiler-free harness
+
+`tests/elastic/bench_rail_balance_hybrid_lsa.py` is the committed measurement
+surface.  It launches exactly eight local ranks and gives every cold, warm, and
+steady sample a fresh invocation/ticket while reusing the ElasticBuffer and
+input tensors.  Its timing truth is a same-host monotonic-clock global span:
+
+```text
+stage = max(stage_end across ranks) - min(stage_start across ranks)
+transaction = max(transaction_end across ranks) - min(transaction_start across ranks)
+```
+
+This replaces the rejected `max(per-rank duration)` denominator, which can
+hide rank launch skew.  Every report retains per-rank intervals, raw global
+samples, median, p95, p99, mean, population standard deviation, CV, and the
+logical byte numerator.  Source excludes the later visibility barrier; return
+includes the checked wrapper's required B1/B4 path.  Neither is raw-kernel or
+public Hybrid/Gin end-to-end latency.
+
+The harness uses a fresh private JIT cache and requires exactly seven target
+cubin families.  It hashes the Git/source tree, extension, JIT CU/cubin and
+optional PTX/SASS, and the actual loaded NCCL/CUDA-runtime libraries.  It also
+records the exact DeepEP-selected CUDA home/nvcc, pre/post GPU state, clocks,
+power, throttle reasons, MPS state, and compute-process identities.  A
+process-group watchdog performs bounded TERM/KILL/reap cleanup on exceptions,
+timeouts, signals, or worker failure.
+
+`baseline_collection_eligible` is only an automatic precondition gate.  A run
+is accepted only after correctness evidence and review of the raw timing
+distribution, and only when invoked directly without Torch Profiler, Nsys, or
+NCU.  Profiler presence is deliberately declared by the run contract rather
+than guessed from process names.
+
+The committed harness passed py-compile, three CPU route/oracle suites, the
+12-test validation contract, one final-SHA EP8 source report smoke, and an
+independent final audit with Blocker 0 / High 0.  One immediately preceding
+revision also passed the same report path.  Both used a dirty tree and
+insufficient measurement depth, so their JSON correctly rejects baseline
+eligibility and neither is a performance result.
 
 ## Environment manifest — 2026-07-21 UTC
 
@@ -206,16 +247,14 @@ No old report may be relabelled as evidence for the new 7,168-record fixture.
    compute-capability field and P2P `NS` output.
 2. Stable profiler-free cold and steady-state raw samples for source and
    return, H256 and H7168, with clocks/power/process audit.
-3. The exact transaction boundary and rank aggregation method for those
-   samples.
-4. Nsys exposed critical-path attribution for the new large fixture.
-5. An exact NCU invocation selected from that Nsys report.
-6. Sustained same-machine peer-copy/HBM reference if a bandwidth percentage is
+3. Nsys exposed critical-path attribution for the new large fixture.
+4. An exact NCU invocation selected from that Nsys report.
+5. Sustained same-machine peer-copy/HBM reference if a bandwidth percentage is
    later needed; published peak alone is insufficient.
-7. Real D>1 Gin/RDMA/QP/NIC behavior and network-visible counters.
-8. Full-MoE or training-level target metric and compute/communication overlap.
+6. Real D>1 Gin/RDMA/QP/NIC behavior and network-visible counters.
+7. Full-MoE or training-level target metric and compute/communication overlap.
 
-Until items 2--5 exist, standalone TMA waits, segment scans, QP choice, tail
+Until items 2--4 exist, standalone TMA waits, segment scans, QP choice, tail
 publication cadence, planner launch, and barriers are hypotheses only.  No
 performance-path code change is authorized by this manifest.
 
@@ -241,5 +280,9 @@ ncu --query-metrics
 ldd deep_ep/_C.cpython-311-x86_64-linux-gnu.so
 ```
 
-Exact baseline and profiler commands will be added only after the benchmark
-boundary passes correctness and repeatability review.
+The benchmark boundary has passed correctness and audit.  Formal collection
+uses the committed script directly with `EP_DISABLE_GIN=1`, all eight visible
+GPUs, a persistent per-run JSON path, at least 10 warmup iterations and 100
+steady iterations.  Source/return and H256/H7168 are separate processes with
+fresh JIT caches.  Exact commands and report hashes are recorded with the
+accepted runs; Nsys/NCU use separate diagnostic invocations and artifacts.

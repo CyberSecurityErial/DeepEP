@@ -689,11 +689,14 @@ Out of scope until evidence expands the project:
   output are retained as missing evidence; they do not block same-machine
   relative timing but forbid an unverified peak-efficiency denominator.
 - The first baseline measures synchronous checked adapters, not raw kernels.
-  Each sample needs a fresh one-shot transaction; rank maximum is the step
-  duration.  Nsys must expose kernel/copy/barrier/host contributions before an
-  NCU target or performance-path change is selected.
-- No new Nsys/NCU or no-profiler timing has run yet.  The next artifact is a
-  standalone harness with full raw samples and no runtime/CUDA modification.
+  Each sample needs a fresh one-shot transaction; the same-host eight-rank
+  duration is `max(end)-min(start)`, with every per-rank interval retained.
+  Nsys must expose kernel/copy/barrier/host contributions before an NCU target
+  or performance-path change is selected.
+- The standalone audited harness is committed at `056ad4d`.  Its dirty-tree,
+  one-sample source runs prove report generation only and are not accepted
+  performance evidence.  Clean 10+100 source/return × H256/H7168 baselines are
+  next; no new Nsys/NCU or performance-path modification has started.
 
 ## C105 contract-only context (2026-07-21)
 
@@ -707,3 +710,25 @@ Out of scope until evidence expands the project:
 - System and fixed ABI Python pass 12/12 after a retained handwritten-oracle
   failure.  A dedicated public multi-node runner, capability override,
   correctness execution, off/force A/B, and real counters remain C105 work.
+
+## C100 audited-baseline harness context (2026-07-21)
+
+- `tests/elastic/bench_rail_balance_hybrid_lsa.py` measures only the synchronous
+  private checked source/return adapters.  It does not measure public Hybrid,
+  Gin/RDMA/NIC, a raw kernel, or model-level speedup.
+- Every sample owns a new invocation and preserves cold/warm/steady raw data.
+  The global stage and transaction spans use the common single-host monotonic
+  clock; the earlier rank-maximum denominator is rejected and retained in the
+  development/optimization logs.
+- Reports hash Git/source, `_C.so`, seven exact JIT cubin families, loaded
+  NCCL/CUDART libraries, and the DeepEP-selected nvcc.  They record pre/post
+  GPU/process/MPS/throttle state and explicitly disclose that historical
+  extension build flags cannot be recovered from a binary hash.
+- The watchdog uses a dedicated process group and bounded TERM/KILL/reap.  A
+  real SIGTERM/SIGINT injection left no workers or GPU processes after fixes.
+- Final frozen benchmark SHA is
+  `1743adfca7edce6ac224b0d842d30b0fabcb6e0b5be2e3ec77d60776d016799b`;
+  independent review is Blocker0/High0.  Benchmark commit is `056ad4d`.
+- Formal acceptance additionally requires a clean commit, direct unwrapped
+  execution, fresh cache, persistent JSON, at least 10 warmup and 100 steady
+  samples, same-commit correctness, and stable raw distributions.

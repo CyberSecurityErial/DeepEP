@@ -4051,3 +4051,71 @@ After those corrections, system Python and the fixed ABI Python each pass
 12/12 tests plus `py_compile`.  This checkpoint proves only route/schema
 contracts; capability bits remain false and real runtime execution remains
 untested.
+
+## 2026-07-21 — D066: commit the auditable C100 adapter benchmark
+
+Commit `056ad4d4df7007c3e4927e2f7d096ec5246da571` adds
+`tests/elastic/bench_rail_balance_hybrid_lsa.py` without changing CUDA, JIT,
+buffer layout, capability bits, or the public Hybrid path.  It reuses the exact
+G8/D9/K4/N1024/C256 schedule for source and production-shared return, creates a
+fresh invocation/ticket for every cold/warm/steady sample, and retains all raw
+rank intervals plus same-host global stage/transaction spans.
+
+The report is deliberately fail-closed.  It requires an initially empty private
+JIT cache and exactly seven target cubin families; hashes Git/source, `_C.so`,
+generated CU/cubin and optional PTX/SASS, and the actually loaded NCCL/CUDART;
+records DeepEP's selected CUDA home/nvcc; and checks pre/post GPU UUID, driver,
+MIG, compute mode, throttle, MPS, and compute-process state.  Its watchdog owns
+a separate process group and performs TERM, bounded polling, KILL if required,
+and leader reap on normal failure, timeout, SIGINT, or SIGTERM.
+
+Retained development failures and rejected evidence:
+
+- the first large `apply_patch` attempt was rejected atomically, so no partial
+  file entered the tree; the harness was then added in reviewable increments;
+- the first skill/CLI validation used bare `python`, which is absent; all
+  accepted checks use `/home/chen/.cache/deepep-sjlgpt/bin/python`;
+- an early percentile self-check compared an interpolated p99 as an exact
+  convenient decimal; it was corrected before any report was accepted;
+- v1 used `max(per-rank duration)` and could hide launch skew.  A v2 smoke
+  exposed 79.335 us rank-max versus 141.075 us global span, so v3/v4 use only
+  `max(end)-min(start)` as timing truth;
+- the first signal test fired before workers existed and was rejected as
+  watchdog evidence.  The accepted injection waited for `spawn_main`, sent
+  SIGTERM then SIGINT, returned 130, and proved the child process group and GPU
+  processes disappeared;
+- successive audits found orphan process-group liveness, repeated-signal,
+  spawn-window, report-before-destroy, equal data/control timeout, JIT identity,
+  byte-scope, runtime-state, misleading formal-eligibility, nvcc-selection, and
+  profiler-declaration issues.  Each was fixed or made an explicit manual
+  acceptance boundary; no issue was hidden by weakening the gate;
+- `git diff --no-index --check /dev/null <new-file>` returned 1 because the new
+  file differs, with no whitespace diagnostic; py-compile and staged
+  `git diff --check` are the accepted syntax/whitespace evidence;
+- all v1--v4 timing runs used a dirty worktree and/or one steady sample.  The
+  harness correctly marked every one ineligible, so none is a baseline;
+- during watchdog work, a definite Megatron launch/session PGID 459498,
+  torchrun 459501, worker groups 459530--459533, and wandb group 459924 were
+  terminated under the user's standing authorization.  Exact groups exited
+  and all GPUs were empty; no unrelated process was touched.
+
+Final validation on benchmark SHA
+`1743adfca7edce6ac224b0d842d30b0fabcb6e0b5be2e3ec77d60776d016799b`:
+
+```text
+PASS py_compile and CLI help
+PASS C080-B2 plan CPU oracle
+PASS C080-D source CPU oracle, including both C100 cases
+PASS C080-F return CPU oracle
+PASS C105 validation contract 12/12
+PASS one final-SHA EP8 H256 source report smoke
+PASS one immediately preceding revision of the same report path
+PASS actual loaded libnccl/libcudart identity and DeepEP-selected nvcc 12.8
+PASS exact seven JIT cubin families and stable pre/post identities
+PASS independent final audit: Blocker 0 / High 0
+```
+
+The last smoke reported 146.117 us only to prove the report path; it is dirty,
+one-sample, and explicitly not a performance result.  No Nsys, NCU, or
+performance-path edit was made.  The next checkpoint is clean direct 10+100
+source/return × H256/H7168 collection with repeated independent runs.

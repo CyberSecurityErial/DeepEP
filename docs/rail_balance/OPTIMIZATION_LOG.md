@@ -1325,9 +1325,10 @@ lifecycle while reusing the Buffer and input tensors.
 
 The primary no-profiler timer is host `perf_counter_ns`, because each adapter
 already synchronizes internally.  CUDA events queued after the synchronous
-call would not cleanly surround the kernel.  Per-rank raw samples are retained;
-the eight-rank step value is the maximum rank duration, with min/max skew also
-reported.  Cold, warmup, and steady samples remain separate, and logical
+call would not cleanly surround the kernel.  Per-rank raw samples are retained.
+This checkpoint initially proposed the maximum per-rank duration as the
+eight-rank value; O063 supersedes that denominator after proving it can hide
+launch skew.  Cold, warmup, and steady samples remain separate, and logical
 TokenLayout bytes are never relabelled as hardware NVLink/HBM traffic.
 
 Source timing excludes the post-call visibility/recovery barrier.  Return
@@ -1351,3 +1352,26 @@ move bring-up failure from the local contract to the expensive network run.
 Conversely, no sampler, performance policy, buffer planner, or runtime
 instrumentation is added at this stage; the smallest useful artifact is a
 strict deterministic schema plus an independent CPU oracle.
+
+## Measurement decision O063 — fix the clock boundary before profiling
+
+The accepted eight-rank latency is now
+`max(end across ranks) - min(start across ranks)` on the common same-host
+monotonic clock.  The rejected `max(end-start per rank)` formulation omitted
+launch skew: one H256 source smoke measured 79.335 us by rank maximum but
+141.075 us by the global stage span.  This is a measurement correction, not a
+device optimization.
+
+Logical bandwidth divides the fixed aggregate moved `TokenLayout` bytes by
+that global stage span.  It is labelled aggregate checked-adapter rate and is
+never called physical NVLink, HBM, Gin, or production throughput.  Return also
+reports its wrapper-only D2D copies separately so the logical numerator cannot
+silently include reduce seed/snapshot traffic.
+
+No CUDA, JIT kernel, buffer layout, public Hybrid path, capability bit, or
+production hot-path branch changed.  The only accepted code is an external
+measurement harness with fail-closed cleanup and exact artifact identity.
+Dirty-tree one-sample runs are retained solely as functionality evidence.  The
+next optimization decision requires clean direct profiler-free distributions,
+then Nsys exposed-time attribution; NCU and hot-path edits remain forbidden
+until that evidence exists.
