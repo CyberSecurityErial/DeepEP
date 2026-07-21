@@ -794,3 +794,24 @@ Out of scope until evidence expands the project:
   cost or explain every rank-local tail.  Keep global spans raw; use the
   already reported rank-local synchronous envelope plus Nsys for operator
   attribution.  Do not algebraically subtract a median.
+
+## C100 OMP-controlled return-H256 context (2026-07-22)
+
+- Clean commit `d05411a` now has three accepted OMP=1 return-H256 reports,
+  each with 10 warmup plus 100 steady samples: r1, r3 and r4.  Their global
+  medians are 225.189/215.610/218.210 us and rank-local maximum-envelope
+  medians are 218.743/212.878/214.870 us.
+- Median ranges tighten to 4.44% globally and 2.76% rank-locally, but this is
+  not tail stability.  Pooled global p99/max are 453.262/1419.432 us and
+  rank-local p99/max are 406.292/1324.364 us.
+- A separately launched Megatron `restart7` appeared during r2.  The exact
+  outer PGID was 1097012; post-measurement discovered worker PIDs
+  1097155--1097158.  The report passed functionality but correctly set
+  `baseline_collection_eligible=false`.  It is checksum-preserved and never
+  participates in accepted statistics.
+- Only PGID 1097012 was terminated under standing authorization; post-kill
+  process and `nvidia-smi` checks were empty.  The accepted replacement runs
+  then passed every automatic gate.
+- No benchmark, CUDA/JIT, runtime, Hybrid hot path, Nsys or NCU code changed.
+  Finish return-H7168 next; notify the user before Nsys, and do not enter NCU
+  until Nsys identifies an exact exposed invocation.

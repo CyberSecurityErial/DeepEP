@@ -4318,3 +4318,45 @@ the manual p95/p99 stability gate pass.
 Reports and a verified partial manifest live under
 `.cache/rail_balance/c100/formal-omp1/bac80ee/`.  No benchmark, CUDA/JIT,
 runtime or production hot-path code changed.  Return-H256 is the next group.
+
+## 2026-07-22 — D072: return-H256 collection, co-tenant rejection, and recovery
+
+The first clean return-H256 10+100 run at `d05411a` passed.  During the next
+run, an independently launched Megatron `restart7` appeared after preflight:
+outer launcher PGID 1097012, torchrun PID 1097020, and GPU worker PIDs
+1097155--1097158.  The benchmark completed functionality but its post-run
+identity gate found all four unexpected workers and set
+`baseline_collection_eligible=false`.  That r2 report is retained with hash
+`521dcabfa7afedd0f37ae511c17e9fb5b81c51bb5949e48de0ba891c47758c53`;
+it is not renamed, deleted, pooled, or used in comparisons.
+
+Under the standing user authorization, only exact PGID 1097012 received
+TERM/KILL cleanup.  A following process-group query and `nvidia-smi`
+compute-app query were empty.  Two replacement runs then passed every gate.
+The accepted set and hashes are:
+
+```text
+906a81597b3afdeb0aadd10cf4d888f563216315eb3c4e597b2a420dc43f17fb  return-h256-r1.json
+719a8451b31baeff82f7f6af00bd7000aefcf3e5bd4204b1c9b64a4fa82fd92d  return-h256-r3.json
+17e0b24bd937fc387706b013618ef6440fc2318a85b7be9dc01a68a9db31a2c5  return-h256-r4.json
+```
+
+Their pooled global median/p95/p99 are 218.522/259.578/453.262 us; the
+rank-local maximum-envelope values are 215.020/249.024/406.292 us.  Run
+medians are comparatively close, but r3 reaches 1419.432 us globally and
+1324.364 us rank-locally, so manual tail stability remains open.
+
+One checksum verification command was first run from the repository root even
+though the manifest contains directory-relative names; it failed only with
+four `No such file or directory` messages.  Re-running from the manifest
+directory verified all four reports `OK`.  This path-resolution failure is
+retained to prevent confusing it with data corruption.
+
+A first multi-file documentation patch also failed atomically because the
+expected final Optimization Log line wrapped differently from the patch
+context.  `git status` and a marker search proved that no tracked file changed;
+the updates were then split per file.  No partial documentation state was
+silently accepted.
+
+No CUDA/JIT/runtime/Hybrid hot-path code and no profiler configuration changed.
+Return-H7168 is next; Nsys remains the first diagnostic profiler.

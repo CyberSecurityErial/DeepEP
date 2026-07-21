@@ -1476,3 +1476,18 @@ payload kernel.  Continue the unchanged return collection, then use Nsys to
 classify representative and tail calls as host deschedule, CUDA API/sync wait,
 or exposed GPU execution.  No outlier removal, percentile replacement, CPU
 pinning, or timer correction is introduced in this checkpoint.
+
+## Measurement decision O069 — reject co-tenant runs and let Nsys classify tails
+
+Return-H256 run 2 is permanently rejected even though its observed CV is
+smaller than some accepted runs.  The automatic post-run gate identified four
+Megatron workers that were absent at preflight.  Process identity is part of
+the measurement contract; visually plausible timing cannot override it.
+
+Accepted runs r1/r3/r4 have close medians but large p99/max tails, including a
+1.324 ms rank-local call envelope.  Median repeatability therefore does not
+authorize kernel optimization.  Finish the unchanged return-H7168 collection,
+then use Nsys to distinguish host descheduling, CUDA API/synchronization wait,
+and exposed GPU execution.  NCU is allowed only for an exact invocation whose
+critical-path exposure is established by Nsys.  No outlier trimming, affinity
+change, hot-path edit, or speculative TMA rewrite is introduced here.

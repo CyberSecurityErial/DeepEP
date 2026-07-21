@@ -12,7 +12,7 @@ environment manifest: FROZEN
 large source fixture: FUNCTIONAL_PASS, UNPROFILED
 large return fixture: FUNCTIONAL_PASS, UNPROFILED
 checked-adapter benchmark harness: AUDITED_PASS
-profiler-free baseline: PARTIAL_SOURCE_COLLECTED, STABILITY_NOT_ACCEPTED
+profiler-free baseline: SOURCE_AND_RETURN_H256_COLLECTED, TAIL_STABILITY_NOT_ACCEPTED
 new Nsys attribution: NOT_COLLECTED
 new NCU dossier: NOT_COLLECTED
 performance-path change: NONE
@@ -304,6 +304,45 @@ c88c67f99b4a4e8af0a9871cab5b444aebd44ccc1935aaaba92532825e0b46bc  source-h256-r2
 85a02c0354fb583f5da894ff842bdc9834edad3ec4081a4a87ac4ab67d213e65  source-h256-r3.json
 ```
 
+## OMP-controlled return-H256 collection — commit `d05411a`
+
+Three clean return-H256 reports use OMP=1, 10 warmup and 100 steady samples.
+The accepted set is `{r1,r3,r4}`.  All three pass the automatic environment,
+identity and persistence gates.  Their global run medians span only 4.44%, and
+their rank-local call-envelope medians span 2.76%, but the tail remains
+unstable:
+
+| Run | Global median/p95/p99 (us) | Global CV/max | Rank-local-max median/p95/p99 (us) | Rank-local CV/max |
+| --- | --- | --- | --- | --- |
+| 1 | 225.189 / 274.750 / 398.908 | 20.19% / 613.981 | 218.743 / 257.670 / 377.855 | 16.95% / 518.845 |
+| 3 | 215.610 / 232.044 / 289.816 | 52.48% / 1419.432 | 212.878 / 228.404 / 279.921 | 49.36% / 1324.364 |
+| 4 | 218.210 / 254.566 / 453.262 | 19.35% / 578.619 | 214.870 / 247.296 / 406.292 | 16.54% / 515.888 |
+| pooled | 218.522 / 259.578 / 453.262 | 34.23% / 1419.432 | 215.020 / 249.024 / 406.292 | 31.64% / 1324.364 |
+
+Run 2 completed functional checks but is permanently rejected from every
+pooled statistic and comparison.  A separately launched Megatron `restart7`
+appeared after preflight; the report's post-measurement gate found worker PIDs
+1097155--1097158 and set `baseline_collection_eligible=false`.  The benchmark
+therefore failed closed even though the report's timing distribution looked
+superficially tighter.  The raw rejected report is retained as evidence that
+the co-tenant guard works.
+
+The verified manifest under
+`.cache/rail_balance/c100/formal-omp1/d05411a/` contains both accepted and
+rejected reports:
+
+```text
+906a81597b3afdeb0aadd10cf4d888f563216315eb3c4e597b2a420dc43f17fb  return-h256-r1.json
+521dcabfa7afedd0f37ae511c17e9fb5b81c51bb5949e48de0ba891c47758c53  return-h256-r2.json  # rejected: unexpected compute PIDs
+719a8451b31baeff82f7f6af00bd7000aefcf3e5bd4204b1c9b64a4fa82fd92d  return-h256-r3.json
+17e0b24bd937fc387706b013618ef6440fc2318a85b7be9dc01a68a9db31a2c5  return-h256-r4.json
+```
+
+Median repeatability alone does not close the baseline: r3 has a 1.419 ms
+global maximum and a 1.324 ms rank-local maximum.  Return-H7168 must be
+collected next.  Nsys will then classify the retained tails before any NCU
+target or hot-path change is selected.
+
 ## Environment manifest — 2026-07-21 UTC
 
 ### Host and GPU management view
@@ -445,9 +484,10 @@ No old report may be relabelled as evidence for the new 7,168-record fixture.
 1. Explanation for the H200 operational target versus the management labels,
    compute-capability field and P2P `NS` output.
 2. Stable, accepted profiler-free source and return samples for H256/H7168.
-   Six clean source reports failed the original stability review.  Three
-   OMP-one-thread H7168 reports remove the severe tail but retain 14.94%
-   cross-run median span from rank-release skew; return remains uncollected.
+   Source H256/H7168 raw collection is complete but tail stability is not
+   closed.  Return-H256 raw collection is complete with accepted reports
+   `{r1,r3,r4}`, but its p99/max tails are also unstable.  Return-H7168 remains
+   uncollected.
 3. Nsys exposed critical-path attribution for the new large fixture.
 4. An exact NCU invocation selected from that Nsys report.
 5. Sustained same-machine peer-copy/HBM reference if a bandwidth percentage is

@@ -1,6 +1,6 @@
 # Rail Balance Session Handoff
 
-Last updated: 2026-07-21 UTC
+Last updated: 2026-07-22 UTC
 Branch: `feat/rail-balance-prototype`
 Repository: `/home/chen/workspace/source_code/DeepEP`
 
@@ -21,9 +21,9 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Latest pushed checkpoints are `5f8eab5` (live transit-key fault, delayed rank,
-  and recovery), `ee827e8` (named route distributions), and `eb2810c` (C080-G
-  local closure) on `fork/feat/rail-balance-prototype`.
+- Latest pushed checkpoint before this resumed collection is `d05411a` (OMP
+  source-H256 evidence) on `fork/feat/rail-balance-prototype`; the next commit
+  archives the return-H256 accepted/rejected evidence described below.
 - Both capability bits remain false and no result claims real Gin/RDMA
   behavior. The local activation evidence is complete, but the public methods
   deliberately remain unreachable through a normal force construction until a
@@ -187,8 +187,13 @@ the exact file snapshots without inventing commit identity.
   skew, so the pre-registered 50%/80% criterion passes.  Verified artifacts
   are under `.cache/rail_balance/c100/gloo-gate/ee41415/`.  Global spans remain raw, but
   kernel work must be attributed from rank-local adapter envelopes and Nsys,
-  never by subtracting the probe median.  Source-H256 and both return widths
-  still need OMP=1 repeated collection.
+  never by subtracting the probe median.  Source-H256 and return-H256 OMP=1
+  repeated collection are now complete as raw evidence.  Return-H7168 remains.
+- Return-H256 at clean `d05411a` has accepted reports `{r1,r3,r4}`.  Global
+  medians are 225.189/215.610/218.210 us, but r3 retains a 1.419 ms maximum;
+  this is not a stable-tail baseline.  `r2` is preserved but rejected because
+  the post-run gate detected Megatron restart7 worker PIDs 1097155--1097158.
+  Its values must never enter pooled statistics.
 
 ## Mandatory retained boundary
 
@@ -218,12 +223,13 @@ No C070 timing is performance evidence.
    Rail/Gin correctness passes. D1 evidence is never a D>1 Gin success claim.
 6. C090 is complete. Do not rerun its unchanged full suites or sanitizer
    kernels unless production device code changes.
-7. The GPU evidence-chain skill is installed. Resume C100 by explaining the
-   rank-local timing instability, then test measurement stability with one
-   controlled variable; do not delete the six original reports. Finish return
-   baselines only after the user resumes work and GPUs are idle. Nsys must
-   precede target NCU and any hot-path optimization. C105 packages the fastest
-   possible real-cluster bring-up afterward.
+7. The GPU evidence-chain skill is installed. Resume C100 with three clean
+   OMP=1 return-H7168 10+100 reports, preserving every accepted and rejected
+   checksum. Then notify the user immediately before Nsys and use it first to
+   classify host/CUDA/kernel tail exposure. NCU may target only an exact
+   exposed invocation selected by Nsys; hot-path optimization remains blocked
+   until that evidence exists. C105 packages the fastest possible real-cluster
+   bring-up afterward.
 
 Pinned runtime for accepted commands:
 
