@@ -67,6 +67,60 @@ def _build(routes, *, destinations, channels, max_tokens, **kwargs):
     )
 
 
+def _bounded_prefix_channel(prefix, incoming_ordinal):
+    if (len(prefix) < 2 or prefix[0] != 0 or incoming_ordinal < 0 or
+            incoming_ordinal >= prefix[-1]):
+        return None
+    lower = 0
+    upper = len(prefix) - 2
+    while lower < upper:
+        middle = lower + (upper - lower) // 2
+        if prefix[middle + 1] <= incoming_ordinal:
+            lower = middle + 1
+        else:
+            upper = middle
+    if not prefix[lower] <= incoming_ordinal < prefix[lower + 1]:
+        return None
+    return lower
+
+
+def test_bounded_monotonic_prefix_lookup_matches_linear_oracle():
+    rng = random.Random(78)
+    for channels in (1, 2, 3, 256, 1024):
+        increments = [
+            [0] * channels,
+            [1] + [0] * (channels - 1),
+            [0] * (channels - 1) + [3],
+            [index % 4 for index in range(channels)],
+        ]
+        increments.extend(
+            [rng.randrange(4) for _ in range(channels)]
+            for _ in range(8)
+        )
+        for values in increments:
+            prefix = [0]
+            for value in values:
+                prefix.append(prefix[-1] + value)
+            for incoming_ordinal in range(-1, prefix[-1] + 1):
+                expected = next((
+                    channel for channel in range(channels)
+                    if prefix[channel] <= incoming_ordinal <
+                    prefix[channel + 1]
+                ), None)
+                assert _bounded_prefix_channel(
+                    prefix, incoming_ordinal) == expected
+
+    # An adversarial nonmonotonic row can contain overlapping plausible
+    # intervals. It is outside the immutable producer-prefix contract: neither
+    # a logarithmic lookup nor the old first-match scan validates the full row.
+    nonmonotonic = [0, 4, 4, 2, 3, 5, 5, 5, 5]
+    assert _bounded_prefix_channel(nonmonotonic, 3) == 4
+    assert next(
+        channel for channel in range(len(nonmonotonic) - 1)
+        if nonmonotonic[channel] <= 3 < nonmonotonic[channel + 1]
+    ) == 0
+
+
 def _assert_resolver_invariants(routes, schedule):
     validate_hybrid_rail_schedule(schedule)
     assert schedule.enabled

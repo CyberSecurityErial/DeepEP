@@ -128,6 +128,10 @@ def _run_corrupt_plan(
         invocation_id, expected_finish_status=0)
     if corruption == "num_segments":
         outputs[5].fill_(_WORLD_SIZE)
+    elif corruption == "moved_prefix_origin":
+        outputs[9][..., 0].fill_(1)
+    elif corruption == "moved_prefix_terminal":
+        outputs[9][..., -1].zero_()
     elif corruption == "group_prefix":
         outputs[10].fill_(case.proxy_capacity_per_egress)
     elif corruption == "proxy_required":
@@ -244,7 +248,8 @@ def _worker(local_rank: int, num_local_ranks: int,
     clean_shutdown = False
     try:
         for offset, corruption in enumerate((
-            "num_segments", "group_prefix", "proxy_required")):
+            "num_segments", "moved_prefix_origin",
+            "moved_prefix_terminal", "group_prefix", "proxy_required")):
             _run_corrupt_plan(
                 runtime=buffer.runtime, rank=rank,
                 control_group=control_group, timeout=arguments.timeout,
