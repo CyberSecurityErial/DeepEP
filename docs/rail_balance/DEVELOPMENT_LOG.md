@@ -4360,3 +4360,8 @@ silently accepted.
 
 No CUDA/JIT/runtime/Hybrid hot-path code and no profiler configuration changed.
 Return-H7168 is next; Nsys remains the first diagnostic profiler.
+
+Post-commit independent review reports Blocker0/High0/Medium0/Low1.  The only
+Low was an ambiguous C100 checkpoint label: 406.292/1324.364 us are the pooled
+rank-local-envelope p99/max, whereas global values are 453.262/1419.432 us.
+The follow-up documentation commit makes both scopes explicit.
