@@ -12,7 +12,7 @@ environment manifest: FROZEN
 large source fixture: FUNCTIONAL_PASS, UNPROFILED
 large return fixture: FUNCTIONAL_PASS, UNPROFILED
 checked-adapter benchmark harness: AUDITED_PASS
-profiler-free baseline: NOT_COLLECTED
+profiler-free baseline: PARTIAL_SOURCE_COLLECTED, STABILITY_NOT_ACCEPTED
 new Nsys attribution: NOT_COLLECTED
 new NCU dossier: NOT_COLLECTED
 performance-path change: NONE
@@ -104,6 +104,53 @@ independent final audit with Blocker 0 / High 0.  One immediately preceding
 revision also passed the same report path.  Both used a dirty tree and
 insufficient measurement depth, so their JSON correctly rejects baseline
 eligibility and neither is a performance result.
+
+## Partial clean source collection — commit `3c54839`
+
+Six direct, unwrapped, profiler-free reports were collected from the clean
+commit `3c548390d96c229a318966e987a9a624ba76719d`.  Every report used 10 warmup
+and 100 steady iterations, a fresh JIT cache, an empty-GPU preflight, persistent
+JSON, and passed `baseline_collection_eligible`.  Raw reports and a verified
+checksum manifest remain under the ignored local directory
+`.cache/rail_balance/c100/formal/3c54839/`.
+
+These runs are valid raw evidence but are not accepted as a stable baseline:
+
+| Case | Run medians (us) | Median range | Pooled median/p95/p99 (us) | Pooled CV | Min/max (us) |
+| --- | --- | ---: | --- | ---: | --- |
+| source H256 | 113.745 / 109.794 / 117.764 | 7.26% | 112.700 / 133.650 / 164.241 | 12.15% | 101.394 / 292.757 |
+| source H7168 | 130.954 / 157.439 / 143.885 | 20.22% | 144.728 / 169.219 / 271.935 | 82.84% | 121.626 / 2274.190 |
+
+The H7168 maximum is not an all-rank payload slowdown.  In run 1, steady
+sample 59 had a 2,253.625 us rank-4 adapter duration while the other rank
+durations were 85.855--108.684 us; its global span was 2,274.190 us.  Run 2's
+770.897 us maximum combined a 429.110 us start skew with a 344.129 us largest
+rank duration.  Run 3 was materially tighter (median 143.885 us, CV 4.73%).
+This points to host/rank scheduling or an intermittent synchronization path as
+a measurement-stability hypothesis, not yet a kernel root cause.
+
+All pre/post GPU samples were P0 with 3,201 MHz memory clocks and no reported
+non-benign throttle.  SM clocks were consistently heterogeneous: GPUs 1, 3,
+and 6 reported 1,500 MHz while the other active GPUs reported 1,980 MHz.  The
+host load average was approximately 8 on 192 logical CPUs and no dominant CPU
+consumer was observed, but pre/post sampling cannot exclude a short scheduler
+event.
+
+Report SHA256 values are:
+
+```text
+23b145eee50db8c0905bf0fd25c1c849f63d023109353683a45a2ba67348243c  source-h256-r1.json
+a41402c620604a2b59988177dd2dc3d8df1e14daed8199254085ad2f7698122a  source-h256-r2.json
+8d99ed152a02474b8641592f2ea481ecfd8a31e81d76c2fe2a3f03792bddf1bf  source-h256-r3.json
+075b92ecb0ea7312806a12ad44c39fd45c9f1e9de19fcd9e789f97fac3721a91  source-h7168-r1.json
+e87d14328577a4e2c6262fb0b043496e1ddff706dbca26b8166a03daafbc9bbf  source-h7168-r2.json
+068615503752d68f28bc00603d8dbfd02fb8b95c0a6e1faa41cd7f842ee2d1d0  source-h7168-r3.json
+```
+
+Return collection was intentionally stopped at the user's request.  The first
+return-H256 process received SIGINT, the watchdog exited 130, all child/GPU
+processes were reaped, and no partial report exists.  No Nsys, NCU, or
+performance-related source change followed this partial collection.
 
 ## Environment manifest — 2026-07-21 UTC
 
@@ -245,8 +292,9 @@ No old report may be relabelled as evidence for the new 7,168-record fixture.
 
 1. Explanation for the H200 operational target versus the management labels,
    compute-capability field and P2P `NS` output.
-2. Stable profiler-free cold and steady-state raw samples for source and
-   return, H256 and H7168, with clocks/power/process audit.
+2. Stable, accepted profiler-free source and return samples for H256/H7168.
+   Six clean source reports exist but failed the current stability review;
+   return remains uncollected.
 3. Nsys exposed critical-path attribution for the new large fixture.
 4. An exact NCU invocation selected from that Nsys report.
 5. Sustained same-machine peer-copy/HBM reference if a bandwidth percentage is

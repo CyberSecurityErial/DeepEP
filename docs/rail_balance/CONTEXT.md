@@ -732,3 +732,24 @@ Out of scope until evidence expands the project:
 - Formal acceptance additionally requires a clean commit, direct unwrapped
   execution, fresh cache, persistent JSON, at least 10 warmup and 100 steady
   samples, same-commit correctness, and stable raw distributions.
+
+## C100 partial clean-baseline context (2026-07-21)
+
+- Clean commit `3c54839` produced three source-H256 and three source-H7168
+  direct profiler-free reports, each with 10 warmup plus 100 steady samples.
+  All six pass the automatic collection gate and are checksum-preserved under
+  `.cache/rail_balance/c100/formal/3c54839/`.
+- They fail manual stability acceptance.  Pooled H256 median/p95/p99 are
+  112.700/133.650/164.241 us with 12.15% CV.  Pooled H7168 values are
+  144.728/169.219/271.935 us with 82.84% CV because one rank-4 call reaches
+  2.254 ms; run medians themselves span 20.22%.
+- The outlier is rank-local rather than a uniform eight-rank slowdown.  P0,
+  memory clocks and throttle state remained valid, but SM clocks were
+  consistently 1,500 MHz on GPUs 1/3/6 and 1,980 MHz on the others.  This is a
+  host scheduling/synchronization/clock hypothesis, not a kernel conclusion.
+- A return-H256 run was deliberately interrupted when the user requested a
+  stop.  Watchdog exit was 130, no partial JSON was written, and no worker or
+  GPU process remained.
+- No Nsys/NCU or performance-path change occurred.  Resume at measurement
+  stability analysis, then finish return baselines; do not discard outliers or
+  proceed directly to kernel optimization.

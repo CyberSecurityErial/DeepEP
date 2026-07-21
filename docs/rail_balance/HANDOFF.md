@@ -163,6 +163,14 @@ the exact file snapshots without inventing commit identity.
   legacy 4/4, and final C++/protocol/exit audits pass. No CUDA/JIT kernel or
   production hot path changed, so the accepted C080-G sanitizer evidence is
   unchanged.
+- C100's audited harness is committed at `056ad4d`; the clean samples use
+  commit `3c54839`. Six source reports (three H256, three H7168, each 10+100)
+  pass automatic collection gates and are stored with a verified SHA256
+  manifest under `.cache/rail_balance/c100/formal/3c54839/`. They are not a
+  stable accepted baseline: H256 medians span 7.26%, H7168 medians 20.22%, and
+  one rank-4 sample reaches 2.254 ms. No Nsys/NCU or performance-path change
+  followed. The first return run was user-interrupted, exited 130 through the
+  watchdog, wrote no JSON, and left no worker/GPU process.
 
 ## Mandatory retained boundary
 
@@ -192,10 +200,12 @@ No C070 timing is performance evidence.
    Rail/Gin correctness passes. D1 evidence is never a D>1 Gin success claim.
 6. C090 is complete. Do not rerun its unchanged full suites or sanitizer
    kernels unless production device code changes.
-7. Notify the user and wait for the promised NCU/Nsys procedure before
-   resuming the next controlled C100 profiling/optimization run. Run performance
-   tests only with idle GPUs and retain negative/tool-failure evidence. C105
-   packages the fastest possible real-cluster bring-up afterward.
+7. The GPU evidence-chain skill is installed. Resume C100 by explaining the
+   rank-local timing instability, then test measurement stability with one
+   controlled variable; do not delete the six original reports. Finish return
+   baselines only after the user resumes work and GPUs are idle. Nsys must
+   precede target NCU and any hot-path optimization. C105 packages the fastest
+   possible real-cluster bring-up afterward.
 
 Pinned runtime for accepted commands:
 

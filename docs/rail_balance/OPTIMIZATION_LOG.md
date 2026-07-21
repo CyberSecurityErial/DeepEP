@@ -1375,3 +1375,25 @@ Dirty-tree one-sample runs are retained solely as functionality evidence.  The
 next optimization decision requires clean direct profiler-free distributions,
 then Nsys exposed-time attribution; NCU and hot-path edits remain forbidden
 until that evidence exists.
+
+## Measurement decision O064 — retain clean samples but reject stability
+
+The first clean source collection passed every automatic validity gate, so its
+six JSON reports are preserved with hashes.  It nevertheless fails the manual
+stability gate: H256 run medians span 7.26%, H7168 medians span 20.22%, and one
+H7168 rank-4 call reaches 2.254 ms while peers remain near 0.1 ms.  Removing
+that sample or reporting only the best run would violate the measurement
+contract.
+
+The isolated-rank shape contradicts a simple claim that all eight source TMA
+payload loops became slow.  Candidate explanations are host descheduling
+around the synchronous adapter boundary, an intermittent stream/barrier wait,
+or per-device clock asymmetry; none is proven.  GPU pre/post state alone cannot
+resolve a transient event.  Therefore no kernel, launch geometry, plan, or
+buffer optimization is authorized from these numbers.
+
+When work resumes, measurement stability is the first falsification target.
+Use a single controlled variable—such as explicit rank CPU affinity or an Nsys
+OS-runtime timeline chosen to explain the outlier—while retaining the original
+unbound reports.  Only after a repeatable boundary exists should return
+baseline collection and target-kernel NCU proceed.

@@ -4119,3 +4119,44 @@ The last smoke reported 146.117 us only to prove the report path; it is dirty,
 one-sample, and explicitly not a performance result.  No Nsys, NCU, or
 performance-path edit was made.  The next checkpoint is clean direct 10+100
 source/return × H256/H7168 collection with repeated independent runs.
+
+## 2026-07-21 — D067: preserve partial clean source baselines and stop safely
+
+At clean commit `3c548390d96c229a318966e987a9a624ba76719d`, the current
+HEAD passed the plan/source/return CPU oracles and the 12-test C105 validation
+contract.  With GPUs empty, six direct profiler-free runs then completed:
+source H256 and H7168, three independent processes each, every process using
+10 warmup and 100 steady samples, a fresh JIT cache, persistent JSON, and a
+unique master port.  All six reports pass `baseline_collection_eligible`, have
+clean/stable code identities, and report no unexpected GPU process.
+
+The raw results are preserved but rejected as a stable baseline.  H256 run
+medians are 113.745, 109.794, and 117.764 us; pooled median/p95/p99 are
+112.700/133.650/164.241 us, with 12.15% CV and a 292.757 us maximum.  H7168
+medians are 130.954, 157.439, and 143.885 us; pooled median/p95/p99 are
+144.728/169.219/271.935 us, with 82.84% CV and a 2,274.190 us maximum.
+
+The largest H7168 sample is specifically rank-local: rank 4 spends 2,253.625
+us in the synchronous adapter while the seven peers spend 85.855--108.684 us.
+Its start skew is only 38.153 us and end skew is 2,180.359 us.  A second run's
+770.897 us maximum instead combines a 429.110 us start skew and 344.129 us
+rank maximum.  P0, 3,201 MHz memory clocks, and non-benign throttle checks stay
+valid; GPUs 1/3/6 consistently report 1,500 MHz SM clocks while peers report
+1,980 MHz during pre/post samples.  No causal claim is made from snapshots.
+
+One aggregation command initially assumed a nonexistent `steady_raw` report
+key and failed with `KeyError`.  Reading the committed schema showed raw
+records live in `steady`; the corrected aggregation used all 300 records per
+case and retained the failure instead of editing reports.
+
+The user requested a stop just after the first return-H256 process launched.
+SIGINT was sent to the benchmark watchdog; it exited 130, reaped its process
+group, wrote no partial return JSON, and left no benchmark, `spawn_main`, or
+GPU compute process.  Return H256/H7168 remain uncollected.  The six source
+JSON files and a verified `SHA256SUMS` live at
+`.cache/rail_balance/c100/formal/3c54839/`; their hashes are also recorded in
+`C100_PERFORMANCE_EVIDENCE.md` so the checkpoint survives remotely.
+
+No Nsys, NCU, CUDA/JIT/runtime edit, or optimization followed these unstable
+samples.  Resume first at measurement-stability falsification, then finish
+return baselines; only afterward select Nsys/NCU targets.
