@@ -370,9 +370,13 @@ public:
         auto local_barrier = prepare_rail_balance_hybrid_local_barrier(
             num_rails, num_gpu_timeout_cycles);
         auto source_shuffle =
-            prepare_rail_balance_hybrid_source_shuffle(hidden, num_topk);
+            std::make_shared<PreparedRailBalanceHybridSourceShuffle>(
+                prepare_rail_balance_hybrid_source_shuffle(
+                    hidden, num_topk, num_channels, num_tokens));
         auto return_unshuffle =
-            prepare_rail_balance_hybrid_return_unshuffle(hidden, num_topk);
+            std::make_shared<PreparedRailBalanceHybridReturnUnshuffle>(
+                prepare_rail_balance_hybrid_return_unshuffle(
+                    hidden, num_topk, num_channels));
         auto combine_epilogue =
             std::make_shared<PreparedRailBalanceHybridCombineEpilogue>(
                 prepare_rail_balance_hybrid_combine_epilogue(
@@ -552,7 +556,7 @@ public:
         int host_status = 0;
         try {
             launch_prepared_rail_balance_hybrid_source_shuffle(
-                pending.source_shuffle,
+                *pending.source_shuffle,
                 nccl_context->dev_comm, nccl_context->window,
                 x.data_ptr(), pending.topk_idx.data_ptr<topk_idx_t>(),
                 topk_weights.data_ptr<float>(), pending.arena,
@@ -661,19 +665,32 @@ public:
         if (comm_stream.id() != compute_stream.id())
             stream_wait(comm_stream, compute_stream);
 
-        // Once the copies are queued, the adapter is committed and cannot be
-        // replayed. Device status is deliberately not observed until both
-        // local barriers have completed on every rank.
+        // Capture every raw pointer before B1. The fixed committed sequence
+        // below must not enter Tensor accessors or construct another layout.
+        auto* proxy_return_base = arena_layout
+            .get_proxy_return_layout(0).get_base_ptr();
+        const auto* proxy_return_input = proxy_return_bytes.data_ptr();
+        const auto* reduce_seed = reduce_seed_bytes.data_ptr();
+        auto* reduce_snapshot_ptr = reduce_snapshot.data_ptr();
+        const auto* moved = pending.outputs.moved.data_ptr<int>();
+        const auto* group_prefix =
+            pending.outputs.group_prefix.data_ptr<int>();
+        const auto* proxy_required =
+            pending.outputs.proxy_required.data_ptr<int>();
+        auto* status = pending.outputs.status.data_ptr<int>();
+
+        // Mark the adapter one-shot before queueing either copy. A partial
+        // enqueue must never be replayed. Device status is deliberately not
+        // observed until both local barriers have completed on every rank.
         pending.return_unshuffle_tested = true;
         int host_status = 0;
         try {
             CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
-                arena_layout.get_proxy_return_layout(0).get_base_ptr(),
-                proxy_return_bytes.data_ptr(),
+                proxy_return_base, proxy_return_input,
                 static_cast<size_t>(proxy_return_num_bytes),
                 cudaMemcpyDeviceToDevice, comm_stream));
             CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
-                buffer, reduce_seed_bytes.data_ptr(),
+                buffer, reduce_seed,
                 static_cast<size_t>(reduce_num_bytes),
                 cudaMemcpyDeviceToDevice, comm_stream));
 
@@ -686,14 +703,15 @@ public:
                 pending.num_rails, nccl_context->nvl_rank_idx,
                 num_gpu_timeout_cycles, comm_stream);
 
-            launch_prepared_rail_balance_hybrid_return_unshuffle(
-                pending.return_unshuffle,
+            submit_prepared_rail_balance_hybrid_return_unshuffle(
+                *pending.return_unshuffle,
                 nccl_context->dev_comm, nccl_context->window,
-                pending.arena, buffer, pending.outputs,
-                pending.hidden, pending.num_topk, pending.num_experts,
+                pending.arena, buffer,
+                moved, group_prefix, proxy_required, status,
+                pending.num_experts,
                 pending.num_destinations, pending.num_rails,
                 nccl_context->nvl_rank_idx, nccl_context->rank_idx,
-                pending.num_channels, pending.num_max_tokens_per_rank,
+                pending.num_max_tokens_per_rank,
                 pending.proxy_capacity_per_egress, comm_stream);
 
             // B4: even a rank whose kernel published a sticky error
@@ -707,11 +725,11 @@ public:
                 num_gpu_timeout_cycles, comm_stream);
 
             CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
-                reduce_snapshot.data_ptr(), buffer,
+                reduce_snapshot_ptr, buffer,
                 static_cast<size_t>(reduce_num_bytes),
                 cudaMemcpyDeviceToDevice, comm_stream));
             CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
-                &host_status, pending.outputs.status.data_ptr<int>(),
+                &host_status, status,
                 sizeof(host_status), cudaMemcpyDeviceToHost, comm_stream));
             CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
         } catch (...) {

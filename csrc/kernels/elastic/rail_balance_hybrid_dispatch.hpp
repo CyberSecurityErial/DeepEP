@@ -20,6 +20,8 @@
 namespace deep_ep::elastic {
 
 struct PreparedRailBalanceHybridCombineEpilogue;
+struct PreparedRailBalanceHybridSourceShuffle;
+struct PreparedRailBalanceHybridReturnUnshuffle;
 
 // Private C080-B1 oracle ABI.  All schedule tensors are CUDA int32 tensors;
 // the input keeps the compile-time topk_idx_t selected by EP_NUM_TOPK_IDX_BITS.
@@ -791,8 +793,10 @@ struct RailBalanceHybridPlanPending {
     torch::Tensor topk_idx;
     PreparedRailBalanceHybridPlan prepared;
     std::shared_ptr<jit::KernelRuntime> local_barrier;
-    std::shared_ptr<jit::KernelRuntime> source_shuffle;
-    std::shared_ptr<jit::KernelRuntime> return_unshuffle;
+    std::shared_ptr<PreparedRailBalanceHybridSourceShuffle>
+        source_shuffle;
+    std::shared_ptr<PreparedRailBalanceHybridReturnUnshuffle>
+        return_unshuffle;
     std::shared_ptr<PreparedRailBalanceHybridCombineEpilogue>
         combine_epilogue;
     RailBalanceHybridPlanOutputs outputs;
