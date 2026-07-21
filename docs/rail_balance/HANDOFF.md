@@ -8,9 +8,9 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 
 - H6 constructor consensus and the public one-shot force lifecycle are
   implemented, independently audited, and split into production/test commits;
-  the real EP8 constructor/public D=1 watchdog also passes. No half-written
-  lifecycle file remains; the next slice is C080-G local regression/sanitizer
-  closure, not another host abstraction.
+  the real EP8 constructor/public D=1 watchdog also passes. C080-G final-tree
+  compatibility and focused sanitizer closure now pass. There is no unfinished
+  local Hybrid integration slice or half-written host abstraction.
 - C000 through C070 remain complete for the agreed single-node PoC scope.
 - C080-A/B/C/D are PASS. C080-D now includes corrupt/missing world-plan
   pre-B0 abort plus same-buffer next-generation recovery; C080-C has the
@@ -18,13 +18,14 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Latest pushed checkpoint is `6377e0c` (vnode world-plan fault/recovery),
-  following `0597ed0` (real EP8 public watchdog), `741e126`/`cbe7df2`
-  (public Hybrid lifecycle/contracts), and `1e0ea60`/`eb6b834` on
-  `fork/feat/rail-balance-prototype`.
+- The final pre-closure pushed checkpoint is `558cd7c` (world-plan fault
+  documentation), following `6377e0c` (vnode world-plan fault/recovery),
+  `0597ed0` (real EP8 public watchdog), and `741e126`/`cbe7df2` (public Hybrid
+  lifecycle/contracts) on `fork/feat/rail-balance-prototype`.
 - Both capability bits remain false and no result claims real Gin/RDMA
-  behavior. The public methods are wired but unreachable through a normal
-  force construction until the local activation evidence is complete.
+  behavior. The local activation evidence is complete, but the public methods
+  deliberately remain unreachable through a normal force construction until a
+  truthful D>1 Rail/Gin gate passes.
 - Resume from the working tree and the newest entries in `DEVELOPMENT_LOG.md`;
   do not restore the obsolete sidecar/descriptor/ring draft.
 
@@ -144,14 +145,22 @@ the exact file snapshots without inventing commit identity.
   preflight failures converge before B0, both source/world owners abort, and
   the next generation completes the full 4x2/H256 round trip on the same
   buffers. True EP8 and independent Blocker0/High0 review pass.
+- C080-G final-tree closure passes both default-off EP8 modes, the focused
+  CPU/source and H3-H6 contracts, 8x1 source/return, 4x2 and D>K 2x4 vnode,
+  source/world-plan faults, fresh force/legacy codegen, and the full extension
+  build. Compute Sanitizer 2025.1 reports zero errors for memcheck, synccheck,
+  initcheck, and focused racecheck on the complete D>K vnode path; racecheck
+  also reports zero hazards/warnings. Final audit is Blocker0/High0/Medium0.
+  C080 is `LOCAL_COMPLETE / MULTINODE_PENDING`; C080-H remains an environment
+  gate, and both production capability bits remain false.
 
 ## Mandatory retained boundary
 
 The fixed WORLD consensus and uninterrupted private C++ commit sequences are
-connected to public dispatch/combine, and real EP8 now covers constructor,
-window, D1 fail-close/retry, and destroy. The remaining local boundary is
-regression breadth and sanitizer evidence; D=1 cannot turn the production
-Hybrid data path into a success because it has no remote destination server.
+connected to public dispatch/combine, and real EP8 covers constructor, window,
+D1 fail-close/retry, and destroy. Local regression and focused sanitizer
+closure are complete. D=1 still cannot turn the production Hybrid data path
+into a success because it has no remote destination server.
 
 Post-publication failure must continue to invalidate the force object;
 precommit abort must not destroy an older live dispatch handle. Do not weaken
@@ -167,15 +176,18 @@ No C070 timing is performance evidence.
 2. Verify branch and state with `git status --short --branch` and run
    `git diff --cached --check`.
 3. Do not redo C061/C070 unless the relevant code changes.
-4. Run C080-G as a manifest-driven compatibility pass: default-off EP8, H3-H6
-   focused contracts, existing 8x1 source/return, 4x2/2x4 vnode, force/legacy
-   codegen, and only the sanitizer cases whose touched code changed. Do not
-   rerun every historical exhaustive seed unless a relevant core changed.
-5. Keep both production capability bits false through C080-G and its final
-   independent boundary audit. D1 evidence is never a D>1 Gin success claim.
-6. After local correctness closure, notify the user before entering controlled
-   C100 NCU/Nsys work and wait for the promised profiling procedure. Run
-   performance tests only with idle GPUs; retain negative/tool-failure evidence.
+4. Do not rerun C080-G or every historical exhaustive seed unless a relevant
+   production core changes. Its final-tree matrix and sanitizer closure pass.
+5. Keep both production capability bits false until truthful C080-H D>1
+   Rail/Gin correctness passes. D1 evidence is never a D>1 Gin success claim.
+6. First close C090 with one small CPU/single-GPU named Zipf/log-normal matrix
+   and one small EP8 test-only case for corrupt live transit-key `p`, exact
+   abort/recovery, and rank-selective delay on the current descriptor-free path.
+   Do not rerun unchanged full suites or sanitizer kernels.
+7. Then notify the user and wait for the promised NCU/Nsys procedure before
+   controlled C100 profiling/optimization. Run performance tests only with idle
+   GPUs and retain negative/tool-failure evidence. C105 packages the fastest
+   possible real-cluster bring-up afterward.
 
 Pinned runtime for accepted commands:
 

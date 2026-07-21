@@ -1185,3 +1185,33 @@ checkpoint:
 No NCU/Nsys optimization was started. Per the agreed workflow, device and
 end-to-end tuning waits for the user's profiling procedure and an idle GPU
 window; these CPU observations carry no network or multi-node speedup claim.
+
+## Validation decision O056 — sanitize the smallest complete changed path
+
+C080-G does not rerun every historical sanitizer seed. The production source,
+return, planner, and codegen cores were unchanged by H6 and the final vnode
+fault test. Repeating all old cases would consume eight H200s without exposing
+a new memory-ordering boundary.
+
+The selected final target is the `2x4`, H256 vnode loop. It is the smallest
+case that still has multiple destination servers, satisfies `D>K`, moves real
+records between source rails, packs the world view, demultiplexes the return,
+and invokes the same production return-unshuffle kernel used by force combine.
+One dedicated warm cache then supports four complementary checks:
+
+- memcheck for bounds, alignment, and hardware access faults;
+- synccheck for CUDA synchronization misuse;
+- unfiltered initcheck so writes from predecessor kernels remain visible;
+- racecheck filtered to pack, demux, and return-unshuffle, where the new shared
+  concurrency contract lives.
+
+All four checks pass with zero errors; the focused racecheck also reports zero
+warnings. This result complements rather than replaces the earlier H7168,
+D32>K4, non-default-stream, all-zero, capacity, stale/corrupt route, and
+delayed/fault evidence. It is correctness evidence only.
+
+The next action is the two-case C090 correctness gap, not speculative code
+cleanup. Once it closes, controlled C100 profiling begins: obtain the user's
+promised NCU/Nsys workflow and verify that no unrelated GPU workload would
+contaminate timing. Candidate host cost reductions from O055 remain hypotheses
+until separately measured.

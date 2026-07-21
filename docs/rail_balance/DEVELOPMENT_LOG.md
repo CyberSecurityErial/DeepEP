@@ -3619,3 +3619,80 @@ The first review found one Medium in the test: matching only the generic word
 now labels tensor count/device/layout/shape/value separately, and each fault
 must match its specific tag. No production source changed. This closes C080-D;
 C080-G still owns the final compatibility and focused sanitizer matrix.
+
+## 2026-07-21 — D059: C080-G final-tree local closure matrix
+
+The final tree was exercised as one compatibility manifest rather than by
+adding another runtime or test-only data path. Both production capability bits
+remained false throughout. The public force lifecycle was activated only by
+its isolated worker-local watchdog; the ordinary product configuration stayed
+default-off.
+
+Fresh final-tree evidence:
+
+```text
+PASS original EP8 default-off smoke with allow_hybrid_mode=0
+PASS original EP8 default-off smoke with allow_hybrid_mode=1 at truthful D=1
+PASS planner 38/38, API 9/9, layout 5/5, legacy identity 4/4
+PASS public one-shot fake-runtime lifecycle and H4b/H4c/H5a/H5b source contracts
+PASS H3 fixed WORLD gate, H3b eighteen-gate planner, H4b D1 fail-close/recovery
+PASS true EP8 H7168 source shuffle and return-unshuffle, including D32>K4
+PASS 4x2/H7168 and 2x4/H7168 vnode full loops
+PASS source faults and corrupt/missing world-plan abort plus recovery
+PASS fresh-cache dispatch 4/4 and combine 6/6 force/legacy codegen pairs
+PASS dispatch/combine constraint suites 8/8 and unchanged recursive legacy hashes
+PASS setup.py build_ext --inplace
+```
+
+The focused sanitizer target was `hybrid_vnode_2x4_h256` from a dedicated
+warm JIT cache. It deliberately uses `D=4>K=2` and executes the shared
+pack-vnode, return-demux, and production return-unshuffle kernels. With Compute
+Sanitizer 2025.1.0.0:
+
+```text
+memcheck:  PASS, ERROR SUMMARY: 0 errors
+synccheck: PASS, ERROR SUMMARY: 0 errors
+initcheck: PASS, ERROR SUMMARY: 0 errors
+racecheck: PASS, 0 hazards displayed (0 errors, 0 warnings)
+```
+
+Initcheck ran without a kernel filter so predecessor writes were visible;
+API-memory checking was disabled to avoid allocator-only noise. Racecheck was
+filtered to the three new vnode/return kernels. Earlier unchanged source-core
+evidence remains valid: its racecheck has zero errors and six documented
+shared-metadata WAW warnings. The H6 delta itself is Python/test/documentation
+only and truthful D1 rejects before per-call arena use, JIT, or data kernels,
+so a public-D1 sanitizer rerun would add no Hybrid data-plane coverage.
+
+Failures and resource decisions retained:
+
+- `pstree` was unavailable on this host. Process ownership was verified with
+  `ps` and `nvidia-smi` instead; this was a diagnostic-command failure, not a
+  test failure.
+- The independent final audit's first API invocation omitted `PYTHONPATH` and
+  failed with `ModuleNotFoundError`. Re-running with the pinned repository
+  environment passed all 9/9 API cases; no product change was made for this
+  command error.
+- An unrelated small CUDA sample was left alone as requested. During the
+  sanitizer run, the eight approximately 1.3 GiB GPU allocations were verified
+  to belong to this test's worker processes.
+- No NCU, Nsys, throughput, or speedup result was produced. Those runs remain
+  behind the user's profiling procedure and an idle-GPU check.
+
+No source or CUDA change was needed in this closure slice. The local evidence
+is sufficient for `C080-G`. Independent final review reports Blocker 0, High 0,
+Medium 0, and two documentation-only Low findings that are corrected in the
+closure checkpoint: off identity is scoped to native sizing/runtime arguments,
+GPU buffer, JIT and result identity because local mode/ticket guards exist; the
+handoff is advanced beyond its old C080-G resume point. This still cannot
+establish real D>1 Gin destination, QP/NIC ordering, RDMA completion, or
+multi-node speedup. Those remain C080-H.
+
+A separate C090 exit audit prevents this checkpoint from being overextended.
+It reports Blocker 0, High 1, and Medium 2 for the broader exhaustive-local
+campaign: no explicitly named Zipf/log-normal routing fixtures, no GPU
+stale/corrupt transit-key `p` injection on the current descriptor-free path,
+and no rank-selective delayed-rank/liveness case on that path. Earlier queue
+slow-consumer evidence belongs to a superseded protocol and cannot close the
+last item. C080-G therefore passes independently while C090 remains in
+progress; these three minimal cases precede C100 profiling.

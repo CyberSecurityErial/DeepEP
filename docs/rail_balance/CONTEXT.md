@@ -555,3 +555,33 @@ Out of scope until evidence expands the project:
   idempotently; generation 811 then completes the full round trip on the same
   buffers. True EP8 and an independent Blocker0/High0 audit pass. This is test
   preflight/recovery coverage and adds no production branch or device work.
+
+## C080 local closure context (2026-07-21)
+
+- C080-G is locally complete. The final tree passes default-off EP8 in both
+  direct and truthful D1 Hybrid configurations, the complete focused host and
+  source-contract matrix, real EP8 H3/H3b/H4b gates, true-LSA source/return,
+  4x2 and D>K 2x4 vnode loops, source/world-plan faults, fresh force/legacy
+  dispatch and combine codegen, and the in-place extension build.
+- Compute Sanitizer 2025.1 runs the smallest complete changed data path,
+  `hybrid_vnode_2x4_h256`, from one dedicated warm cache. Memcheck, synccheck,
+  unfiltered initcheck, and focused racecheck all report zero errors; focused
+  racecheck reports zero hazards and zero warnings.
+- Final independent boundary review is Blocker 0 / High 0 / Medium 0. Python
+  and C++ capability bits remain false. Since the last CUDA/header checkpoint,
+  the public watchdog and plan faults changed only Python/tests/docs and did
+  not add a device hot-path branch.
+- Default-off identity means native sizing/runtime arguments, GPU buffer, JIT,
+  handle, and result identity. Constructor mode parsing, a local ticket guard,
+  and device discovery do exist and must not be described as zero host work.
+- C080 is now `LOCAL_COMPLETE / MULTINODE_PENDING`, represented by the allowed
+  checkpoint state `DEFERRED_ENVIRONMENT`. D1 control-plane evidence and vnode
+  LSA execution are not real D>1 Gin/RDMA/QP/NIC evidence. C080-H remains the
+  only gate that can establish multi-node correctness.
+- NCU/Nsys optimization has not begun in this closure. Before C100, C090 still
+  needs one small CPU/single-GPU named Zipf/log-normal matrix and one small EP8
+  test-only case combining corrupt live transit-key `p`, exact abort/recovery,
+  and rank-selective delay/liveness on the current descriptor-free protocol.
+  Unchanged historical suites and sanitizer kernels do not need reruns. C100
+  then starts only after the user supplies the promised profiling workflow and
+  the GPUs are suitable for uncontaminated timing.
