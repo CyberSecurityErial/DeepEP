@@ -219,6 +219,7 @@ struct RailBalanceHybridVNodePending {
     torch::Tensor stage_status;
     torch::Tensor arena_guard;
     std::vector<int> host_stage_status;
+    bool host_stage_status_ready;
 
     PreparedRailBalanceHybridPlan prepared_plan;
     PreparedRailBalanceHybridVNode prepared_adapter;

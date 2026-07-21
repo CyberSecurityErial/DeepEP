@@ -75,6 +75,8 @@ _ARENA_GUARD_BYTES = 4096
 _HEAD_CANARY = 0xDEADBEEF
 _TAIL_CANARY = 0xC001D00D
 _PLAN_FAULT_CASE = "hybrid_vnode_plan_faults_h256"
+_TRANSIT_LIVENESS_CASE = "hybrid_vnode_transit_liveness_h256"
+_STREAM_DELAY_CYCLES = 2_000_000
 _TYPE = TypeVar("_TYPE")
 
 
@@ -129,6 +131,7 @@ def _specs() -> tuple[GpuCase, ...]:
             808,
         ),
         GpuCase(_PLAN_FAULT_CASE, "4x2", 256, 809),
+        GpuCase(_TRANSIT_LIVENESS_CASE, "4x2", 256, 812),
     )
 
 
@@ -292,6 +295,50 @@ def _assert_cpu_oracle(specs: Sequence[GpuCase]) -> None:
         expected_width = 3 if spec.fixture == "rounding" else 8
         assert all(len(vector) == expected_width
                    for owner in result.combined for vector in owner)
+
+
+def _transit_fault_route(result: VnodeRoundTripResult) -> VnodeCopyRoute:
+    moved = tuple(route for route in result.routes if route.moved)
+    assert len(moved) == 2
+    route = moved[0]
+    assert (
+        route.owner,
+        route.token,
+        route.destination,
+        route.egress,
+        route.target_channel,
+        route.proxy_slot,
+        route.vnode_slot,
+        route.ingress_physical,
+    ) == (0, 1, 1, 2, 0, 0, 1, 6)
+    return route
+
+
+def _expected_transit_fault_status(
+    *,
+    rank: int,
+    result: VnodeRoundTripResult,
+    layout: RecordLayout,
+) -> torch.Tensor:
+    case = result.case
+    route = _transit_fault_route(result)
+    status_stride = max(
+        case.num_channels,
+        layout.physical_capacity * case.num_topk,
+        layout.expert_capacity,
+    )
+    expected = torch.zeros(
+        (6, status_stride), dtype=torch.int32, device="cpu")
+    if rank == route.egress:
+        expected[0, route.target_channel] = 35  # InvalidProxy
+        expected[1, route.vnode_slot] = 1       # ReadyMismatch
+        expected[5, route.vnode_slot] = 1
+    elif rank == route.ingress_physical:
+        begin = route.vnode_slot * case.num_topk
+        end = begin + case.num_topk
+        expected[2, begin:end] = 1
+        expected[4, begin:end] = 1
+    return expected
 
 
 def _align32(value: int) -> int:
@@ -1005,6 +1052,8 @@ def _run_transaction(
     world_arena_offset: int,
     generation: int,
     plan_fault: str | None = None,
+    corrupt_transit_key: bool = False,
+    delayed_rank: int | None = None,
 ) -> None:
     case = result.case
     g = case.topology.rails_per_node
@@ -1016,6 +1065,9 @@ def _run_transaction(
     source_plan: tuple[torch.Tensor, ...] | None = None
     proxy_baseline: torch.Tensor | None = None
     proxy_dispatch: torch.Tensor | None = None
+
+    assert not (corrupt_transit_key and delayed_rank is not None)
+    assert delayed_rank is None or 0 <= delayed_rank < _WORLD_SIZE
 
     try:
         def source_prepare() -> int | None:
@@ -1289,12 +1341,127 @@ def _run_transaction(
                    for item in gathered_preflight[:g])
         assert all(item[0] is None for item in gathered_preflight[g:])
 
+        if corrupt_transit_key:
+            fault_route = _transit_fault_route(result)
+
+            def corrupt_live_transit_key() -> tuple[int, int, int] | None:
+                if rank != fault_route.egress:
+                    return None
+                assert proxy_dispatch is not None
+                bad_proxy_slot = fault_route.proxy_slot + 1
+                linked_word = proxy_dispatch[
+                    fault_route.proxy_slot,
+                    layout.linked_offset:layout.linked_offset + 4,
+                ].view(torch.int32)
+                assert linked_word.numel() == 1
+                with torch.cuda.stream(world_buffer.get_comm_stream()):
+                    linked_word.fill_(bad_proxy_slot)
+                return rank, fault_route.proxy_slot, bad_proxy_slot
+
+            corruption = _checked_phase(
+                "enqueue live transit-key corruption",
+                control_group,
+                corrupt_live_transit_key,
+            )
+            corruptions = _gather_objects(corruption, control_group)
+            assert corruptions[fault_route.egress] == (
+                fault_route.egress, fault_route.proxy_slot,
+                fault_route.proxy_slot + 1)
+            assert all(
+                value is None
+                for index, value in enumerate(corruptions)
+                if index != fault_route.egress)
+
+        if delayed_rank is not None:
+            def select_delayed_rank() -> int | None:
+                return rank if rank == delayed_rank else None
+
+            delay_marker = _checked_phase(
+                "select rank for comm-stream delay",
+                control_group,
+                select_delayed_rank,
+            )
+            delay_markers = _gather_objects(delay_marker, control_group)
+            assert delay_markers == [
+                delayed_rank if index == delayed_rank else None
+                for index in range(_WORLD_SIZE)
+            ]
+            # Enqueue only after the final host rendezvous.  world_finish uses
+            # this same comm stream immediately below, so no Gloo or CUDA
+            # synchronization can consume the rank-selective delay first.
+            if rank == delayed_rank:
+                with torch.cuda.stream(world_buffer.get_comm_stream()):
+                    torch.cuda._sleep(_STREAM_DELAY_CYCLES)
+
         def world_finish() -> tuple[object, ...]:
             with _nvtx(args.nvtx, "c080_world_b0_b5"):
                 values = tuple(
                     world_runtime._rail_balance_hybrid_vnode_finish(  # type: ignore[attr-defined]
                         world_invocation))
             return values
+
+        if corrupt_transit_key:
+            finish_error = None
+            world_outputs = None
+            try:
+                world_outputs = world_finish()
+            except BaseException:
+                finish_error = traceback.format_exc()
+            snapshot_error = None
+            plan_status = -1
+            status_stride = -1
+            host_status: tuple[int, ...] = ()
+            try:
+                status_snapshot = tuple(
+                    world_runtime._rail_balance_hybrid_vnode_status_snapshot(  # type: ignore[attr-defined]
+                        world_invocation))
+                assert len(status_snapshot) == 3
+                plan_status = int(status_snapshot[0])
+                status_stride = int(status_snapshot[1])
+                host_status = tuple(
+                    int(value) for value in status_snapshot[2])
+            except BaseException:
+                snapshot_error = traceback.format_exc()
+            local_diagnostic = (
+                finish_error,
+                snapshot_error,
+                plan_status,
+                status_stride,
+                host_status,
+            )
+            diagnostics = _gather_objects(
+                local_diagnostic, control_group)
+            assert all(
+                diagnostic[1] is None for diagnostic in diagnostics
+            ), diagnostics
+            fault_route = _transit_fault_route(result)
+            failing_ranks = {
+                fault_route.egress: 35,
+                fault_route.ingress_physical: 1,
+            }
+            assert (finish_error is not None) == (rank in failing_ranks)
+            assert (world_outputs is None) == (rank in failing_ranks)
+            for diagnostic_rank, diagnostic in enumerate(diagnostics):
+                (error, _snapshot_error, observed_plan_status,
+                 observed_stride, values) = diagnostic
+                expected = _expected_transit_fault_status(
+                    rank=diagnostic_rank, result=result, layout=layout)
+                assert observed_stride == expected.size(1)
+                actual = torch.tensor(
+                    values, dtype=torch.int32, device="cpu").reshape(
+                        6, observed_stride)
+                assert torch.equal(actual, expected), (
+                    diagnostic_rank, actual, expected)
+                if diagnostic_rank in failing_ranks:
+                    assert error is not None and \
+                        "sticky device error" in error
+                    assert observed_plan_status == \
+                        failing_ranks[diagnostic_rank]
+                else:
+                    assert error is None
+                    assert observed_plan_status == 0
+            _monitored_barrier(control_group, args.timeout)
+            return
 
         world_outputs = _checked_phase(
             "fixed world B0..B5", control_group, world_finish)
@@ -1580,6 +1747,46 @@ def _worker(
                     )
                 generation += 1
 
+        if args.case_name == _TRANSIT_LIVENESS_CASE:
+            with _caller_stream(caller_stream):
+                _run_transaction(
+                    rank=rank,
+                    args=args,
+                    control_group=control_group,
+                    source_buffer=source_buffer,
+                    world_buffer=world_buffer,
+                    result=result,
+                    source_inputs=source_inputs,
+                    x=x,
+                    topk_idx=topk_idx,
+                    topk_weights=topk_weights,
+                    layout=layout,
+                    source_arena_offset=source_arena_offset,
+                    world_arena_offset=world_arena_offset,
+                    generation=generation,
+                    corrupt_transit_key=True,
+                )
+            generation += 1
+            with _caller_stream(caller_stream):
+                _run_transaction(
+                    rank=rank,
+                    args=args,
+                    control_group=control_group,
+                    source_buffer=source_buffer,
+                    world_buffer=world_buffer,
+                    result=result,
+                    source_inputs=source_inputs,
+                    x=x,
+                    topk_idx=topk_idx,
+                    topk_weights=topk_weights,
+                    layout=layout,
+                    source_arena_offset=source_arena_offset,
+                    world_arena_offset=world_arena_offset,
+                    generation=generation,
+                    delayed_rank=_transit_fault_route(result).egress,
+                )
+            generation += 1
+
         for iteration in range(args.repetitions):
             with _caller_stream(caller_stream):
                 if caller_stream is not None:
@@ -1744,6 +1951,7 @@ def main() -> None:
         "_rail_balance_hybrid_plan_abort",
         "_rail_balance_hybrid_vnode_prepare",
         "_rail_balance_hybrid_vnode_finish",
+        "_rail_balance_hybrid_vnode_status_snapshot",
         "_rail_balance_hybrid_vnode_abort",
     )
     runtime_type = getattr(_C, "ElasticBuffer", None)

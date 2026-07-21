@@ -2325,6 +2325,7 @@ public:
                 .stage_status = std::move(stage_status),
                 .arena_guard = std::move(arena_guard),
                 .host_stage_status = std::move(host_stage_status),
+                .host_stage_status_ready = false,
                 .prepared_plan = std::move(prepared_plan),
                 .prepared_adapter = std::move(prepared_adapter),
                 .prepared_vnode = std::move(prepared_vnode),
@@ -2533,6 +2534,7 @@ public:
                 static_cast<size_t>(6) * pending.status_stride * sizeof(int),
                 cudaMemcpyDeviceToHost, comm_stream));
             CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
+            pending.host_stage_status_ready = true;
         } catch (...) {
             pending.plan_status = static_cast<int>(
                 rail_balance::HybridPlanError::InvalidSchedule);
@@ -2549,6 +2551,25 @@ public:
         }
         pending.finished = true;
         return pending.as_tuple();
+    }
+
+    std::tuple<int, int, std::vector<int>>
+    rail_balance_hybrid_vnode_status_snapshot(
+            const int& invocation_id) const {
+        EP_HOST_ASSERT(not destroyed);
+        EP_HOST_ASSERT(rail_balance_hybrid_vnode_pending.has_value());
+        const auto& pending = rail_balance_hybrid_vnode_pending.value();
+        EP_HOST_ASSERT(pending.invocation_id == invocation_id);
+        EP_HOST_ASSERT(pending.finish_attempted);
+        EP_HOST_ASSERT(pending.host_stage_status_ready);
+        EP_HOST_ASSERT(
+            pending.host_stage_status.size() ==
+            static_cast<size_t>(6) * pending.status_stride);
+        return {
+            pending.plan_status,
+            pending.status_stride,
+            pending.host_stage_status,
+        };
     }
 
     void rail_balance_hybrid_vnode_abort(const int& invocation_id) {
@@ -5364,6 +5385,10 @@ static void register_apis(pybind11::module_& m) {
         .def(
             "_rail_balance_hybrid_vnode_finish",
             &ElasticBuffer::rail_balance_hybrid_vnode_finish,
+            pybind11::arg("invocation_id"))
+        .def(
+            "_rail_balance_hybrid_vnode_status_snapshot",
+            &ElasticBuffer::rail_balance_hybrid_vnode_status_snapshot,
             pybind11::arg("invocation_id"))
         .def(
             "_rail_balance_hybrid_vnode_abort",
