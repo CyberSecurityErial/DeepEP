@@ -74,6 +74,7 @@ _TMA_ALIGNMENT = 32
 _ARENA_GUARD_BYTES = 4096
 _HEAD_CANARY = 0xDEADBEEF
 _TAIL_CANARY = 0xC001D00D
+_PLAN_FAULT_CASE = "hybrid_vnode_plan_faults_h256"
 _TYPE = TypeVar("_TYPE")
 
 
@@ -127,6 +128,7 @@ def _specs() -> tuple[GpuCase, ...]:
             256,
             808,
         ),
+        GpuCase(_PLAN_FAULT_CASE, "4x2", 256, 809),
     )
 
 
@@ -560,12 +562,17 @@ def _verify_plan(
     device_index: int,
 ) -> str:
     expected = _expected_plan_outputs(result.schedule)
-    assert len(tensors) == len(expected) == 14
-    for actual, wanted in zip(tensors, expected):
-        assert actual.is_cuda and actual.device.index == device_index
-        assert actual.dtype == torch.int32 and actual.is_contiguous()
-        assert tuple(actual.shape) == tuple(wanted.shape)
-        assert torch.equal(actual.cpu(), wanted)
+    assert len(tensors) == len(expected) == 14, \
+        "world plan tensor count mismatch"
+    for index, (actual, wanted) in enumerate(zip(tensors, expected)):
+        assert actual.is_cuda and actual.device.index == device_index, \
+            f"world plan tensor {index} device mismatch"
+        assert actual.dtype == torch.int32 and actual.is_contiguous(), \
+            f"world plan tensor {index} layout mismatch"
+        assert tuple(actual.shape) == tuple(wanted.shape), \
+            f"world plan tensor {index} shape mismatch"
+        assert torch.equal(actual.cpu(), wanted), \
+            f"world plan tensor {index} value mismatch"
     return _plan_digest(tensors)
 
 
@@ -997,6 +1004,7 @@ def _run_transaction(
     source_arena_offset: int,
     world_arena_offset: int,
     generation: int,
+    plan_fault: str | None = None,
 ) -> None:
     case = result.case
     g = case.topology.rails_per_node
@@ -1223,6 +1231,14 @@ def _run_transaction(
         _prepare_status, world_plan_value, compact_quota = prepared
         world_plan = tuple(world_plan_value)
 
+        if plan_fault == "corrupt" and rank == 0:
+            assert world_plan[0].numel() > 0
+            world_plan[0].view(-1)[0].add_(1)
+        elif plan_fault == "missing" and rank == 1:
+            world_plan = world_plan[:-1]
+        elif plan_fault not in (None, "corrupt", "missing"):
+            raise AssertionError(f"unknown world-plan fault: {plan_fault}")
+
         def verify_world_preflight() -> str:
             plan_digest = _verify_plan(world_plan, result, rank)
             wanted = torch.tensor(
@@ -1236,6 +1252,28 @@ def _run_transaction(
             assert compact_quota.is_contiguous()
             assert torch.equal(compact_quota.cpu(), wanted)
             return plan_digest
+
+        if plan_fault is not None:
+            preflight_error = None
+            try:
+                verify_world_preflight()
+            except BaseException:
+                preflight_error = traceback.format_exc()
+            preflight_errors = _gather_objects(
+                preflight_error, control_group)
+            expected_rank = 0 if plan_fault == "corrupt" else 1
+            assert all(
+                (error is not None) == (index == expected_rank)
+                for index, error in enumerate(preflight_errors)
+            ), preflight_errors
+            expected_error = (
+                "world plan tensor 0 value mismatch"
+                if plan_fault == "corrupt"
+                else "world plan tensor count mismatch"
+            )
+            assert expected_error in preflight_errors[expected_rank]
+            _monitored_barrier(control_group, args.timeout)
+            return
 
         world_preflight = _checked_phase(
             "CPU/source/world pre-B0 identity",
@@ -1519,6 +1557,29 @@ def _worker(
         assert tuple(token_counts[:g]) == case.num_tokens_per_owner
         assert tuple(token_counts[g:]) == (0,) * (_WORLD_SIZE - g)
 
+        generation = args.generation
+        if args.case_name == _PLAN_FAULT_CASE:
+            for plan_fault in ("corrupt", "missing"):
+                with _caller_stream(caller_stream):
+                    _run_transaction(
+                        rank=rank,
+                        args=args,
+                        control_group=control_group,
+                        source_buffer=source_buffer,
+                        world_buffer=world_buffer,
+                        result=result,
+                        source_inputs=source_inputs,
+                        x=x,
+                        topk_idx=topk_idx,
+                        topk_weights=topk_weights,
+                        layout=layout,
+                        source_arena_offset=source_arena_offset,
+                        world_arena_offset=world_arena_offset,
+                        generation=generation,
+                        plan_fault=plan_fault,
+                    )
+                generation += 1
+
         for iteration in range(args.repetitions):
             with _caller_stream(caller_stream):
                 if caller_stream is not None:
@@ -1538,7 +1599,7 @@ def _worker(
                     layout=layout,
                     source_arena_offset=source_arena_offset,
                     world_arena_offset=world_arena_offset,
-                    generation=args.generation + iteration,
+                    generation=generation + iteration,
                 )
         _monitored_barrier(control_group, args.timeout)
         clean_shutdown = True
