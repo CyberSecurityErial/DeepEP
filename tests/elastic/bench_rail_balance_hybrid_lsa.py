@@ -153,6 +153,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--master-port", type=int, default=30021)
     parser.add_argument("--watchdog-seconds", type=int, default=1800)
+    parser.add_argument(
+        "--nvtx", action="store_true",
+        help=(
+            "enable steady-only diagnostic NVTX ranges; reports are never "
+            "eligible as profiler-free baselines"),
+    )
     parser.add_argument("--num-processes", type=int, default=_WORLD_SIZE,
                         help=argparse.SUPPRESS)
     parser.add_argument("--worker-suite", action="store_true",
@@ -224,6 +230,20 @@ def _timed_window(
 def _timed(function: Callable[[], _TYPE]) -> tuple[_TYPE | None, int, str | None]:
     value, elapsed, error, _, _ = _timed_window(function)
     return value, elapsed, error
+
+
+def _nvtx_wrapped(
+    label: str,
+    function: Callable[[], _TYPE],
+) -> Callable[[], _TYPE]:
+    def wrapped() -> _TYPE:
+        torch.cuda.nvtx.range_push(label)
+        try:
+            return function()
+        finally:
+            torch.cuda.nvtx.range_pop()
+
+    return wrapped
 
 
 def _world_gate(
@@ -325,6 +345,7 @@ def _run_iteration(
     category: str,
     category_index: int,
     logical_bytes_by_rank: Sequence[int],
+    nvtx: bool,
 ) -> dict[str, object]:
     timings = {name: 0 for name in _ALL_PHASES}
     world_gate_ns: dict[str, int] = {}
@@ -339,13 +360,17 @@ def _run_iteration(
     transaction_start = time.perf_counter_ns()
 
     try:
-        prepared, timings["prepare"], error = _timed(lambda: _prepare_checked(
+        prepare_function = lambda: _prepare_checked(
             runtime,
             topk_idx,
             spec,
             arena_offset=arena_offset,
             invocation_id=invocation_id,
-        ))
+        )
+        if nvtx:
+            prepare_function = _nvtx_wrapped(
+                f"c100/{stage}/prepare", prepare_function)
+        prepared, timings["prepare"], error = _timed(prepare_function)
         prepare_rows, world_gate_ns["prepare"] = _world_gate(
             "prepare WORLD gate",
             {
@@ -363,8 +388,11 @@ def _run_iteration(
         )
         _validate_prepare_gate(prepare_rows, spec)
 
-        outputs, timings["finish"], error = _timed(
-            lambda: _finish_checked(runtime, invocation_id))
+        finish_function = lambda: _finish_checked(runtime, invocation_id)
+        if nvtx:
+            finish_function = _nvtx_wrapped(
+                f"c100/{stage}/finish", finish_function)
+        outputs, timings["finish"], error = _timed(finish_function)
         _, world_gate_ns["finish"] = _world_gate(
             "finish WORLD gate",
             {
@@ -374,9 +402,15 @@ def _run_iteration(
             control_group,
         )
         if stage == "return":
+            prerequisite_function = lambda: _source_shuffle(
+                runtime, x, topk_weights, invocation_id, None)
+            if nvtx:
+                prerequisite_function = _nvtx_wrapped(
+                    "c100/return/prerequisite_source",
+                    prerequisite_function,
+                )
             _, timings["prerequisite"], error = _timed(
-                lambda: _source_shuffle(
-                    runtime, x, topk_weights, invocation_id, None))
+                prerequisite_function)
             _, world_gate_ns["prerequisite"] = _world_gate(
                 "return prerequisite WORLD gate",
                 {"error": error, "status": 0 if error is None else -1},
@@ -388,25 +422,45 @@ def _run_iteration(
         world_gate_ns["pre_stage"] = time.perf_counter_ns() - gate_start
 
         if stage == "source":
+            stage_function = lambda: _source_shuffle(
+                runtime, x, topk_weights, invocation_id, None)
+            if nvtx:
+                stage_function = _nvtx_wrapped(
+                    f"c100/{stage}/stage/{category}/{category_index}",
+                    stage_function,
+                )
+                stage_function = _nvtx_wrapped(
+                    f"c100/{stage}/stage", stage_function)
             (_, timings["stage"], error,
              stage_start_ns, stage_end_ns) = _timed_window(
-                lambda: _source_shuffle(
-                    runtime, x, topk_weights, invocation_id, None))
+                stage_function)
         else:
             assert proxy_return is not None and reduce_seed is not None
+            stage_function = lambda: _return_stage(
+                runtime, proxy_return, reduce_seed, invocation_id)
+            if nvtx:
+                stage_function = _nvtx_wrapped(
+                    f"c100/{stage}/stage/{category}/{category_index}",
+                    stage_function,
+                )
+                stage_function = _nvtx_wrapped(
+                    f"c100/{stage}/stage", stage_function)
             (stage_result, timings["stage"], error,
              stage_start_ns, stage_end_ns) = _timed_window(
-                lambda: _return_stage(
-                    runtime, proxy_return, reduce_seed, invocation_id))
+                stage_function)
         _, world_gate_ns["stage"] = _world_gate(
             "stage completion WORLD gate",
             {"error": error, "status": 0 if error is None else -1},
             control_group,
         )
         if stage == "source":
+            visibility_function = lambda: runtime.barrier(  # type: ignore[attr-defined]
+                True, True, True)
+            if nvtx:
+                visibility_function = _nvtx_wrapped(
+                    "c100/source/post_visibility", visibility_function)
             _, timings["post_visibility"], error = _timed(
-                lambda: runtime.barrier(  # type: ignore[attr-defined]
-                    True, True, True))
+                visibility_function)
         else:
             # Return's measured API already includes its B4 LSA barrier and a
             # comm-stream synchronize.  A second device barrier would alter
@@ -421,9 +475,14 @@ def _run_iteration(
     except BaseException:
         phase_failure = traceback.format_exc()
     finally:
-        _, timings["abort"], abort_error = _timed(
-            lambda: runtime._rail_balance_hybrid_plan_abort(  # type: ignore[attr-defined]
-                invocation_id))
+        abort_method = (
+            runtime._rail_balance_hybrid_plan_abort  # type: ignore[attr-defined]
+        )
+        abort_function = lambda: abort_method(invocation_id)
+        if nvtx:
+            abort_function = _nvtx_wrapped(
+                f"c100/{stage}/abort", abort_function)
+        _, timings["abort"], abort_error = _timed(abort_function)
         try:
             _, world_gate_ns["abort"] = _world_gate(
                 "abort WORLD gate",
@@ -954,6 +1013,7 @@ def _build_report(
     semantic_config = {
         "shape": shape,
         "layout": layout_manifest,
+        "diagnostic_nvtx": args.nvtx,
         "warmup_iterations": args.warmup_iters,
         "steady_iterations": args.steady_iters,
         "gpu_timeout_seconds": args.timeout,
@@ -997,7 +1057,7 @@ def _build_report(
     baseline_collection_eligible = (
         git_clean and system_commands_ok and no_mps and
         not unexpected_app_pids and measurement_depth_ok and
-        persistent_report_requested
+        persistent_report_requested and not args.nvtx
     )
     logical_bytes_by_rank = [
         int(required) * logical_token_bytes
@@ -1091,8 +1151,11 @@ def _build_report(
             "clock": (
                 "time.perf_counter_ns common monotonic host clock; all ranks "
                 "are processes on this single node"),
-            "profiler_mode_declared": "disabled",
+            "profiler_mode_declared": (
+                "nvtx_diagnostic" if args.nvtx else "disabled"),
             "profiler_detection": (
+                "explicit --nvtx diagnostic mode; never baseline eligible"
+                if args.nvtx else
                 "not auto-detected; only a direct unwrapped invocation may "
                 "be accepted as a profiler-free baseline"),
             "cold_iterations": 1,
@@ -1128,6 +1191,9 @@ def _build_report(
             "unique_invocation_per_iteration": True,
             "extra_synchronize_inside_stage": False,
             "nvtx": (
+                "rank0 c100_nsys_window covers all steady iterations; each "
+                "rank marks coarse phases and exact target-stage ordinals"
+                if args.nvtx else
                 "disabled; any later NVTX/Nsys capture is a separate "
                 "diagnostic mode, never this profiler-free baseline"),
             "baseline_collection_eligible": baseline_collection_eligible,
@@ -1141,9 +1207,10 @@ def _build_report(
                 "clean Git, isolated empty JIT cache, stable required cubins, "
                 f"at least {_FORMAL_MIN_WARMUP_ITERATIONS} warmup and "
                 f"{_FORMAL_MIN_STEADY_ITERATIONS} steady samples, persistent "
-                "JSON, direct unwrapped execution, valid 8-GPU pre/post state "
-                "without non-benign throttle, no MPS, and no compute process "
-                "outside the eight benchmark workers"),
+                "JSON, direct unwrapped execution, diagnostic NVTX disabled, "
+                "valid 8-GPU pre/post state without non-benign throttle, no "
+                "MPS, and no compute process outside the eight benchmark "
+                "workers"),
             "cold_jit_identity_barrier": (
                 "two control-plane barriers and rank0 JIT hashing occur after "
                 "the cold transaction and outside every recorded sample"),
@@ -1200,6 +1267,7 @@ def _worker(local_rank: int, num_local_ranks: int,
     buffer = None
     clean_shutdown = False
     report = None
+    nvtx_window_started = False
     pre_identity = _artifact_identity() if rank == 0 else None
     pre_system = _system_snapshot() if rank == 0 else None
     cold_jit_identity = None
@@ -1295,6 +1363,24 @@ def _worker(local_rank: int, num_local_ranks: int,
             else:
                 category, category_index = (
                     "steady", ordinal - 1 - args.warmup_iters)
+            if args.nvtx and category == "steady" and category_index == 0:
+                _monitored_barrier(control_group, control_timeout)
+                nvtx_start_error = None
+                if rank == 0:
+                    try:
+                        torch.cuda.nvtx.range_push("c100_nsys_window")
+                        nvtx_window_started = True
+                    except BaseException:
+                        nvtx_start_error = traceback.format_exc()
+                _world_gate(
+                    "NVTX capture start WORLD gate",
+                    {
+                        "error": nvtx_start_error,
+                        "status": 0 if nvtx_start_error is None else -1,
+                    },
+                    control_group,
+                )
+                nvtx_window_started = True
             records.append(_run_iteration(
                 runtime=runtime,
                 rank=rank,
@@ -1313,6 +1399,7 @@ def _worker(local_rank: int, num_local_ranks: int,
                 category=category,
                 category_index=category_index,
                 logical_bytes_by_rank=logical_bytes_by_rank,
+                nvtx=args.nvtx,
             ))
             if ordinal == 0:
                 _monitored_barrier(control_group, control_timeout)
@@ -1333,8 +1420,34 @@ def _worker(local_rank: int, num_local_ranks: int,
                     raise AssertionError(
                         "cold JIT identity failed:\n" + "\n".join(messages))
 
+        if args.nvtx:
+            assert nvtx_window_started
+            _monitored_barrier(control_group, control_timeout)
+            nvtx_stop_error = None
+            if rank == 0:
+                try:
+                    torch.cuda.nvtx.range_pop()
+                    nvtx_window_started = False
+                except BaseException:
+                    nvtx_stop_error = traceback.format_exc()
+            _world_gate(
+                "NVTX capture stop WORLD gate",
+                {
+                    "error": nvtx_stop_error,
+                    "status": 0 if nvtx_stop_error is None else -1,
+                },
+                control_group,
+            )
+            nvtx_window_started = False
+
         clean_shutdown = True
     finally:
+        if rank == 0 and nvtx_window_started:
+            try:
+                torch.cuda.nvtx.range_pop()
+            except BaseException:
+                pass
+            nvtx_window_started = False
         if clean_shutdown and buffer is not None:
             buffer.destroy()
             buffer = None
@@ -1442,6 +1555,8 @@ def _run_watchdog(
     ]
     if args.json_out is not None:
         command.extend(("--json-out", str(args.json_out)))
+    if args.nvtx:
+        command.append("--nvtx")
     child_environment = os.environ.copy()
     child_environment[_WATCHDOG_CHILD_ENV] = "1"
     process: subprocess.Popen[bytes] | None = None

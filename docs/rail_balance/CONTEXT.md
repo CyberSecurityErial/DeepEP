@@ -834,3 +834,19 @@ Out of scope until evidence expands the project:
   with checksums.  They support a repeatable-median claim only.  Nsys is next
   for variability and exposed-critical-path attribution; NCU and hot-path
   edits remain blocked until that evidence exists.
+
+## C100 Nsys diagnostic instrumentation context (2026-07-22)
+
+- The C100 benchmark owns a default-off `--nvtx` mode; production Hybrid and
+  every CUDA/JIT kernel remain unchanged.  Diagnostic mode is always excluded
+  from profiler-free baseline eligibility.
+- Rank 0's `c100_nsys_window` delimits the steady loop.  All ranks provide
+  coarse phase ranges and exact target-stage ordinals.  Start/stop range errors
+  converge through WORLD gates; exceptional cleanup is rank0-only and never
+  starts a new collective.
+- True EP8 NVTX-on and default-off 0+1 smokes pass the report contract and
+  leave GPUs empty.  Default target-stage timing semantics are unchanged; the
+  broader host envelope has minimal added Python branching and is not claimed
+  bit-for-bit overhead-free.
+- Nsys capture must explicitly select `--capture-range-end=stop --kill=none`.
+  NCU remains blocked until Nsys proves an exposed exact invocation.

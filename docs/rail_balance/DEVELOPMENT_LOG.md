@@ -4427,3 +4427,30 @@ report intentionally declares profiling disabled.  A minimal benchmark-only
 `--nvtx` mode is therefore the next code slice.  It will fail closed for
 baseline eligibility, delimit only the steady window, and add sparse phase and
 invocation ranges.  No device kernel or production runtime edit is authorized.
+
+## 2026-07-22 — D075: add and harden the steady-only NVTX diagnostic mode
+
+The benchmark now accepts a default-off `--nvtx` flag.  Rank 0 owns one
+`c100_nsys_window` around all steady iterations; all ranks expose coarse
+prepare/finish/prerequisite/stage/visibility/abort ranges, and target-stage
+ranges include category plus ordinal.  Cold JIT and warmup remain outside the
+capture trigger.  The watchdog forwards the flag, semantic identity includes
+it, and every diagnostic report is automatically baseline-ineligible.
+
+Independent review found Blocker0/High1/Medium1/Low1.  The High is an Nsys
+command contract: this installed version defaults capture end to
+`stop-shutdown` and kill to `sigterm`, so the accepted command explicitly uses
+`--capture-range-end=stop --kill=none`.  The Medium was unmatched outer-range
+cleanup on an exceptional steady iteration.  Start/stop now use converged
+WORLD gates, and worker finally performs rank0-only best-effort pop without a
+collective.  The Low correctly rejects a strict zero-overhead claim: the
+target-stage callable/timer boundary is unchanged, but the wider Python
+transaction executes minimal disabled branches.
+
+In-memory compile, CLI help and `git diff --check` pass.  Two true EP8 H256
+return smokes pass: one with NVTX and one default-off.  The NVTX report records
+`nvtx_diagnostic`, semantic flag true, one forwarded `--nvtx`, and automatic
+eligibility false.  The default report records `disabled`, semantic flag
+false, no forwarded flag, and is ineligible only because the tree is dirty and
+the 0+1 smoke lacks formal depth.  Both leave no GPU process.  No Nsys profile
+has yet started and no device/production hot path changed.

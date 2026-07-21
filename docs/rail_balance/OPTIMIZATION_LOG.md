@@ -1521,3 +1521,11 @@ baseline eligibility false.  The first Nsys pass uses no CPU sampling, GPU
 metrics or NCU counters; it asks only whether host API/synchronization or GPU
 execution owns the exposed stage and tail.  This instrumentation is not a
 performance optimization and cannot create a speedup claim.
+
+The default target-stage timer still surrounds the same checked adapter call.
+The wider transaction now constructs local callables and evaluates a handful
+of false branches, so the change is minimal-overhead rather than literal
+zero-overhead.  No before/after claim may mix the old and new harness commits.
+The actual Nsys command must use `--capture-range-end=stop --kill=none`; relying
+on installed defaults would terminate the target at range end and invalidate
+cleanup/report evidence.

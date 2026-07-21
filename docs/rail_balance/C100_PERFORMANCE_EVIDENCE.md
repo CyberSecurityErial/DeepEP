@@ -497,6 +497,31 @@ pass.  The Nsys report and SQLite schema will determine whether a second pass
 needs process-tree sampling/backtraces.  NCU remains forbidden until this
 trace proves an exact exposed kernel invocation.
 
+Nsys 2024.6 defaults `--capture-range-end` to `stop-shutdown` and `--kill` to
+`sigterm`.  The first command must therefore make both lifecycle choices
+explicit so rank 0's capture-range pop cannot terminate the benchmark before
+JSON, buffer destruction and clean shutdown:
+
+```text
+nsys profile \
+  --trace=cuda,nvtx,osrt \
+  --sample=none --cpuctxsw=none \
+  --capture-range=nvtx --nvtx-capture=c100_nsys_window \
+  --capture-range-end=stop --kill=none \
+  --force-overwrite=true --export=sqlite \
+  --output=<run-dir>/return-h7168-low-overhead \
+  <frozen-python> -B tests/elastic/bench_rail_balance_hybrid_lsa.py \
+  --stage return --case-name c100_volume_h7168 \
+  --warmup-iters 10 --steady-iters 100 --nvtx \
+  --json-out <run-dir>/return-h7168-low-overhead.json ...
+```
+
+The default target-stage call and its timer boundary are unchanged.  Moving
+phase callables into locals introduces a few disabled Python branches in the
+wider transaction envelope, so this is described as minimal host overhead,
+not instruction-for-instruction zero overhead.  Profiler-free truth remains
+the already frozen pre-instrumentation group and later same-commit A/B tests.
+
 ## Matching official hardware and tool facts
 
 - NVIDIA specifies H200 SXM as Hopper with 141 GB HBM3e, 4.8 TB/s memory
