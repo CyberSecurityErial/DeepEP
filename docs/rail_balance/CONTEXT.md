@@ -939,7 +939,7 @@ Out of scope until evidence expands the project:
   default-off behavior and public API must stay unchanged.  Preserve a failed
   experiment and collect memory/source counters before any TMA-loop rewrite.
 
-## C100 O077 result and O078 resume context (2026-07-22)
+## C100 O078 accepted local result and resume context (2026-07-22)
 
 - O077 at clean `f895eff` is functionally and sanitizer complete.  It rotates
   only pure-deficit target windows and changes the frozen C100 return layout
@@ -962,20 +962,29 @@ Out of scope until evidence expands the project:
   `.cache/rail_balance/c100/o077/`; immutable hashes and query boundaries are
   in `DEVELOPMENT_LOG.md` D089-D091 and `C100_PERFORMANCE_EVIDENCE.md`.
 - O077 is retained as an auditable parent and return-parallelism proof, not an
-  accepted final hot path.  Current work is O078: replace only the
-  producer-generated monotonic-prefix linear scan in `resolve_hybrid_copy`
-  with a bounded
-  upper-bound lookup.  Preserve endpoint/containment/slot validation and every
-  currently tested fault/recovery path; do not change ABI, plan, slots, layout,
-  TMA, barriers, launch, return, public API or default-off identity.
-- Before editing, audit valid-prefix equivalence and malformed-prefix behavior.
-  Gate2 propagates producer status but does not rescan every prefix element;
-  the post-Gate2 plan is immutable by contract.  Neither the old linear scan
-  nor O078 promises detection of every adversarial nonmonotonic memory edit.
-  After the one-variable edit, use fresh JIT caches for focused resolver,
-  source/return/vnode/fault/default-off correctness and sanitizer.  Only on an
-  idle eight-GPU window repeat the three-run H256/H7168 profiler-free matrix;
-  repeat source Nsys if positive and NCU only if attribution remains ambiguous.
-- Transfer-matrix and compute-interference experiments remain after this
-  resolver decision.  Real D>1 Rail/Gin runtime remains C080-H/C110's external
-  environment gate and is not inferred from LSA/vnode results.
+  accepted final hot path.  O078 replaced only the canonical monotonic-prefix
+  scan in `resolve_hybrid_copy` with an endpoint-checked bounded upper-bound
+  lookup and final containment check.  Valid-prefix equivalence, explicit
+  origin/terminal faults and the pre-existing immutable-plan boundary are
+  tested.  It does not claim arbitrary post-Gate2 nonmonotonic-memory detection.
+- O078's CPU/static, source/return/vnode/WORLD/default-off/codegen, true EP8 and
+  focused sanitizer matrix passes.  ABI, plan, dense proxy slots, layout, TMA,
+  barriers, launch, return, public API, capability bits and default-off identity
+  remain unchanged at the algorithm/output/resource level; plan SASS moves one
+  failure-only assertion line-number immediate and no successful-path logic.
+- The first O078 no-profiler collection is retained but rejected because
+  timeout 300 versus 180 changed the barrier specialization.  The formal clean
+  `32b9cfd` B side repeats 12 runs with exact O077 semantic hashes.  Source
+  H256/H7168 median-of-run-medians improve 42.07%/26.57%; return H256 improves
+  7.77% and H7168 regresses 0.36%.  Every frozen same-label, pooled and trimmed
+  gate passes; a 2.169-ms outlier still blocks tail claims.
+- Matched source Nsys moves device-6 p50 105.376 to 52.496 us and the
+  per-ordinal maximum 105.376 to 54.080 us.  Strict device-6 basic NCU moves
+  dynamic instructions 2.971M to 0.824M with low SM/DRAM utilization.  Return
+  SASS/cubin resources remain identical; the 84-pair audit manifest is tracked
+  under `artifacts/`.  O078 is accepted for the local checked
+  adapter, not as a model-step or real-network speedup.
+- Resume C100 by freezing the smallest transfer-matrix and compute-interference
+  experiments; do not reopen resolver/TMA/ABI design without new evidence.
+  Real D>1 Rail/Gin runtime remains C080-H/C110's external environment gate and
+  is not inferred from LSA/vnode results.

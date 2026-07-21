@@ -1871,7 +1871,7 @@ Pre-registered predictions are:
    gradient contracts.
 3. Source dynamic instructions on the high-channel target fall materially
    from 2.971 million toward the low-channel control's 0.906 million.
-4. Plan/prefix code and exact outputs remain unchanged.  Return must satisfy
+4. Plan/prefix producer algorithms and exact outputs remain unchanged.  Return must satisfy
    the quantified no-regression gates below; in particular O077's approximately
    59-us pooled return-kernel p50 should be retained.
 5. Profiler-free source H256/H7168 improves in three clean runs without a
@@ -1899,7 +1899,7 @@ width, the median of run medians, pooled median and trimmed mean may regress no
 more than 5%, and no same-label median may regress more than 10%.  Raw
 p95/p99/max remain reported but are not a primary accept gate because the
 frozen baseline already rejects their stability.  Nsys must show the device-6
-source-kernel p50 and rank gradient contract while return launch/SASS remains
+source-kernel p50 and rank gradient contract while return SASS/cubin resources remain
 unchanged; no production end-to-end claim is inferred.
 
 Reject O078 if exact semantics change or any quantified source/return gate
@@ -1907,3 +1907,41 @@ fails.  In that case revert the resolver complexity and reassess whether O077
 itself should leave the production hot path.  Do not escalate to TMA
 pipelining, queues, block-geometry changes or a work manifest without a new
 evidence chain.
+
+### O078 result and decision
+
+Status: **ACCEPTED_FOR_LOCAL_CHECKED_ADAPTER** at clean `32b9cfd`.
+
+The first numerical B side is retained but rejected because timeout 300 rather
+than 180 changed the local-barrier JIT specialization.  The formal B side is
+the independently audited, identity-matched 12-report collection under
+`.cache/rail_balance/c100/o078/post-32b9cfd-matched-o077/`.  Every same-label
+semantic SHA equals O077 and all code/JIT/co-tenant/baseline gates pass.
+
+| Gate | Required | Observed | Result |
+| --- | --- | --- | --- |
+| source H256 same-label | all improve | 37.00%, 44.76%, 42.07% | PASS |
+| source H256 aggregate | MoM >=25%, pooled/trim >=20% | 42.07%, 41.10%, 41.00% | PASS |
+| source H7168 same-label | all improve | 16.32%, 29.60%, 27.04% | PASS |
+| source H7168 aggregate | MoM >=25%, pooled/trim >=20% | 26.57%, 24.91%, 24.24% | PASS |
+| return H256 aggregate/run | <=5% / <=10% regression | all aggregates improve; worst run +8.09% | PASS |
+| return H7168 aggregate/run | <=5% / <=10% regression | MoM +0.36%; pooled/trim improve; worst run +0.36% | PASS |
+| device-6 source p50 | materially toward ~54 us | 105.376 to 52.496 us | PASS |
+| per-ordinal max p50 | rank gradient contracts | 105.376 to 54.080 us | PASS |
+| device-6 dynamic instructions | toward 0.906M control | 2.971M to 0.824M | PASS |
+| static return geometry/SASS | unchanged | launcher geometry and pairwise SASS/cubin resource usage unchanged | PASS |
+
+The matched cubin audit finds successful hot-path SASS changes only in source.
+H7168 keeps REG74; H256 rises REG74 to REG76.  Return/count/prefix/combine are
+strictly identical.  Plan changes one assertion line-number immediate only;
+barrier SASS is identical after the timeout fix.  Static source code grows by
+32 instructions, but dynamic device-6 instructions fall 72.28%, while SM,
+DRAM and LSU remain unsaturated.  This is the intended algorithmic removal of
+redundant scan work, not an occupancy or bandwidth optimization.
+
+No tail claim is accepted because the formal B side contains a 2.169-ms
+source-H7168 outlier.  No source/return fixture sum is called an EP or model
+step.  O078 does not authorize a TMA pipeline, queue, block geometry, ABI,
+buffer or fusion change.  The next local work must first freeze a transfer-
+matrix/compute-interference measurement contract; real D>1 Gin/RDMA remains
+an external gate.

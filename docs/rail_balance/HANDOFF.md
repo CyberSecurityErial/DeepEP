@@ -21,11 +21,13 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Recent code and measurement checkpoints include `fc39bf7` (immediate O077
-  A side) and `f895eff` (O077 final correctness/sanitizer tree and complete B
-  side).  D089-D091 retain the profiler-free, post Nsys and source NCU result;
-  O077 is mixed/conditional and O078 is the only authorized next hot-path
-  experiment.  The remote will advance again with this evidence checkpoint.
+- Recent checkpoints include `f895eff` (O077 mixed parent), `9997546`/`b1fd199`/
+  `32b9cfd` (O078 test/production/fault slices) and `560f55c` (O078 functional
+  archive).  D094-D095 retain the rejected timeout-confounded collection, the
+  exact O077-identity-matched B side, source Nsys, device-6 NCU and the tracked
+  84-pair SASS/cubin-resource audit manifest.  O078 is
+  accepted for the local checked adapter; C100 remains open only for transfer-
+  matrix and compute-interference evidence, not another resolver redesign.
 - Both capability bits remain false and no result claims real Gin/RDMA
   behavior. The local activation evidence is complete, but the public methods
   deliberately remain unreachable through a normal force construction until a
@@ -263,27 +265,21 @@ No C070 timing is performance evidence.
    Rail/Gin correctness passes. D1 evidence is never a D>1 Gin success claim.
 6. C090 is complete. Do not rerun its unchanged full suites or sanitizer
    kernels unless production device code changes.
-7. O077's functional, sanitizer, three-run profiler-free A/B, post Nsys and
-   exact source NCU controls are complete at `f895eff`.  It improves return but
-   regresses source because `resolve_hybrid_copy` linearly scans O077's later
-   target-channel prefixes.  Keep O077 as an auditable parent, not a final
-   unconditional hot path.
-8. Current experiment O078 may change only that resolver scan into a bounded
-   upper-bound lookup over the producer-generated, post-Gate2 immutable
-   monotonic prefix.  Gate2 does not rescan every prefix value.  Preserve row
-   endpoint, final containment, slot/capacity checks and all currently tested
-   fault/recovery paths; do not claim arbitrary nonmonotonic-memory detection.
-   Do not change plan/quota/slots, TMA, layout, queue/atomics, block geometry,
-   barriers, return, public ABI, capability bits or default-off behavior.
-9. Audit valid-prefix and endpoint/out-of-range semantics before editing.  Then
-   run fresh-JIT focused source/return/vnode/fault/default-off correctness and
-   sanitizer.
-   Recheck idle GPUs before repeating the same three-run H256/H7168
-   profiler-free matrix.  Repeat source Nsys only after a positive no-profiler
-   result; use NCU only if the instruction prediction needs confirmation.
-   Default kernel/range replay, relaxed matching and `full` remain forbidden.
-10. Transfer matrices and compute interference remain after O078.  C105 then
-   packages the fastest real-cluster bring-up; real D>1 Gin remains C080-H.
+7. O077's complete evidence remains at `f895eff`.  Keep it as the auditable
+   mixed parent that exposed return parallelism and the source linear-scan
+   regression; do not restore its linear resolver.
+8. O078 is complete and locally accepted at code checkpoint `32b9cfd`.
+   Its formal 12-run B side is `post-32b9cfd-matched-o077`; the earlier
+   `post-32b9cfd` directory is a retained timeout-confounded failure and must
+   never be mixed into statistics.  Typical source/return, matched Nsys and
+   device-6 dynamic-instruction gates pass; tail stability does not.
+9. Preserve O078's endpoint, bounded upper-bound and final containment checks,
+   immutable-plan contract and all current fault recovery.  Do not add an O(C)
+   validation pass, TMA rewrite, queue/atomic, new workspace, block-geometry,
+   barrier, ABI, capability or default-off change without a new evidence chain.
+10. Next freeze and run the smallest transfer-matrix and compute-interference
+   experiments.  Performance work still requires idle GPUs.  C105 packages the
+   fastest real-cluster bring-up; truthful D>1 Gin remains C080-H/C110.
 
 Pinned runtime for accepted commands:
 

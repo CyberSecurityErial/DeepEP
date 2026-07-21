@@ -5342,3 +5342,169 @@ memcheck API-probe run above was not relabelled as a clean sanitizer pass.
 There is no unresolved functional or sanitizer blocker after D093, but O078
 still requires the pre-registered profiler-free/Nsys decision before it can be
 accepted as the C100 hot path.
+
+## 2026-07-22 — D094: reject a confounded collection and retain the matched O078 A/B
+
+The first O078 profiler-free collection under
+`.cache/rail_balance/c100/o078/post-32b9cfd/` passed every per-report runtime
+gate and every numerical O078 threshold.  It is nevertheless rejected as the
+formal causal B side.  Independent audit found that its CLI used
+`--timeout 300` instead of O077's `--timeout 180`.  That option is not merely
+an outer watchdog: it changes the local-barrier JIT specialization from
+`g8_t356400000000` to `g8_t594000000000`, with two corresponding SASS timeout
+immediates.  The same run also used an equivalent relative `PYTHONPATH` and a
+different watchdog duration.  A passing numerical result cannot override this
+second code-generation variable.
+
+The failed/confounded 12-report collection is retained rather than silently
+overwritten.  Its JSON hashes are:
+
+```text
+9528ca4e2331b5373f79d651046d63dbaf4ea8b5b3b428f38f0a96e83da63757  source-h256-r1.json
+facb3b51380fb8a4e800f1a04dbb7b54edb5ad519db372dfb0e6b24656989dd3  source-h256-r2.json
+6cf1423e35765240655f40583a1dd35792c2e611e94335af328288991b32a119  source-h256-r3.json
+5e854e534c5ff3e95868d4b2a3fed2390640053b0aa45ffbb02798752d0f110b  source-h7168-r1.json
+8a2f935be71a8434cae26f3cb0bc693c22cd33d60164cd0624e97627cdd68a07  source-h7168-r2.json
+caedbfad24e25f9a0b40d09770a874fb75a65f18009f4cfe54bef93a9faf6c05  source-h7168-r3.json
+edadcf6c3d6b5a52bce0681eee2ad16ac3199276dc160a0b99955248a75c9e4d  return-h256-r1.json
+60e2acc557617fba4fd39d3c33862299dfe09bfd15428de261342c7c7c1f3cd3  return-h256-r2.json
+0481d1a90c1d9aa8ec945d8b2399683de16b3c1d9e5aa108eb217b4fcb542d45  return-h256-r3.json
+c9df279a0bedf9ff7dcce6ac51385a88f19005929b9e88874d4488380a1527eb  return-h7168-r1.json
+d605006f01bd0ca40ac7891293e69d37bbbcfab3406999ca0b52ad27db8cd8a0  return-h7168-r2.json
+fd4086f7ec2cb6554a0934772207d096554e206d3af2bf2e07a99b864fc0b01a  return-h7168-r3.json
+```
+
+The collection was repeated from the unchanged clean `32b9cfd` tree in the
+same source/return/H256/H7168 order as O077.  Every invocation used an
+independent empty JIT root, 10 warmups, 100 retained steady samples,
+`OMP_NUM_THREADS=1`, the exact absolute O077 `PYTHONPATH`, timeout 180,
+derived control timeout 240 and watchdog 1800.  All 12 same-label
+`semantic_config_sha256` values now equal O077 byte for byte, and all barriers
+compile to the same `g8_t356400000000_v1.8bb1...` key and SASS.  Baseline,
+clean-commit, co-tenant, MPS, GPU-state, JIT-empty/stable and code-identity
+gates pass 12/12.
+
+The accepted raw B side is
+`.cache/rail_balance/c100/o078/post-32b9cfd-matched-o077/`.  The pre-registered
+aggregates, in microseconds, are:
+
+| Checked adapter | O077 median of run medians | O078 | latency change | pooled change | trim-10% change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| source H256 | 181.365 | 105.056 | -42.07% | -41.10% | -41.00% |
+| source H7168 | 188.542 | 138.450 | -26.57% | -24.91% | -24.24% |
+| return H256 | 157.288 | 145.070 | -7.77% | -2.91% | -1.94% |
+| return H7168 | 257.583 | 258.519 | +0.36% | -1.05% | -1.33% |
+
+Every same-label source median improves.  Source H256 improves
+36.998%/44.755%/42.075%; source H7168 improves
+16.320%/29.599%/27.040%.  The worst return same-label regression is 8.089%
+for H256 and 0.363% for H7168, below the frozen 10% limit.  All aggregate
+source 25%/20% and return 5%/10% gates therefore pass.  A 2.169-ms
+source-H7168-r2 maximum leaves that report at 131.9% CV, so no p95/p99/max or
+tail-stability claim is accepted.
+
+Accepted report hashes:
+
+```text
+514450849886926f0e495633ab0d4ea93abe4c223461a6d594b07b0c46853f1d  source-h256-r1.json
+010171566b4e8b2186b6626f6608f341696ba3d1810b6107d0ed82b96a579cf8  source-h256-r2.json
+bc7470d35502a81ae947abec7eaed57b1d0259b8b45b784360cc7a86a6e556c3  source-h256-r3.json
+1de491ca1005fce99a2f5777eaadca8d4eae26f3aebe4eeb505f7f3a85d17d79  source-h7168-r1.json
+ea518aa5500f5e35aa7d9bcae8abbfe0574ec31b710aa0ffd69f83d086727e5c  source-h7168-r2.json
+0389ea42fb8b99c2c504f84e25085e4ec5c8d79d339d886818ed1f049b920d12  source-h7168-r3.json
+6fd9ac0610edc9ed7da0e7226f24df7d55b99beafd7cd61a6a6fd7bf2b8c93d0  return-h256-r1.json
+a66eb6cb259bca7652ae11eb144a2b923585c994d41910486fab3c28d3d061b5  return-h256-r2.json
+daf89fece7bd98619a657ba7c74ed8979ea276cd0d1511c6b48c427674efd567  return-h256-r3.json
+c413ace3abdce70c906e42489ca075ac7fb30f25799913866e2fc3192493c33d  return-h7168-r1.json
+f69f1bc74631bc312513e946cf325bf879f3025daefa9db4e0b9b17bbb2f4914  return-h7168-r2.json
+0f9eccecaf47da5587d7e37bbb17f45914e80ba19ecfe5f105802bd26d1413b0  return-h7168-r3.json
+```
+
+The audit process also retained three non-product failures: unqualified `jq`
+was absent and inspection continued with the pinned Python interpreter; one
+read-only statistics probe used a nonexistent JSON child key and raised
+`KeyError: 'stage'`; one background-session polling script hit a tool-layer
+JavaScript `SyntaxError` and was immediately retried while the benchmark
+continued.  None changed a report, source file or GPU process.
+
+## 2026-07-22 — D095: Nsys and NCU close the O078 causal prediction
+
+Nsight Systems 2024.6.2 repeated the exact H7168 source window with the O077
+absolute environment, timeout 180/control 240, 10 warmups and 100 steady
+iterations.  Its semantic config SHA equals O077's
+`fd076a98558ec555447e950c3994f29f9dfbaf80461ddd5a0db0329e854735e7`.
+The diagnostic JSON correctly sets `baseline_collection_eligible=false`.
+The SQLite contains one outer window, 800 target launches, 100 ordinals and
+devices 0--7; every target is context 1, stream 26, grid 256, block 32, REG74
+and 14,432 bytes of dynamic shared memory.
+
+Device-6 source p50 falls from O077's 105.376 us to 52.496 us, and the
+per-ordinal maximum p50 falls from 105.376 us to 54.080 us.  Device 6 was the
+longest source rank in 100/100 O077 iterations but only 5/100 O078 iterations.
+The pooled target p50 is 51.536 us.  Reusing the tracked schema-aware
+`sql/o077_nsys_queries.sql`, the eight-device target-union p50 falls from
+154.975 to 109.323 us and the copy-excluded diagnostic union falls from
+140.806 to 95.834 us.  These remain checked-fixture diagnostic intervals, not
+a production exposed critical-path fraction.
+
+```text
+c544a54e86957ff7140cc9301b241a1f2734079e44b01d404a459ddd150ef8f9  source-h7168.json
+af1f3607b12be0f07aba6529cf3c65692019d6f5596c0aa72186044bf588a489  source-h7168.nsys-rep
+824970ee12cfbbfd214c70ed3f685171d7a5436b1a095e668f43e00961c54e27  source-h7168.sqlite
+```
+
+The matched 12-report cubin audit confirms that the local barrier SASS is now
+identical across O077/O078.  Source is the only changed successful hot-path
+SASS: H7168 remains REG74 while static instructions grow 1,352 to 1,384;
+H256 grows REG74 to REG76.  Return/count/prefix/combine SASS and resources are
+strictly identical.  Plan differs only in one failure-only assertion
+`__LINE__` immediate (413 to 425), with the other 1,199 instructions and
+resources unchanged.  The raw cubins currently live in `/tmp`; their compact
+persistent audit index is tracked as
+`artifacts/o078_sass_audit_manifest.json` (SHA256
+`3c82681b26c7be428ff060529de2cb265eaca863fa35c7d92c2b72b8bc3b0c70`).
+The index revalidates the report-declared SHA and size for all 168 artifacts
+per side, then records exact raw-cubin/SASS hashes, instruction counts and
+cubin resource usage for all 84 same-label kernel pairs.  Raw JIT binaries
+remain temporary and are deliberately not committed.
+
+Because Nsys proved the changed source invocation is materially exposed in the
+checked fixture, one NCU 2025.1.1 basic capture was justified to falsify the
+dynamic-instruction prediction.  It used device 6, steady range 26, the exact
+demangled source kernel, `--launch-count 1`, strict whole-application replay,
+cache/clock controls `none`, and ten passing replays.  Kernel/range replay,
+relaxed matching and full-set profiling were not used.  The report contains
+one grid-256/block-32, REG74, 14.432-KiB, 0.13-waves/SM target.
+
+Dynamic instructions fall from 2,971,264 to 823,680 (-72.28%), close to and
+9.11% below O077's same-code low-channel device-0 control of 906,250.  The new
+capture remains broadly unsaturated: SM throughput 0.292%, DRAM throughput
+0.716%, LSU pipe 0.0774%, achieved occupancy 2.663% and 1.704 active warps/SM.
+This confirms removal of data-dependent scan work; it does not authorize an
+occupancy, TMA or memory-system rewrite.  NCU reported the expected warnings
+for uncontrolled caches and unmodified clocks.  Its 369.344-us replay duration
+is not compared with Nsys or profiler-free time.
+
+```text
+ce8e83aac77060fc38e9c46ce157a78435ce50a1f75e8c03372bd15789925234  source-h7168-rank6-basic.command.txt
+2ee95cdd26359d9c1e788c557bf7d93b14a5141588c5010cccfec4263b092405  source-h7168-rank6-basic.json
+eb484c99c3ed606bc9bfd4d74c14e5e01ea1fc369599686c425b11bdc68108dd  source-h7168-rank6-basic.log
+7b59a6ccc3b6c6281c13e59415c2c5f60afdda4ddd8f320d3f05f6a578b22c93  source-h7168-rank6-basic.ncu-rep
+4328a7b4dfaa211ffc5ffd80ef0cdd253e937d14072201662d50f45a10985808  source-h7168-rank6-basic.console.log
+```
+
+O078 passes its complete pre-registered local decision: exact semantics and
+sanitizer pass, source performance clears every gate, return stays inside
+every no-regression gate, Nsys removes the device-6/rank gradient, and NCU
+confirms the instruction collapse.  It is accepted as the C100 checked-adapter
+hot path.  This is not a full Hybrid/MoE/training or real Gin/RDMA speedup.
+Transfer-matrix and compute-interference experiments remain before the local
+performance phase can be considered exhaustive; truthful D>1 Rail/Gin remains
+the C080-H/C110 environment gate.
+
+The first read-only manifest generator failed before writing any file because
+it incorrectly looked for an extra `jit_cache` child below
+`after_cold_transaction_jit` and raised `KeyError: 'jit_cache'`.  The retained
+report schema showed `artifacts` is a direct child; the corrected generator
+then completed all assertions.  This failure changed no report, cubin, source
+file or GPU process.

@@ -14,9 +14,10 @@ large return fixture: FUNCTIONAL_PASS, PRE_AND_POST_NSYS_ATTRIBUTED
 checked-adapter benchmark harness: AUDITED_PASS
 profiler-free baseline: SOURCE_AND_RETURN_COLLECTED, TAIL_STABILITY_NOT_ACCEPTED
 O077 profiler-free A/B: TWENTY_FOUR_RUNS_GATED_AND_RETAINED, MIXED_RESULT
-new Nsys attribution: O077_SOURCE_RETURN_TRADEOFF_CONFIRMED
-new NCU dossier: SOURCE_HIGH_LOW_SCAN_BASIC_CONTROL_PASS
-performance-path change: O077_CONDITIONAL_PARENT; O078_PRE_REGISTERED
+O078 profiler-free A/B: IDENTITY_MATCHED_TWELVE_RUN_B_SIDE_PASS
+new Nsys attribution: O078_SOURCE_SCAN_REMOVAL_CONFIRMED
+new NCU dossier: O078_DEVICE6_DYNAMIC_INSTRUCTION_PREDICTION_PASS
+performance-path change: O077_CONDITIONAL_PARENT; O078_LOCAL_CHECKED_ADAPTER_ACCEPTED
 ```
 
 The workload in this local phase is a synthetic BF16 communication-operator
@@ -1303,6 +1304,153 @@ artifact to make this evidence easier to audit without report import tools.
 
 The O077 decision is therefore conditional: keep its auditable checkpoint and
 its return-channel result, but do not accept the current combined hot path.
-Only O078's single-variable resolver experiment is authorized.  Real Gin/RDMA,
-NIC/QP behavior, full-model overlap and production end-to-end speedup remain
-missing evidence.
+This evidence authorized only O078's single-variable resolver experiment; its
+completed result follows.  Real Gin/RDMA, NIC/QP behavior, full-model overlap
+and production end-to-end speedup remain missing evidence.
+
+## O078 bounded-resolver result (2026-07-22)
+
+### Identity gate and rejected first collection
+
+The first 12-report O078 collection passed its internal baseline gates and all
+numerical thresholds but is not the formal B side.  It used timeout 300 rather
+than O077's 180, changing the local-barrier JIT specialization and two SASS
+timeout immediates.  The reports remain under
+`.cache/rail_balance/c100/o078/post-32b9cfd/` as a failed measurement-contract
+record; their hashes are in `DEVELOPMENT_LOG.md` D094.
+
+The accepted collection at clean `32b9cfd` is
+`.cache/rail_balance/c100/o078/post-32b9cfd-matched-o077/`.  It repeats O077's
+ordering with one empty JIT root per benchmark invocation/report, 10 warmups,
+100 steady samples,
+absolute `PYTHONPATH`, timeout 180/control 240, watchdog 1800 and OMP=1.
+Each same-label semantic config SHA equals O077 exactly.  Baseline eligibility,
+clean tree, eight benchmark-only GPU PIDs, no MPS/co-tenant/throttle state,
+empty then stable JIT identity, and stable extension/source/library identity
+all pass 12/12.  The barrier key/SASS is identical across both sides.
+
+Raw O078 distributions, in microseconds:
+
+| Case | median | p95 | p99 | max | mean | std | CV % |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| source H256 r1 | 111.626 | 126.301 | 331.930 | 470.046 | 118.391 | 41.971 | 35.451 |
+| source H256 r2 | 103.800 | 136.766 | 339.464 | 374.701 | 112.177 | 37.818 | 33.713 |
+| source H256 r3 | 105.056 | 130.539 | 206.354 | 234.213 | 110.203 | 18.858 | 17.112 |
+| source H7168 r1 | 152.931 | 174.393 | 183.608 | 207.648 | 154.928 | 10.321 | 6.662 |
+| source H7168 r2 | 132.736 | 143.556 | 180.992 | 2168.790 | 153.666 | 202.625 | 131.861 |
+| source H7168 r3 | 138.450 | 154.512 | 437.819 | 505.701 | 146.916 | 48.356 | 32.914 |
+| return H256 r1 | 145.070 | 180.500 | 184.114 | 189.186 | 149.262 | 14.103 | 9.449 |
+| return H256 r2 | 144.554 | 168.057 | 229.267 | 303.063 | 149.175 | 21.555 | 14.449 |
+| return H256 r3 | 165.619 | 200.708 | 228.716 | 280.967 | 170.834 | 16.929 | 9.910 |
+| return H7168 r1 | 258.815 | 303.503 | 396.718 | 554.637 | 264.470 | 35.728 | 13.509 |
+| return H7168 r2 | 258.519 | 277.056 | 311.436 | 1010.676 | 267.283 | 75.329 | 28.183 |
+| return H7168 r3 | 249.987 | 272.477 | 305.393 | 1248.635 | 262.844 | 99.574 | 37.883 |
+
+The frozen decision statistics are:
+
+| Adapter | O077 to O078 median of medians | change | pooled change | trim-10% change | same-label result |
+| --- | ---: | ---: | ---: | ---: | --- |
+| source H256 | 181.365 to 105.056 us | -42.07% | -41.10% | -41.00% | all improve 37.00--44.76% |
+| source H7168 | 188.542 to 138.450 us | -26.57% | -24.91% | -24.24% | all improve 16.32--29.60% |
+| return H256 | 157.288 to 145.070 us | -7.77% | -2.91% | -1.94% | worst regression +8.09% |
+| return H7168 | 257.583 to 258.519 us | +0.36% | -1.05% | -1.33% | worst regression +0.36% |
+
+Every pre-registered median/pooled/trimmed and same-label threshold passes.
+The 2.169-ms source-H7168 event prevents a tail-latency claim; profiler-free
+typical latency is the accepted result.
+
+### O078 source Nsys result
+
+Nsys 2024.6.2 separately captured 100 H7168 source ordinals with the exact
+O077 diagnostic semantic SHA
+`fd076a98558ec555447e950c3994f29f9dfbaf80461ddd5a0db0329e854735e7`.
+The report has exactly 800 context-1/stream-26, grid-256/block-32, REG74,
+14,432-byte dynamic-shared target launches.  Diagnostic benchmark timing is
+explicitly ineligible as profiler-free truth.
+
+| Metric | O077 | O078 | interpretation |
+| --- | ---: | ---: | --- |
+| device-6 target p50 | 105.376 us | 52.496 us | high-prefix scan cost removed |
+| per-ordinal maximum p50 | 105.376 us | 54.080 us | rank gradient contracts |
+| device-6 longest count | 100/100 | 5/100 | device 6 no longer fixed straggler |
+| pooled target p50 | not decision input | 51.536 us | all launches near pre-O077 scale |
+| eight-device target union p50 | 154.975 us | 109.323 us | interval union, not duration sum |
+| copy-excluded diagnostic union | 140.806 us | 95.834 us | fixture diagnostic only |
+
+The existing schema-aware `sql/o077_nsys_queries.sql` produced the interval
+rows.  The O078 artifacts are:
+
+```text
+c544a54e86957ff7140cc9301b241a1f2734079e44b01d404a459ddd150ef8f9  source-h7168.json
+af1f3607b12be0f07aba6529cf3c65692019d6f5596c0aa72186044bf588a489  source-h7168.nsys-rep
+824970ee12cfbbfd214c70ed3f685171d7a5436b1a095e668f43e00961c54e27  source-h7168.sqlite
+```
+
+### O078 source NCU dossier
+
+```text
+Kernel:
+  rail_balance_hybrid_source_shuffle_impl<7168,4>
+Invocation identity:
+  32b9cfd; BF16 G8/D9/N1024/C256/H7168/K4; 7,168 moved copies;
+  c100/source/stage/steady/26; device 6; context 1; stream 26; grid 256;
+  block 32; REG74; dynamic shared 14,432 B; one launch
+Nsight Systems exposed time:
+  device-6 p50 52.496 us; target-union p50 109.323 us and 95.834 us after
+  overlapping fixture-copy removal
+Launch configuration:
+  256 one-warp CTAs; 0.13 waves/SM; 23.44% theoretical occupancy
+Primary limiter removed:
+  O(C) data-dependent scan of the canonical monotonic channel prefix
+Secondary limiter:
+  not established; broad SM/DRAM/LSU utilization remains low
+Supporting NCU metrics:
+  dynamic instructions 2,971,264 to 823,680 (-72.28%); SM 0.292%;
+  DRAM 0.716%; LSU 0.0774%; achieved occupancy 2.663%;
+  active warps/SM 1.704
+Contradicting evidence:
+  static SASS grows 1,352 to 1,384 instructions and H256 uses two more
+  registers; dynamic H7168 work still falls sharply and profiler-free/Nsys
+  agree; NCU caches/clocks are uncontrolled
+Relevant source/PTX/SASS:
+  resolve_hybrid_copy in rail_balance_hybrid_plan.cuh; bounded endpoint,
+  upper-bound and final-containment checks; source H7168 REG remains 74
+Optimization hypothesis:
+  confirmed for the frozen large-volume checked adapter
+Expected kernel speedup:
+  confirmed by Nsys 105.376 to 52.496 us on device 6
+Expected end-to-end speedup ceiling:
+  missing evidence: no full MoE/training critical-path fraction or real RDMA
+Confidence:
+  high locally; unknown for real multi-node speedup
+Next falsification experiment:
+  local transfer-matrix and compute-interference sweeps, then truthful D>1
+  Rail/Gin validation
+```
+
+NCU 2025.1.1 used the basic set, exact device/range/demangled kernel,
+`--launch-count 1`, strict application replay for ten passing runs, and cache/
+clock controls `none`.  Its replay duration is not performance truth.  Report
+and exact-command hashes are indexed in `DEVELOPMENT_LOG.md` D095.
+
+The persistent cubin-pair audit index is
+`artifacts/o078_sass_audit_manifest.json` (SHA256
+`3c82681b26c7be428ff060529de2cb265eaca863fa35c7d92c2b72b8bc3b0c70`).
+It validates all 168 report-declared artifacts on each side and records exact
+raw-cubin, SASS, instruction-count and cubin-resource evidence for all 84
+same-label kernel pairs.  The raw JIT roots remain temporary and are not
+treated as repository artifacts.
+
+### Decision and remaining evidence
+
+O078 passes exact function/sanitizer, every profiler-free gate, the source
+Nsys prediction and the device-6 dynamic-instruction prediction.  Return SASS
+and cubin resource usage are identical in every same-label O077/O078 pair; the
+plan SASS difference is only an assertion source-line immediate.  O078 is accepted
+as the C100 local checked-adapter hot path and O077 remains its auditable mixed
+parent.
+
+This does not establish full-MoE/training step speedup, production overlap,
+real Gin/RDMA/QP/NIC behavior or stable tail latency.  Transfer-matrix and
+compute-interference experiments remain local C100 work.  C080-H/C110 still
+own truthful multi-node activation and performance.
