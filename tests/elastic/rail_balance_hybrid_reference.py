@@ -447,6 +447,7 @@ def build_hybrid_rail_schedule_from_destinations(
         for _ in range(num_rails)
     ]
     for egress in range(num_rails):
+        window_cursor = 0
         for destination in range(num_destinations):
             for channel in range(num_channels):
                 available = channel_count[egress][channel][destination]
@@ -458,7 +459,17 @@ def build_hybrid_rail_schedule_from_destinations(
 
             incoming_remaining = (
                 quota[egress][destination] - keep[egress][destination])
-            for channel in range(num_channels):
+            rotate_window = (
+                incoming_remaining > 0
+                and keep[egress][destination] == 0
+            )
+            window_start = window_cursor % num_channels if rotate_window else 0
+            if rotate_window:
+                window_cursor += (
+                    incoming_remaining + channel_capacity - 1
+                ) // channel_capacity
+            for step in range(num_channels):
+                channel = (window_start + step) % num_channels
                 spare = (
                     channel_capacity
                     - retained[egress][channel][destination]
@@ -716,41 +727,64 @@ def validate_hybrid_rail_schedule(schedule: HybridRailSchedule) -> None:
 
     expected_proxy = [0] * g
     for egress in range(g):
+        window_cursor = 0
         for destination in range(d):
             incoming = (
                 schedule.quota[egress][destination]
                 - schedule.keep_count[egress][destination]
             )
-            remaining = incoming
-            moved_prefix = 0
-            if schedule.moved_channel_prefix[egress][destination][0] != 0:
-                raise ValueError("moved_channel_prefix must begin at zero")
+            expected_retained = [0] * c
             for channel in range(c):
                 available = schedule.channel_count[egress][channel][destination]
                 owner_prefix = (
                     schedule.owner_channel_prefix[egress][channel][destination])
-                expected_retained = min(
+                expected_retained[channel] = min(
                     available,
                     max(
                         schedule.keep_count[egress][destination] - owner_prefix,
                         0,
                     ),
                 )
-                if schedule.retained[egress][channel][destination] != expected_retained:
+                if (
+                    schedule.retained[egress][channel][destination]
+                    != expected_retained[channel]
+                ):
                     raise ValueError("retained does not match the owner prefix")
-                spare = expected_capacity - expected_retained
-                expected_moved = min(spare, remaining)
-                if schedule.moved[egress][channel][destination] != expected_moved:
+
+            remaining = incoming
+            rotate_window = (
+                incoming > 0
+                and schedule.keep_count[egress][destination] == 0
+            )
+            window_start = window_cursor % c if rotate_window else 0
+            if rotate_window:
+                window_cursor += (
+                    incoming + expected_capacity - 1
+                ) // expected_capacity
+            expected_moved = [0] * c
+            for step in range(c):
+                channel = (window_start + step) % c
+                spare = expected_capacity - expected_retained[channel]
+                expected_moved[channel] = min(spare, remaining)
+                remaining -= expected_moved[channel]
+            if remaining:
+                raise ValueError("incoming copies were not fully assigned")
+
+            moved_prefix = 0
+            if schedule.moved_channel_prefix[egress][destination][0] != 0:
+                raise ValueError("moved_channel_prefix must begin at zero")
+            for channel in range(c):
+                if (
+                    schedule.moved[egress][channel][destination]
+                    != expected_moved[channel]
+                ):
                     raise ValueError("moved is not the canonical channel fill")
-                remaining -= expected_moved
-                moved_prefix += expected_moved
+                moved_prefix += expected_moved[channel]
                 if (
                     schedule.moved_channel_prefix[egress][destination][channel + 1]
                     != moved_prefix
                 ):
                     raise ValueError("moved_channel_prefix is not exclusive")
-            if remaining:
-                raise ValueError("incoming copies were not fully assigned")
 
         cursor = 0
         for channel in range(c):

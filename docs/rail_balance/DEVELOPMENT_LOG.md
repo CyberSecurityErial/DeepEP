@@ -4710,12 +4710,15 @@ No performance hot path changed in D081.
 
 ## 2026-07-22 — D082: pre-register the first one-variable optimization
 
-O077 fixes the implementation before editing: destination lanes stagger their
-channel windows by an exclusive prefix of nominal
+O077 fixes the implementation before editing: pure-deficit destination lanes
+stagger their channel windows by an exclusive prefix of nominal
 `ceil(incoming / channel_capacity)` spans, then cyclically consume existing
-spare capacity.  Current C100 target work is predicted to change from
-32-by-28 to 224-by-4 per egress without changing any count, quota, segment,
-proxy count, slot density, TokenLayout, TMA loop or synchronization rule.
+spare capacity.  A later pre-GPU audit tightened this rule: partial-deficit
+groups keep the old channel-zero origin and do not advance the cursor because
+retained records can make their nominal span inexact.  Current C100 target work
+is all pure deficit and is still predicted to change from 32-by-28 to 224-by-4
+per egress without changing any count, quota, segment, proxy count, slot
+density, TokenLayout, TMA loop or synchronization rule.
 
 Balanced waterfill and a `C * D` return grid were reviewed and rejected for the
 first experiment: the former adds planning/code complexity without evidence;
@@ -4749,3 +4752,48 @@ the B side must report all three distributions and cannot claim a win from one
 best trial.  No tracked benchmark, oracle, C++/CUDA/JIT or hot path changed in
 this checkpoint.  The twelve reports are gated and retained; their unstable
 p95/p99/max values are not accepted as a stable baseline.
+
+## 2026-07-22 — D084: implement and audit O077 CPU semantics
+
+The CPU schedule builder and strict validator now implement the pre-registered
+destination-window rotation.  Each egress keeps an exclusive cursor of exact
+pure-deficit `ceil(incoming / channel_capacity)` spans.  A pure-deficit group
+starts at that cursor modulo C and advances it; a partial-deficit group retains
+the legacy channel-zero start and does not advance it.  Both greedily consume
+one complete cyclic pass of existing spare capacity.  The physical moved
+prefix, channel-major group prefix, quota, segments and proxy-count ABI are
+unchanged.
+
+Three exact properties lock the behavior.  A G2/D2/C2/N4 audit counterexample
+proves a partial-deficit group preserves the old distribution `[1, 1]` instead
+of regressing to `[0, 2]`, and also proves it does not contaminate the following
+pure-deficit cursor.  A G2/D3/C2/N4 case proves pure-deficit windows rotate and
+wrap.  The frozen G8/D9/C256/N1024 C100 case proves every egress has exactly 224
+target channels with four records, 32 empty channels and 896 total records.
+The existing randomized resolver, zero-move, non-divisible, input-corruption
+and capacity checks still pass.
+
+The first attempted command used `python -m pytest` and failed immediately
+because the pinned environment has no pytest module.  No test body ran and no
+environment change was made.  The initial rotate-all CPU prototype passed
+13/13 direct tests; its first vnode run failed at the stale 2x4 exact golden,
+which was updated and passed once.  Independent review then produced a genuine
+retained-capacity counterexample: two moved records collapsed from `[1, 1]` to
+`[0, 2]`.  Before any GPU or production edit, the implementation was tightened
+to rotate only pure-deficit groups and the counterexample became a regression
+test.  The next vnode run correctly failed against the temporary rotate-all
+golden; restoring the original partial-deficit golden yields 14/14 direct CPU
+schedule tests and all seven 4x2/2x4/rounding/capacity vnode tests.  These
+failures and the rejected prototype are retained rather than silently omitted.
+The same review retained a separate performance-only boundary: a G2/D5/C8/T5
+mixed partial/pure-deficit case changes peak target load from `[2, 2]` to
+`[1, 3]`, although exhaustive G2/D2/C2/T4 and 20,000 random cases found no
+active-channel-count regression.  The random audit used seed `0x077`,
+G=[2,5], D=[1,6], C=[1,8], T=[1,16], uniform 0..T owner token counts and
+independent destination probability 0.35; the counterexample appeared at
+iteration 9118.  Two context-mismatched documentation patches failed without
+changing files before this exact generation contract was inserted.  O077 does
+not claim generic minimax
+dominance; this counterexample is a mandatory B-side distribution check rather
+than a reason to add an unproven waterfill scheduler.  No C++/CUDA/JIT/runtime
+code changed in D084.

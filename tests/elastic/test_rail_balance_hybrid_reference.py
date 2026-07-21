@@ -280,6 +280,109 @@ def test_c061_channel_major_golden_and_capacity():
     )
 
 
+def test_partial_deficit_preserves_low_channel_fill():
+    routes = (
+        ((0,), (), (0,), ()),
+        ((0,), (0,), (0, 1), (0, 1)),
+    )
+    schedule = _build(
+        routes,
+        destinations=2,
+        channels=2,
+        max_tokens=4,
+        remainder_seed=0,
+    )
+    assert schedule.count == ((2, 0), (4, 2))
+    assert schedule.quota == ((3, 1), (3, 1))
+    assert schedule.keep_count == ((2, 0), (3, 1))
+    assert schedule.retained == (
+        ((2, 0), (0, 0)),
+        ((2, 1), (1, 0)),
+    )
+    # Destination zero is only partially deficient: retained records make its
+    # nominal span an unsafe cursor increment.  Keep the old physical origin,
+    # then let the following pure-deficit destination start at channel zero.
+    # Rotating both groups would collapse both records onto channel one.
+    assert schedule.moved == (
+        ((0, 1), (1, 0)),
+        ((0, 0), (0, 0)),
+    )
+    assert schedule.moved_channel_prefix == (
+        ((0, 0, 1), (0, 1, 1)),
+        ((0, 0, 0), (0, 0, 0)),
+    )
+    assert schedule.group_prefix == (
+        ((0, 0), (1, 2)),
+        ((0, 0), (0, 0)),
+    )
+    assert schedule.proxy_required == (2, 0)
+    assert schedule.moved_copies == 2
+    assert [sum(schedule.moved[0][channel]) for channel in range(2)] == [1, 1]
+    _assert_resolver_invariants(routes, schedule)
+
+
+def test_pure_deficit_windows_rotate_and_wrap():
+    routes = (
+        tuple((0, 1, 2) for _ in range(4)),
+        (),
+    )
+    schedule = _build(
+        routes,
+        destinations=3,
+        channels=2,
+        max_tokens=4,
+        remainder_seed=0,
+    )
+    assert schedule.count == ((4, 4, 4), (0, 0, 0))
+    assert schedule.quota == ((2, 2, 2), (2, 2, 2))
+    assert schedule.keep_count == ((2, 2, 2), (0, 0, 0))
+    assert schedule.moved == (
+        ((0, 0, 0), (0, 0, 0)),
+        ((2, 0, 2), (0, 2, 0)),
+    )
+    assert schedule.moved_channel_prefix == (
+        ((0, 0, 0), (0, 0, 0), (0, 0, 0)),
+        ((0, 2, 2), (0, 0, 2), (0, 2, 2)),
+    )
+    assert schedule.group_prefix == (
+        ((0, 0, 0), (0, 0, 0)),
+        ((0, 2, 2), (4, 4, 6)),
+    )
+    assert schedule.proxy_required == (0, 6)
+    assert schedule.moved_copies == 6
+    # Old low-prefix packing would produce [6, 0].  Three one-channel pure
+    # deficit windows instead rotate 0 -> 1 -> 0 and preserve exact capacity.
+    assert [sum(schedule.moved[1][channel]) for channel in range(2)] == [4, 2]
+    _assert_resolver_invariants(routes, schedule)
+
+
+def test_c100_destination_windows_expose_224_target_channels():
+    routes = tuple(
+        tuple((owner + 1,) for _ in range(1024))
+        for owner in range(8)
+    )
+    schedule = _build(
+        routes,
+        destinations=9,
+        channels=256,
+        max_tokens=1024,
+        local_destination=0,
+        remainder_seed=100,
+        proxy_capacity_per_egress=896,
+    )
+    validate_hybrid_rail_schedule(schedule)
+    assert schedule.proxy_required == (896,) * 8
+    assert schedule.moved_copies == 7168
+    for egress in range(8):
+        target_loads = [
+            sum(schedule.moved[egress][channel])
+            for channel in range(256)
+        ]
+        assert target_loads.count(4) == 224
+        assert target_loads.count(0) == 32
+        assert sum(target_loads) == 896
+
+
 def test_zero_tokens_and_no_manifest_in_schedule():
     routes = ((), (), (), ())
     schedule = _build(

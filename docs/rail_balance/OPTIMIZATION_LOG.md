@@ -1668,18 +1668,23 @@ destination, define:
 
 ```text
 incoming[d] = quota[e,d] - keep[e,d]
-span[d]     = ceil(incoming[d] / channel_capacity)
-start[d]    = exclusive_prefix_sum(span)[d] mod num_channels
+rotate[d]   = (incoming[d] > 0 and keep[e,d] == 0)
+span[d]     = rotate[d] ? ceil(incoming[d] / channel_capacity) : 0
+start[d]    = rotate[d] ? exclusive_prefix_sum(span)[d] mod num_channels : 0
 ```
 
-Retained counts remain the native source-channel prefixes.  Starting at
-`start[d]`, one cyclic O(C) pass greedily places the unchanged `incoming[d]`
-copies into each channel's `channel_capacity - retained` spare space.  A final
-physical-channel pass rebuilds the existing monotonic moved prefix; the
-channel-major/destination-minor group prefix and dense proxy slots are
-unchanged.  The capacity proof remains
-`sum(spare) >= quota - keep`, so a complete cyclic pass must consume every
-incoming copy.
+Retained counts remain the native source-channel prefixes.  Only a pure-deficit
+group (`keep == 0`) rotates: all of its spare capacities are identical, so its
+nominal span is exact and safe to contribute to the cursor.  A partial-deficit
+group preserves the old physical start at channel zero and contributes no span;
+this prevents retained placement from turning a nominal span into a misleading
+cursor increment.  Starting at the selected channel, one cyclic O(C) pass
+greedily places the unchanged `incoming[d]` copies into each channel's
+`channel_capacity - retained` spare space.  A final physical-channel pass
+rebuilds the existing monotonic moved prefix; the channel-major/destination-
+minor group prefix and dense proxy slots are unchanged.  The capacity proof
+remains `sum(spare) >= quota - keep`, so a complete cyclic pass must consume
+every incoming copy.
 
 This is the smallest natural change because each destination lane can reuse the
 current warp scan to obtain `start`; no field, allocation, atomic, queue,
@@ -1694,10 +1699,10 @@ after:  224 channels * 4 records, 32 empty
 The following facts must remain bit-exact: count/quota/keep/segments,
 `proxy_required=896`, global `moved_copies=7168`, proxy slot density, payload,
 metadata, owner/egress/destination identity and final combine output.  Add
-explicit zero-move, cyclic-wrap, non-divisible, retained-capacity and exact
-C100 distribution checks.  CPU oracle and validator change first; the GPU
-prefix materializer then mirrors them and must pass exact CPU/GPU parity before
-any performance run.
+explicit zero-move, pure-deficit cyclic-wrap, non-divisible, partial-deficit
+fallback and exact C100 distribution checks.  CPU oracle and validator change
+first; the GPU prefix materializer then mirrors them and must pass exact
+CPU/GPU parity before any performance run.
 
 Two costs are pre-registered rather than hidden.  The planner gains one channel
 pass.  More importantly, the current source resolver linearly scans physical
@@ -1706,6 +1711,23 @@ from about 15.5 to about 111.5.  Therefore source, return and plan are all
 measured at H256 and H7168.  A return-only win is rejected if source/plan cost
 absorbs it.  Binary search, waterfill, TMA pipelining and a compact work queue
 are separate future hypotheses and must not be bundled into O077.
+
+The pure-deficit gate removes a real rotate-all regression but is not a global
+minimax scheduler.  A retained audit counterexample with G2/D5/C8/T5 produces
+per-channel target loads `[2, 2, 0, ...]` under the legacy fill and
+`[1, 3, 0, ...]` under O077 when partial groups occupy a channel later selected
+by a pure-deficit window.  Its exact destination routes are
+`(((0,), (1,3,4), (0,1,2,4), (0,1,2,4)), ((0,1,3),))`, with count
+`((3,3,2,1,3), (1,1,0,1,0))`; the affected egress is one.  Exhaustive
+G2/D2/C2/T4 enumeration and 20,000 random cases found no active-channel-count
+regression.  The random audit used `random.Random(0x077)`, G in [2,5], D in
+[1,6], C in [1,8], T in [1,16], uniform 0..T tokens per owner and independent
+destination probability 0.35; the peak-load counterexample appeared at
+iteration 9118.  This means
+no generic dominance is claimed.  This is a known performance risk, not a
+correctness failure.  B-side reports must retain the full channel distribution
+and reject O077 if the target workload loses overall source/return performance;
+adding load-aware placement now would violate the one-variable experiment.
 
 The falsification order is fixed:
 
@@ -1720,3 +1742,11 @@ The falsification order is fixed:
 5. Retain O077 only if the combined evidence is favorable, then collect the
    same Nsys window.  Otherwise revert the production complexity while keeping
    the failed experiment and artifacts in the logs.
+
+CPU status: the builder and strict validator implement the pure-deficit gate.
+Direct CPU schedule tests pass 14/14, including the audit counterexample,
+pure-deficit cyclic wrap and exact C100 distribution; vnode round-trip tests
+pass 7/7 with their original canonical partial-deficit ordering.  The missing-
+pytest, both stale-golden failures, and the rejected rotate-all prototype are
+retained in D084.  GPU materialization and all performance conclusions remain
+pending.
