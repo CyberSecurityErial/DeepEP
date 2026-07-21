@@ -4294,3 +4294,27 @@ The verified ignored artifacts and manifest live under
 `.cache/rail_balance/c100/gloo-gate/ee41415/`.  This closes the narrow Gloo
 release falsification, not measurement work as a whole.  Source-H256 and both
 return widths remain, followed by Nsys; NCU still has no selected invocation.
+
+## 2026-07-22 — D071: collect source-H256 and retain rank-local tails
+
+Before GPU collection, another independently launched Megatron-environment
+`restart6` occupied four GPUs and spawned many Inductor compiler workers.  Its
+resolved PGID 1066956 was terminated under standing authorization.  Three
+seconds later GPUs were still empty and no high-CPU training process remained;
+the source-H256 group began only then.
+
+Three clean OMP=1, 10+100 processes at `bac80ee` pass every automatic gate,
+use fresh JIT caches, and list no unexpected GPU process.  Global medians are
+130.917/126.277/116.707 us and their start-skew medians are
+63.929/59.297/44.552 us.  rank 1 starts first in all 300 samples, preserving
+the E2 control-plane signature.
+
+Maximum rank-local call-envelope medians are much tighter at
+76.967/75.243/79.364 us, a 5.48% range.  However, their run maxima are
+472.997/224.434/630.329 us and pooled p99 is 168.538 us.  These tails are
+retained, not trimmed.  Automatic eligibility is necessary but does not make
+the manual p95/p99 stability gate pass.
+
+Reports and a verified partial manifest live under
+`.cache/rail_balance/c100/formal-omp1/bac80ee/`.  No benchmark, CUDA/JIT,
+runtime or production hot-path code changed.  Return-H256 is the next group.

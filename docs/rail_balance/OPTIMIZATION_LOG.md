@@ -1462,3 +1462,17 @@ This two-metric interpretation supersedes the earlier attempt to make one
 number serve both end-to-end rank arrival and kernel attribution.  It changes
 no timer, benchmark code or CUDA hot path and can be falsified by the upcoming
 source/return distributions and Nsys timeline.
+
+## Measurement decision O068 — do not let a stable median hide rank-local tails
+
+Source-H256 supports separating the Gloo-contaminated global span from the
+rank-local adapter envelope: run-median range improves from 12.18% to 5.48%.
+It also falsifies the stronger hope that OMP=1 makes the whole distribution
+stable.  Two rank-local samples still exceed 470 us and pooled p99 is
+168.538 us versus a 76.793 us median.
+
+Therefore median stability is not sufficient to enter NCU or modify the
+payload kernel.  Continue the unchanged return collection, then use Nsys to
+classify representative and tail calls as host deschedule, CUDA API/sync wait,
+or exposed GPU execution.  No outlier removal, percentile replacement, CPU
+pinning, or timer correction is introduced in this checkpoint.

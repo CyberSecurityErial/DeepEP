@@ -272,6 +272,38 @@ Verified local artifacts live under the ignored directory
 b274444bda0fec04228d4eb9a4c80c34d39888a8a0918a8964cc8f92646dbd5f  gloo-omp1-r3.json
 ```
 
+## OMP-controlled source-H256 collection — commit `bac80ee`
+
+Three clean source-H256 processes used OMP=1, 10 warmup, 100 steady samples,
+fresh JIT caches and empty-GPU preflight.  Every automatic eligibility gate
+passes and no report contains an unexpected compute process.  Global span and
+the already recorded maximum rank-local synchronous call envelope are reviewed
+separately:
+
+| Run | Global median/p95/p99 (us) | Global CV/max | Rank-local-max median/p95/p99 (us) | Rank-local CV/max |
+| --- | --- | --- | --- | --- |
+| 1 | 130.917 / 151.016 / 173.075 | 39.83% / 678.144 | 76.967 / 91.108 / 171.023 | 49.21% / 472.997 |
+| 2 | 126.277 / 140.649 / 157.166 | 9.38% / 224.434 | 75.243 / 84.926 / 105.831 | 20.42% / 224.434 |
+| 3 | 116.707 / 140.508 / 208.682 | 44.59% / 665.199 | 79.364 / 96.699 / 158.718 | 63.96% / 630.329 |
+| pooled | 126.501 / 145.071 / 204.275 | 35.34% / 678.144 | 76.793 / 92.751 / 168.538 | 49.73% / 630.329 |
+
+Global run medians span 12.18%; their start-skew medians are
+63.929/59.297/44.552 us and rank 1 starts first in every steady sample.  The
+rank-local envelope medians are materially tighter at 5.48% range, but their
+p99/max values retain large intermittent tails.  This group therefore supports
+the two-metric interpretation but is not accepted as a fully stable p95/p99
+baseline.  OMP=1 is not claimed to improve H256 relative to the original
+collection.
+
+Verified local hashes under
+`.cache/rail_balance/c100/formal-omp1/bac80ee/` are:
+
+```text
+18e32bb9516642e5ef807af879f257aaedc231b8164c8a1eeaf5f5d17f97c178  source-h256-r1.json
+c88c67f99b4a4e8af0a9871cab5b444aebd44ccc1935aaaba92532825e0b46bc  source-h256-r2.json
+85a02c0354fb583f5da894ff842bdc9834edad3ec4081a4a87ac4ab67d213e65  source-h256-r3.json
+```
+
 ## Environment manifest — 2026-07-21 UTC
 
 ### Host and GPU management view
