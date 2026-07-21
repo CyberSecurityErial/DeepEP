@@ -12,15 +12,15 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
   lifecycle file remains; the next slice is C080-G local regression/sanitizer
   closure, not another host abstraction.
 - C000 through C070 remain complete for the agreed single-node PoC scope.
-- C080-A/B are complete; C080-D shared source/return cores and vnode closure
-  pass their current local gates. C080-C is PASS with the fixed-tensor WORLD
-  transaction, buffer-bound public ticket, and truthful D1 watchdog.
+- C080-A/B/C/D are PASS. C080-D now includes corrupt/missing world-plan
+  pre-B0 abort plus same-buffer next-generation recovery; C080-C has the
+  fixed-tensor WORLD transaction, public ticket, and truthful D1 watchdog.
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Latest pushed checkpoint is `0597ed0` (real EP8 public watchdog), following
-  `741e126`/`cbe7df2` (public Hybrid lifecycle/contracts) and `1e0ea60`/
-  `eb6b834` (constructor consensus) on
+- Latest pushed checkpoint is `6377e0c` (vnode world-plan fault/recovery),
+  following `0597ed0` (real EP8 public watchdog), `741e126`/`cbe7df2`
+  (public Hybrid lifecycle/contracts), and `1e0ea60`/`eb6b834` on
   `fork/feat/rail-balance-prototype`.
 - Both capability bits remain false and no result claims real Gin/RDMA
   behavior. The public methods are wired but unreachable through a normal
@@ -139,6 +139,11 @@ the exact file snapshots without inventing commit identity.
   stable accepted-constructor storage, invocation 1→3, no live ticket, and a
   nonterminal retryable buffer. The audit closes Blocker0/High0; production
   capability is restored false and no payload/Gin stage executes.
+- C080-D world-plan fault closure is committed at `6377e0c`. Rank 0 corrupts
+  one prepared value and rank 1 models one missing tensor; exact tagged
+  preflight failures converge before B0, both source/world owners abort, and
+  the next generation completes the full 4x2/H256 round trip on the same
+  buffers. True EP8 and independent Blocker0/High0 review pass.
 
 ## Mandatory retained boundary
 

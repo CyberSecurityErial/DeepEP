@@ -3583,3 +3583,39 @@ This closes the local public-control-plane activation evidence only. The D=1
 guard fires before JIT, arena stores, source shuffle, or payload publication,
 so the run is deliberately not D>1 Gin/RDMA or performance evidence. C080-G
 now owns default-off, compatibility, fault, and sanitizer closure.
+
+## 2026-07-21 — D058: close corrupt/missing world-plan fail-close
+
+The final C080-D acceptance gap is covered inside the existing two-window
+vnode harness, without a new kernel, runtime, transport, or public API. One
+small 4x2/H256 case performs three generations on the same source/world
+buffers:
+
+1. rank 0 changes one value in world `channel_count` after prepare;
+2. rank 1 removes one tensor from its local owning world-plan tuple;
+3. the next generation executes the complete normal round trip.
+
+Both injected generations gather the exact preflight result over Gloo before
+the first `vnode_finish`/B0 entry. Corruption must report
+`world plan tensor 0 value mismatch`; missing state must report
+`world plan tensor count mismatch`. Every rank then returns through the same
+finally block, calls idempotent world/source abort for that invocation, and
+enters a monitored barrier. Generations 809/810/811 give distinct source/world
+invocations, so the final byte-exact dispatch→vnode→return→combine success is
+also a real recovery proof.
+
+Accepted evidence at commit `6377e0c`:
+
+```text
+PASS focused CPU oracle and py_compile/diff check
+PASS true EP8 corrupt world-plan pre-B0 reject and abort
+PASS true EP8 missing world-plan pre-B0 reject and abort
+PASS same-buffer next-generation complete 4x2/H256 round trip
+PASS independent fault audit: Blocker 0 / High 0
+```
+
+The first review found one Medium in the test: matching only the generic word
+`AssertionError` could accept an unrelated rank-local failure. Plan validation
+now labels tensor count/device/layout/shape/value separately, and each fault
+must match its specific tag. No production source changed. This closes C080-D;
+C080-G still owns the final compatibility and focused sanitizer matrix.

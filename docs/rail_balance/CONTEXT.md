@@ -548,3 +548,10 @@ Out of scope until evidence expands the project:
   1→3 with no live ticket or terminal state. Watchdog review is Blocker0/High0.
   C080-C is locally complete, but no payload/JIT/Gin stage executes at D=1;
   C080-G compatibility/sanitizer and C080-H real D>1 remain separate gates.
+- C080-D's retained world-plan fault gap is closed at `6377e0c`. The existing
+  4x2/H256 two-window harness now corrupts one prepared plan value on rank 0,
+  models a missing tensor on rank 1, and requires exact value/count mismatch
+  tags before any B0 entry. Each generation aborts both matching owners
+  idempotently; generation 811 then completes the full round trip on the same
+  buffers. True EP8 and an independent Blocker0/High0 audit pass. This is test
+  preflight/recovery coverage and adds no production branch or device work.
