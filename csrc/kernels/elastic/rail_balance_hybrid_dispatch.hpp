@@ -180,6 +180,351 @@ static void __instantiate_kernel() {
     }
 };
 
+// Isolated C080-E runtime.  It deliberately has a distinct type, include,
+// kernel symbol, and cache key from DispatchRuntime, so merely compiling the
+// force specialization cannot change the legacy dispatch JIT identity.
+struct RailBalanceHybridDispatchSpec {
+    int num_sms;
+    int num_notify_warps;
+    int num_scaleout_warps;
+    int num_forward_warps;
+    int num_scaleout_ranks;
+    int num_scaleup_ranks;
+    int num_hidden_bytes;
+    int num_max_tokens_per_rank;
+    int num_experts;
+    int num_topk;
+    int expert_alignment;
+    int num_qps;
+    int64_t num_timeout_cycles;
+    int num_smem_bytes;
+    int proxy_capacity;
+};
+
+class RailBalanceHybridDispatchRuntime final:
+    public jit::LaunchRuntime<RailBalanceHybridDispatchRuntime> {
+public:
+    struct Args {
+        // Compile-time specialization.
+        RailBalanceHybridDispatchSpec spec;
+
+        // Legacy Hybrid dispatch ABI.
+        void* x;
+        sf_pack_t* sf;
+        topk_idx_t* topk_idx;
+        float* topk_weights;
+        topk_idx_t* copied_topk_idx;
+        int* cumulative_local_expert_recv_stats;
+        int* psum_num_recv_tokens_per_scaleup_rank;
+        int* psum_num_recv_tokens_per_expert;
+        int* num_unaligned_recv_tokens_per_expert;
+        int* dst_buffer_slot_idx;
+        int* token_metadata_at_forward;
+        int num_tokens;
+        int sf_token_stride;
+        int sf_hidden_stride;
+        jit::NoRefPtr nccl_dev_comm;
+        ncclWindow_t nccl_window;
+        void* buffer;
+        void* workspace;
+        void* mapped_host_workspace;
+
+        // Force-only compact schedule and payload arena.
+        void* rail_balance_arena;
+        const int* rail_balance_retained;
+        const int* rail_balance_moved;
+        const int* rail_balance_group_prefix;
+        const int* rail_balance_proxy_required;
+
+        int scaleout_rank_idx;
+        int scaleup_rank_idx;
+        jit::LaunchArgs launch_args;
+    };
+
+    static std::string generate_impl(const Args& args) {
+        const auto& s = args.spec;
+        return fmt::format(R"(
+#include <deep_ep/impls/rail_balance_hybrid_dispatch.cuh>
+
+using namespace deep_ep::elastic;
+
+static void __instantiate_kernel() {{
+    auto ptr = reinterpret_cast<void*>(
+        &rail_balance_hybrid_dispatch_impl<
+            true, false, {}, {}, {}, {}, {}, {}, {}, 0, {}, {}, {}, {}, {}, {}>);
+}}
+)",
+            s.num_sms,
+            s.num_notify_warps,
+            s.num_scaleout_warps,
+            s.num_forward_warps,
+            s.num_scaleout_ranks,
+            s.num_scaleup_ranks,
+            s.num_hidden_bytes,
+            s.num_max_tokens_per_rank,
+            s.num_experts,
+            s.num_topk,
+            s.expert_alignment,
+            s.num_qps,
+            s.num_timeout_cycles);
+    }
+
+    static void launch_impl(const jit::KernelHandle& kernel,
+                            const jit::LaunchConfigHandle& config,
+                            Args args) {
+        EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(
+            kernel, config,
+            args.x, args.sf, args.topk_idx, args.topk_weights,
+            args.copied_topk_idx,
+            args.cumulative_local_expert_recv_stats,
+            args.psum_num_recv_tokens_per_scaleup_rank,
+            args.psum_num_recv_tokens_per_expert,
+            args.num_unaligned_recv_tokens_per_expert,
+            args.dst_buffer_slot_idx,
+            args.token_metadata_at_forward,
+            args.num_tokens,
+            args.sf_token_stride, args.sf_hidden_stride,
+            args.nccl_dev_comm, args.nccl_window,
+            args.buffer,
+            args.workspace, args.mapped_host_workspace,
+            args.rail_balance_arena,
+            args.rail_balance_retained,
+            args.rail_balance_moved,
+            args.rail_balance_group_prefix,
+            args.rail_balance_proxy_required,
+            args.scaleout_rank_idx, args.scaleup_rank_idx));
+    }
+};
+
+static void validate_rail_balance_hybrid_dispatch_spec(
+    const RailBalanceHybridDispatchSpec& spec) {
+    EP_HOST_ASSERT(spec.num_sms >= 2);
+    EP_HOST_ASSERT(spec.num_notify_warps > 0 and
+                   spec.num_notify_warps % 4 == 0);
+    EP_HOST_ASSERT(spec.num_scaleout_warps > 0 and
+                   spec.num_scaleout_warps == spec.num_forward_warps);
+    EP_HOST_ASSERT(spec.num_scaleout_ranks >= 2 and
+                   spec.num_scaleout_ranks <= 32);
+    EP_HOST_ASSERT(spec.num_scaleup_ranks >= 2 and
+                   spec.num_scaleup_ranks <= 32);
+    EP_HOST_ASSERT(
+        spec.num_hidden_bytes > 0 and
+        spec.num_hidden_bytes %
+            (256 * static_cast<int>(sizeof(nv_bfloat16))) == 0 and
+        spec.num_hidden_bytes % ptx::kNumTMAAlignBytes == 0);
+    EP_HOST_ASSERT(spec.num_max_tokens_per_rank > 0);
+    EP_HOST_ASSERT(spec.num_experts > 0 and
+                   spec.num_experts %
+                       (spec.num_scaleout_ranks * spec.num_scaleup_ranks) == 0);
+    EP_HOST_ASSERT(spec.num_topk >= 1 and spec.num_topk <= 32);
+    EP_HOST_ASSERT(spec.expert_alignment == 1);
+    EP_HOST_ASSERT(spec.num_qps > 0);
+    EP_HOST_ASSERT(spec.num_timeout_cycles > 0);
+    EP_HOST_ASSERT(spec.num_smem_bytes > 0);
+    EP_HOST_ASSERT(spec.proxy_capacity > 0);
+    EP_HOST_ASSERT(
+        spec.num_sms * spec.num_scaleout_warps <=
+        rail_balance::kNumHybridMaxChannels);
+    EP_HOST_ASSERT(
+        (spec.num_notify_warps + spec.num_scaleout_warps +
+         spec.num_forward_warps) * 32 <= 1024);
+    const auto token_layout = layout::TokenLayout(
+        spec.num_hidden_bytes, 0, spec.num_topk, true);
+    const int notify_bytes = math::align(
+        spec.num_scaleout_ranks * spec.num_scaleup_ranks +
+            spec.num_experts,
+        spec.num_notify_warps * 32) * sizeof(int);
+    EP_HOST_ASSERT(
+        notify_bytes +
+            (spec.num_scaleout_warps + spec.num_forward_warps) *
+                token_layout.get_num_bytes<true>() <=
+        spec.num_smem_bytes);
+}
+
+static RailBalanceHybridDispatchRuntime::Args
+make_rail_balance_hybrid_dispatch_args(
+    const RailBalanceHybridDispatchSpec& spec) {
+    validate_rail_balance_hybrid_dispatch_spec(spec);
+    const int num_threads =
+        (spec.num_notify_warps + spec.num_scaleout_warps +
+         spec.num_forward_warps) * 32;
+    return {
+        .spec = spec,
+        .x = nullptr,
+        .sf = nullptr,
+        .topk_idx = nullptr,
+        .topk_weights = nullptr,
+        .copied_topk_idx = nullptr,
+        .cumulative_local_expert_recv_stats = nullptr,
+        .psum_num_recv_tokens_per_scaleup_rank = nullptr,
+        .psum_num_recv_tokens_per_expert = nullptr,
+        .num_unaligned_recv_tokens_per_expert = nullptr,
+        .dst_buffer_slot_idx = nullptr,
+        .token_metadata_at_forward = nullptr,
+        .num_tokens = 0,
+        .sf_token_stride = 0,
+        .sf_hidden_stride = 0,
+        .nccl_dev_comm = {nullptr},
+        .nccl_window = nullptr,
+        .buffer = nullptr,
+        .workspace = nullptr,
+        .mapped_host_workspace = nullptr,
+        .rail_balance_arena = nullptr,
+        .rail_balance_retained = nullptr,
+        .rail_balance_moved = nullptr,
+        .rail_balance_group_prefix = nullptr,
+        .rail_balance_proxy_required = nullptr,
+        .scaleout_rank_idx = 0,
+        .scaleup_rank_idx = 0,
+        .launch_args = jit::LaunchArgs(
+            spec.num_sms, num_threads, spec.num_smem_bytes,
+            2 - (spec.num_sms % 2), true),
+    };
+}
+
+static std::shared_ptr<jit::KernelRuntime>
+prepare_rail_balance_hybrid_dispatch(
+    const RailBalanceHybridDispatchSpec& spec) {
+    const auto args = make_rail_balance_hybrid_dispatch_args(spec);
+    const auto key = fmt::format(
+        "rail_balance_hybrid_dispatch_force_v1_"
+        "sm{}_nw{}_sw{}_fw{}_d{}_g{}_h{}_m{}_e{}_k{}_a{}_q{}_t{}",
+        spec.num_sms, spec.num_notify_warps,
+        spec.num_scaleout_warps, spec.num_forward_warps,
+        spec.num_scaleout_ranks, spec.num_scaleup_ranks,
+        spec.num_hidden_bytes, spec.num_max_tokens_per_rank,
+        spec.num_experts, spec.num_topk, spec.expert_alignment,
+        spec.num_qps, spec.num_timeout_cycles);
+    return jit::compiler->build(
+        key, RailBalanceHybridDispatchRuntime::generate(args));
+}
+
+// Compile the byte-immutable legacy kernel through a probe-specific runtime.
+// Do not call DispatchRuntime::generate here: its function-static recursive
+// include hash must never be initialized by synthetic geometry. This separate
+// LaunchRuntime still hashes the complete legacy include closure, so an old
+// cubin cannot survive a transitive source change under the probe cache key.
+class RailBalanceHybridLegacyDispatchProbeRuntime final:
+    public jit::LaunchRuntime<
+        RailBalanceHybridLegacyDispatchProbeRuntime> {
+public:
+    struct Args {
+        RailBalanceHybridDispatchSpec spec;
+    };
+
+    static std::string generate_impl(const Args& args) {
+        const auto& s = args.spec;
+        return fmt::format(R"(
+#include <deep_ep/impls/hybrid_dispatch.cuh>
+
+using namespace deep_ep::elastic;
+
+static void __instantiate_kernel() {{
+    auto ptr = reinterpret_cast<void*>(
+        &hybrid_dispatch_impl<
+            true, false, {}, {}, {}, {}, {}, {}, {}, 0, {}, {}, {}, {}, {}, {}>);
+}}
+)",
+        s.num_sms,
+        s.num_notify_warps,
+        s.num_scaleout_warps,
+        s.num_forward_warps,
+        s.num_scaleout_ranks,
+        s.num_scaleup_ranks,
+        s.num_hidden_bytes,
+        s.num_max_tokens_per_rank,
+        s.num_experts,
+        s.num_topk,
+        s.expert_alignment,
+        s.num_qps,
+        s.num_timeout_cycles);
+    }
+};
+
+static std::shared_ptr<jit::KernelRuntime>
+prepare_rail_balance_hybrid_legacy_dispatch_probe(
+    const RailBalanceHybridDispatchSpec& spec) {
+    validate_rail_balance_hybrid_dispatch_spec(spec);
+    const RailBalanceHybridLegacyDispatchProbeRuntime::Args args = {
+        .spec = spec,
+    };
+    const auto key = fmt::format(
+        "rail_balance_hybrid_dispatch_legacy_probe_v1_"
+        "sm{}_nw{}_sw{}_fw{}_d{}_g{}_h{}_m{}_e{}_k{}_a{}_q{}_t{}",
+        spec.num_sms, spec.num_notify_warps,
+        spec.num_scaleout_warps, spec.num_forward_warps,
+        spec.num_scaleout_ranks, spec.num_scaleup_ranks,
+        spec.num_hidden_bytes, spec.num_max_tokens_per_rank,
+        spec.num_experts, spec.num_topk, spec.expert_alignment,
+        spec.num_qps, spec.num_timeout_cycles);
+    return jit::compiler->build(
+        key, RailBalanceHybridLegacyDispatchProbeRuntime::generate(args));
+}
+
+// Test-only compile probe.  It exercises the actual force runtime and returns
+// its generated source for ABI assertions; it never launches the kernel or
+// changes the disabled force capability.
+static pybind11::dict rail_balance_hybrid_dispatch_codegen_test(
+    const int& num_scaleout_ranks,
+    const int& num_scaleup_ranks,
+    const int& hidden,
+    const int& num_topk,
+    const int& num_sms,
+    const int& num_channels_per_sm,
+    const int& proxy_capacity) {
+    EP_HOST_ASSERT(hidden > 0 and hidden % 256 == 0 and
+                   hidden <= INT_MAX /
+                       static_cast<int>(sizeof(nv_bfloat16)));
+    EP_HOST_ASSERT(num_topk >= 1 and num_topk <= 32);
+    EP_HOST_ASSERT(num_scaleout_ranks > 0 and num_scaleup_ranks > 0);
+    EP_HOST_ASSERT(num_scaleout_ranks <=
+                   INT_MAX / num_scaleup_ranks);
+    const int num_ranks = num_scaleout_ranks * num_scaleup_ranks;
+    constexpr int kSyntheticNumExperts = 256;
+    EP_HOST_ASSERT(kSyntheticNumExperts % num_ranks == 0);
+    const RailBalanceHybridDispatchSpec spec = {
+        .num_sms = num_sms,
+        .num_notify_warps = 4,
+        .num_scaleout_warps = num_channels_per_sm,
+        .num_forward_warps = num_channels_per_sm,
+        .num_scaleout_ranks = num_scaleout_ranks,
+        .num_scaleup_ranks = num_scaleup_ranks,
+        .num_hidden_bytes = hidden *
+            static_cast<int>(sizeof(nv_bfloat16)),
+        .num_max_tokens_per_rank = 8192,
+        .num_experts = kSyntheticNumExperts,
+        .num_topk = num_topk,
+        .expert_alignment = 1,
+        .num_qps = 9,
+        .num_timeout_cycles = 1000000000ll,
+        .num_smem_bytes = jit::device_runtime->get_num_smem_bytes(),
+        .proxy_capacity = proxy_capacity,
+    };
+    const auto args = make_rail_balance_hybrid_dispatch_args(spec);
+    const auto code = RailBalanceHybridDispatchRuntime::generate(args);
+    const auto runtime = prepare_rail_balance_hybrid_dispatch(spec);
+    EP_HOST_ASSERT(runtime != nullptr);
+    const RailBalanceHybridLegacyDispatchProbeRuntime::Args legacy_args = {
+        .spec = spec,
+    };
+    const auto legacy_code =
+        RailBalanceHybridLegacyDispatchProbeRuntime::generate(legacy_args);
+    const auto legacy_runtime =
+        prepare_rail_balance_hybrid_legacy_dispatch_probe(spec);
+    EP_HOST_ASSERT(legacy_runtime != nullptr);
+
+    pybind11::dict result;
+    result["code"] = code;
+    result["legacy_code"] = legacy_code;
+    result["num_threads"] = args.launch_args.num_threads;
+    result["num_channels"] = num_sms * num_channels_per_sm;
+    result["num_forward_metadata_dims"] = 3 + 2 * num_topk;
+    result["reuse_slot_indices"] = false;
+    result["num_sf_packs"] = 0;
+    result["proxy_capacity"] = proxy_capacity;
+    return result;
+}
+
 // Force-v1 count exchange is local to one physical LSA team even in a real
 // multi-node Hybrid job. This runtime deliberately specializes the existing
 // barrier implementation as synthetic (scaleout=1, scaleup=G); using the
@@ -679,6 +1024,16 @@ static void register_rail_balance_hybrid_plan_apis(pybind11::module_& m) {
         pybind11::arg("local_scaleout_rank"),
         pybind11::arg("proxy_capacity_per_egress"),
         pybind11::arg("remainder_seed") = pybind11::int_(0));
+    m.def(
+        "_rail_balance_hybrid_dispatch_codegen_test",
+        &rail_balance_hybrid_dispatch_codegen_test,
+        pybind11::arg("num_scaleout_ranks"),
+        pybind11::arg("num_scaleup_ranks"),
+        pybind11::arg("hidden"),
+        pybind11::arg("num_topk"),
+        pybind11::arg("num_sms") = 64,
+        pybind11::arg("num_channels_per_sm") = 4,
+        pybind11::arg("proxy_capacity") = 16);
 }
 
 }  // namespace deep_ep::elastic
