@@ -10,6 +10,7 @@
 #include <deep_ep/common/exception.cuh>
 
 #include "../kernels/elastic/rail_balance_plan.hpp"
+#include "../kernels/elastic/rail_balance_hybrid_combine.hpp"
 #include "../kernels/elastic/rail_balance_hybrid_dispatch.hpp"
 
 namespace deep_ep::elastic {
@@ -101,6 +102,7 @@ static void register_rail_balance_apis(pybind11::module_& m) {
         pybind11::arg("counts"),
         pybind11::arg("remainder_seed") = pybind11::int_(0));
     register_rail_balance_hybrid_plan_apis(m);
+    register_rail_balance_hybrid_combine_apis(m);
 }
 
 }  // namespace deep_ep::elastic
