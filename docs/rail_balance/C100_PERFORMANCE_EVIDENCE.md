@@ -9,14 +9,14 @@ are separate diagnostic experiments.  Raw reports stay under the ignored
 
 ```text
 environment manifest: FROZEN
-large source fixture: FUNCTIONAL_PASS, NO_DIAGNOSTIC_PROFILE
-large return fixture: FUNCTIONAL_PASS, NSYS_ATTRIBUTED
+large source fixture: FUNCTIONAL_PASS, POST_O077_NSYS_AND_NCU_ATTRIBUTED
+large return fixture: FUNCTIONAL_PASS, PRE_AND_POST_NSYS_ATTRIBUTED
 checked-adapter benchmark harness: AUDITED_PASS
 profiler-free baseline: SOURCE_AND_RETURN_COLLECTED, TAIL_STABILITY_NOT_ACCEPTED
-O077 immediate pre-change baseline: TWELVE_RUNS_GATED_AND_RETAINED
-new Nsys attribution: FORMAL_H7168_PASS, EXACT_NCU_TARGET_SELECTED
-new NCU dossier: BASIC_AND_DIRECTED_SCHEDULER_WARP_NVLINK_PASS
-performance-path change: NONE
+O077 profiler-free A/B: TWENTY_FOUR_RUNS_GATED_AND_RETAINED, MIXED_RESULT
+new Nsys attribution: O077_SOURCE_RETURN_TRADEOFF_CONFIRMED
+new NCU dossier: SOURCE_HIGH_LOW_SCAN_BASIC_CONTROL_PASS
+performance-path change: O077_CONDITIONAL_PARENT; O078_PRE_REGISTERED
 ```
 
 The workload in this local phase is a synthetic BF16 communication-operator
@@ -1077,3 +1077,232 @@ GPUs, a persistent per-run JSON path, at least 10 warmup iterations and 100
 steady iterations.  Source/return and H256/H7168 are separate processes with
 fresh JIT caches.  Exact commands and report hashes are recorded with the
 accepted runs; Nsys/NCU use separate diagnostic invocations and artifacts.
+
+## O077 profiler-free A/B result (2026-07-22)
+
+The immediate A side is the clean `fc39bf7` tree under
+`.cache/rail_balance/c100/o077/pre-fc39bf7/`; the B side is the clean final
+`f895eff` tree under `.cache/rail_balance/c100/o077/post-f895eff/`.  Each side
+contains three independent direct runs for source/return at H256/H7168, with
+10 warmups and 100 retained steady samples per report.  All identity,
+persistence, idle-GPU, co-tenant and MPS gates pass.  An independent audit
+recomputed all 2,400 samples exactly.
+
+| Checked adapter | A median of run medians (us) | B (us) | B/A latency |
+| --- | ---: | ---: | ---: |
+| source H256 | 118.382 | 181.365 | +53.20% |
+| source H7168 | 132.721 | 188.542 | +42.06% |
+| return H256 | 207.612 | 157.288 | -24.24% |
+| return H7168 | 333.360 | 257.583 | -22.73% |
+
+The separately recorded coarse `finish` envelope includes the node-local plan
+barrier, plan/prefix work, status D2H, stream synchronization and Python status
+materialization:
+
+| Transaction label | A finish (us) | B finish (us) | B/A latency |
+| --- | ---: | ---: | ---: |
+| source H256 | 368.428 | 367.907 | -0.14% |
+| source H7168 | 300.568 | 364.664 | +21.32% |
+| return H256 | 324.961 | 337.255 | +3.78% |
+| return H7168 | 365.680 | 387.053 | +5.84% |
+
+This is not an additive plan-kernel time and its tails are unstable.  Nsys
+later isolates the changed post-source prefix kernel at only about +1.9 us.
+The coarse table is retained to satisfy O077's pre-registered plan-cost gate;
+it prevents the favorable H7168 adapter-only sum from being presented as an
+overall transaction or production win.
+
+For each of the four checked-adapter rows, all three same-label comparisons
+agree in direction; pooled medians and ten-percent trimmed means agree as
+well.  The coarse finish same-label directions are mixed, consistent with its
+classification as a noisy synchronization envelope.  The source and return
+fixtures are independent checked adapters.  They cannot be added into a
+production Hybrid EP critical path, and this result is not an end-to-end
+training or MoE result.  This is a typical-median tradeoff only: p95/p99/max
+tails remain unstable, the B-side return-H7168 maximum reaches 2.468 ms, and
+pre/post GPU snapshots cannot exclude a transient that begins and ends during
+a run.
+
+All twelve B JSON SHA256 values are:
+
+```text
+6c121b2b24ee8a252a9bc33387fec5b0deaa8ae167190143ec2b68f16e5a4efa  source-h256-r1.json
+fd98db6f830401f85f938d0ba256227cc27bdebe816595e51d800993ad7a9c1a  source-h256-r2.json
+724e60fa1eba7179a72fb4d75c8d9f333c4c9273f139aae53f22107251eabf8b  source-h256-r3.json
+1be9aeeb46367abc74ad965b2cb9f7add0656d0e5188cf9dbc2b2948c719208f  source-h7168-r1.json
+855f91aa5272c2df26c96f4dff6899bcdd145b9cd1d0fa2dcf5deddff2fb9711  source-h7168-r2.json
+e5862e3962d532f08157bf6e6a234b24be39fe326ebedfa2b7ae878ac161a64e  source-h7168-r3.json
+3fa37bcf2365a7c43427adff5a967f78e23c149d3103c14c55323e87e9f142ee  return-h256-r1.json
+061cd10d552ed96f801b124262ee3de02ff9a9b346e774c463db69cd52ce3144  return-h256-r2.json
+11bdb59d0c2c74eeb92f2aeb376da3128bafadf9222c736ccd4ba8085074f39d  return-h256-r3.json
+4bd8bacabe0e0ceda4e8c68a5345e1a13f04b2a7aa30a383561b8d5fafb8ad11  return-h7168-r1.json
+7d37dc7da5c7294f22fcde153ee4b64f370232169ff8f01274ad63371e4edd90  return-h7168-r2.json
+a6d6065b2c85e863db642a102a2c059cb1b877a4bf4ae8c52b94af3b3b5cbe2c  return-h7168-r3.json
+```
+
+Tracked B-side distribution index, in microseconds except CV:
+
+| Case | median | p95 | p99 | max | mean | std | CV % |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| source H256 r1 | 177.178 | 194.082 | 207.881 | 298.937 | 179.797 | 14.114 | 7.850 |
+| source H256 r2 | 187.892 | 207.294 | 222.793 | 264.494 | 189.986 | 12.022 | 6.328 |
+| source H256 r3 | 181.365 | 209.417 | 309.836 | 907.981 | 191.958 | 73.656 | 38.371 |
+| source H7168 r1 | 182.757 | 192.928 | 202.955 | 221.828 | 182.811 | 7.281 | 3.983 |
+| source H7168 r2 | 188.542 | 204.471 | 277.911 | 377.126 | 191.868 | 21.940 | 11.435 |
+| source H7168 r3 | 189.762 | 200.715 | 210.313 | 214.037 | 190.133 | 6.662 | 3.504 |
+| return H256 r1 | 157.288 | 182.056 | 325.195 | 829.984 | 167.298 | 71.189 | 42.552 |
+| return H256 r2 | 157.845 | 175.673 | 237.026 | 347.665 | 162.346 | 22.735 | 14.004 |
+| return H256 r3 | 153.224 | 177.574 | 370.726 | 525.358 | 160.543 | 44.107 | 27.474 |
+| return H7168 r1 | 267.719 | 308.695 | 499.650 | 787.065 | 278.488 | 59.510 | 21.369 |
+| return H7168 r2 | 257.583 | 288.371 | 353.086 | 700.835 | 264.847 | 46.043 | 17.385 |
+| return H7168 r3 | 250.294 | 294.897 | 378.707 | 2468.341 | 278.089 | 220.876 | 79.427 |
+
+The corresponding rank-local maximum adapter distributions are:
+
+| Case | median | p95 | p99 | max | mean | std | CV % |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| source H256 r1 | 134.670 | 148.497 | 153.266 | 240.974 | 135.587 | 11.707 | 8.634 |
+| source H256 r2 | 131.669 | 141.518 | 151.990 | 154.356 | 132.832 | 5.257 | 3.958 |
+| source H256 r3 | 132.484 | 142.705 | 211.705 | 850.449 | 140.727 | 71.888 | 51.083 |
+| source H7168 r1 | 144.538 | 149.257 | 158.798 | 166.093 | 143.428 | 5.024 | 3.503 |
+| source H7168 r2 | 145.312 | 155.286 | 194.782 | 214.701 | 146.521 | 9.795 | 6.685 |
+| source H7168 r3 | 140.207 | 147.380 | 153.184 | 160.433 | 141.202 | 3.462 | 2.452 |
+| return H256 r1 | 150.418 | 178.018 | 276.022 | 707.096 | 159.736 | 58.371 | 36.542 |
+| return H256 r2 | 154.195 | 171.597 | 231.863 | 324.361 | 158.563 | 20.533 | 12.949 |
+| return H256 r3 | 148.536 | 172.818 | 357.171 | 453.948 | 154.947 | 37.789 | 24.389 |
+| return H7168 r1 | 261.310 | 292.360 | 463.087 | 764.032 | 270.633 | 56.341 | 20.818 |
+| return H7168 r2 | 251.339 | 278.803 | 339.854 | 686.271 | 258.165 | 44.919 | 17.399 |
+| return H7168 r3 | 247.064 | 278.723 | 371.278 | 2438.569 | 272.882 | 218.286 | 79.993 |
+
+## O077 post-change Nsys attribution
+
+Nsys 2024.6.2 collected separate full-process H7168 post-O077 diagnostics with
+`cuda,nvtx,osrt`, no CPU sampling/context-switch sampling, `wait=primary`,
+10 warmups and 100 steady iterations.  Diagnostic timing is not relabelled as
+the profiler-free baseline.  Each SQLite contains one outer window, 800 exact
+target ranges and the expected eight-device launch identity.
+
+The table's comparator is not the immediate `fc39bf7` A-side.  It is the
+earlier clean `6339ee2` formal return-H7168 Nsys report, including that report's
+identity-matched prerequisite-source range.  This is a cross-run diagnostic
+distribution comparison with the same kernel identity, shape and call order,
+not a same-session or correlation-ID A/B.
+
+| Diagnostic interval/kernel | formal comparator p50 (us) | O077 post p50 (us) | Interpretation |
+| --- | ---: | ---: | --- |
+| device-6 source kernel | 53.952 | 105.376 | unchanged SASS/launch; stable scan-work regression |
+| per-ordinal maximum source kernel | 55.520 | 105.376 | source critical rank becomes device 6 |
+| pooled return kernel | 135.168 | 59.232 | target-channel spreading succeeds |
+| eight-device return union | 144.726 | 64.450 | interval union, not summed durations |
+| return union excluding simultaneous copy/barrier | 93.871 | 56.470 | diagnostic non-overlap union decreases 39.84% |
+| return completion skew | 52.000 | 9.435 | straggler spread contracts |
+| prefix kernel | 86.912 | 88.848 | approximately 1.9 us; not source root cause |
+
+The four return-fixture memcpy distributions show no material shift.  Post
+source device 6 is longest in 100/100 iterations.  B1 arrival remains the diagnostic tail
+source, so the Nsys envelope and NCU result are not used to explain host/rank
+arrival outliers.  The verified SQLite joins and interval-union query are
+persisted in `sql/o077_nsys_queries.sql` by this evidence checkpoint.
+The 140.806-us source and 93.871/56.470-us return values mean only “target
+kernel active while no fixture copy/barrier is active” inside these exact
+diagnostic ranges.  They are not a production exposed critical-path fraction
+and cannot be used as Amdahl's `f`.
+
+Artifact identity:
+
+```text
+85f64b34059b1df648de4cc5b31cfae146f68e7a12b2ad45ae06d0a1d395d7dd  source-h7168.json
+570dce21d74a7e3a037bb5c852505298839ce150dd169eea2cf88b8f3355b45d  source-h7168.nsys-rep
+82bffcad8e4c78ed546b55da15a7155247b60455113b9384a2822ac60f958268  source-h7168.sqlite
+9b3247e3ab53e68d708389d21116595a8540781fc70167454875471f9d76e143  return-h7168.json
+cc68ff0e4635a722fb22a1d4e911e3541de629ad36e7fe953247cdaa2f804879  return-h7168.nsys-rep
+10d0501796e6ae6b5f480b8f47cb2ff86798610fb66cb7ec22f93e036719d4b5  return-h7168.sqlite
+76796122cdacb4a790f82f1995620094da6e4f660f1a793c638b3d84e1889b78  source-h7168.console.log
+8501e55144288578bdc475ad1adfa40b4a258036b21bae8f6af81b53a3112f9b  return-h7168.console.log
+```
+
+The files are under
+`.cache/rail_balance/c100/o077/nsys-post-f895eff/`.  The formal pre-return
+SQLite SHA256 is
+`b4e5181d724d3e781841dfde320bf55b89618088fdb923504ebbed9ad1083b97`.
+
+## O077 source-resolver NCU dossier
+
+```text
+Kernel:
+  rail_balance_hybrid_source_shuffle_impl<7168,4>
+Invocation identity:
+  f895eff; BF16 G8/D9/N1024/C256/H7168/K4; 7,168 global moved copies;
+  dispatch TokenLayout 14,400 B; 896 records/rank; context 1; stream 26;
+  c100/source/stage/steady/26; same-name device-local ordinal 37 zero-based;
+  device 6 exposed target and device 0 natural low-scan control; grid 256;
+  block 32; REG74; dynamic shared memory 14,432 B; identical code, shape,
+  copy count and payload bytes; prefix contents intentionally differ by rank
+Nsight Systems exposed time:
+  device-6 p50 105.376 us; post source union p50 154.975 us and
+  140.806 us after overlapping memcpy removal
+Launch configuration:
+  256 one-warp CTAs, 0.13 waves/SM, theoretical occupancy 23.44%
+Primary limiter:
+  data-dependent linear scan of the monotonic moved-channel prefix
+Secondary limiter:
+  unresolved by the basic set; TMA/global-memory latency is a hypothesis, not
+  an established limiter; neither aggregate compute nor DRAM is saturated
+Supporting NCU metrics:
+  device 0/device 6 dynamic instructions = 906,250/2,971,264;
+  LSU pipe = 0.092655%/0.505456% of peak; achieved occupancy =
+  2.66%/2.65%; active warps/SM = 1.70/1.70; SM throughput =
+  0.29%/1.02%; DRAM throughput = 0.84%/0.71%
+Contradicting evidence:
+  device 0 is fast with identical code and launch; replay SM clocks differ
+  (1.98 versus 1.50 GHz), so NCU durations are not compared; no full/source-PC
+  report identifies an exact instruction and none is needed for this variable
+Relevant source/PTX/SASS:
+  resolve_hybrid_copy in rail_balance_hybrid_plan.cuh; source kernel SASS is
+  bit-identical before/after O077; O077 moves average target channel from
+  about 15.5 to 111.5 and adds an estimated 688,128 scan steps
+Optimization hypothesis:
+  bounded upper-bound lookup over the producer-generated monotonic prefix for
+  the retained canonical plan; this
+  is a new 7,168-copy experiment, not a relabelling of the rejected three-copy
+  fixed-overhead binary-resolver report
+Expected kernel speedup:
+  device-6 source p50 should move materially from about 105 us toward the
+  pre-O077 approximately 54-us value without losing the return result
+Expected end-to-end speedup ceiling:
+  missing evidence: no full MoE/training critical-path fraction exists locally
+Confidence:
+  high for source-fixture root cause; unknown for production multi-node speedup
+Next falsification experiment:
+  O078 changes only the resolver lookup, then repeats exact correctness,
+  profiler-free source/return A/B and the same source Nsys window
+```
+
+NCU 2025.1.1 used `--set basic`, `--target-processes all`, exact device
+0-or-6/NVTX steady-26/demangled-kernel filters, `--launch-count 1`, `--kill 0`
+and strict whole-application replay for ten passes because the kernel writes
+peer proxy memory.  Cache and clock controls were `none`.  Kernel/range replay
+and NCU duration comparisons remain forbidden.  Reports:
+
+```text
+6ea81dd88f9823b93f071aff46e3bc1e30513cdbc8ffde743b8b667c4de79820  source-h7168-rank0-basic.json
+d4c43783c800c85ec37db3d1b1608cae0cd4831daca964991bf01514d1286ba1  source-h7168-rank0-basic.log
+83baa42dea96d3e6241565e53f0e5683454ad42cf315f38984c3e024379a8247  source-h7168-rank0-basic.ncu-rep
+f3a54903c2c9f50244658d43d235d0d711b8cc449386e3f81afcc29249010ebf  source-h7168-rank0-basic.console.log
+d0c4361325f1a27630056e39f6ea6bcd8223d0e0dfae5954c8247285842ee1e7  source-h7168-rank6-basic.json
+6617a2c7cc11e3d6fd932fe61139277a17880121c1347c8103a57fec18764d59  source-h7168-rank6-basic.log
+dd835e5518cd160304d6a3d8883e9002556feffcfed14cd86df701d380aa0c27  source-h7168-rank6-basic.ncu-rep
+edf521c5265b673c7312a6f08beef63de0c41a57d2cdbc7b9980596614d82217  source-h7168-rank6-basic.console.log
+```
+
+The benchmark argv is embedded in each JSON.  There is no separate standalone
+outer-command artifact, but the exact NCU command is retained in each report's
+session metadata and the exact Nsys command/config/cwd is embedded in each raw
+report.  O078 and later captures also save the outer command as a visible text
+artifact to make this evidence easier to audit without report import tools.
+
+The O077 decision is therefore conditional: keep its auditable checkpoint and
+its return-channel result, but do not accept the current combined hot path.
+Only O078's single-variable resolver experiment is authorized.  Real Gin/RDMA,
+NIC/QP behavior, full-model overlap and production end-to-end speedup remain
+missing evidence.

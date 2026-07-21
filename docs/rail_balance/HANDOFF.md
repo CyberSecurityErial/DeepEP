@@ -21,10 +21,11 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Recent code and measurement checkpoints are `1888908` (complete
-  profiler-free collection), `f5e7906` (Nsys contract), `feaf03e` (steady-only
-  diagnostic NVTX mode), and `bf01ccd` (final clean instrumentation smokes) on
-  `fork/feat/rail-balance-prototype`.
+- Recent code and measurement checkpoints include `fc39bf7` (immediate O077
+  A side) and `f895eff` (O077 final correctness/sanitizer tree and complete B
+  side).  D089-D091 retain the profiler-free, post Nsys and source NCU result;
+  O077 is mixed/conditional and O078 is the only authorized next hot-path
+  experiment.  The remote will advance again with this evidence checkpoint.
 - Both capability bits remain false and no result claims real Gin/RDMA
   behavior. The local activation evidence is complete, but the public methods
   deliberately remain unreachable through a normal force construction until a
@@ -250,7 +251,9 @@ No C070 timing is performance evidence.
 ## Resume instructions
 
 1. Read this file plus `CONTEXT.md`, `CHECKPOINTS.md`, the tail of
-   `DEVELOPMENT_LOG.md`, and `OPTIMIZATION_LOG.md` decisions O011-O012.
+   `DEVELOPMENT_LOG.md`, and `OPTIMIZATION_LOG.md` decisions O077-O078.  O011-
+   O012 remain the older immutable design boundary when historical context is
+   needed.
 2. Verify branch and state with `git status --short --branch`, then run both
    `git diff --check` and `git diff --cached --check`.
 3. Do not redo C061/C070 unless the relevant code changes.
@@ -260,14 +263,27 @@ No C070 timing is performance evidence.
    Rail/Gin correctness passes. D1 evidence is never a D>1 Gin success claim.
 6. C090 is complete. Do not rerun its unchanged full suites or sanitizer
    kernels unless production device code changes.
-7. The GPU evidence-chain skill is installed; formal Nsys attribution plus the
-   exact `basic` and directed scheduler/warp/NVLink NCU captures are complete.
-   Implement and test only O076's target-channel-distribution variable.  Do not
-   change the TMA loop, block geometry, proxy ABI, barriers or public/default-
-   off contract.  Recheck idle GPUs before no-profiler A/B, then use the same
-   H256/H7168 contract and Nsys window.  Default kernel/range replay, relaxed
-   matching and `full` remain forbidden.  C105 packages the fastest possible
-   real-cluster bring-up afterward.
+7. O077's functional, sanitizer, three-run profiler-free A/B, post Nsys and
+   exact source NCU controls are complete at `f895eff`.  It improves return but
+   regresses source because `resolve_hybrid_copy` linearly scans O077's later
+   target-channel prefixes.  Keep O077 as an auditable parent, not a final
+   unconditional hot path.
+8. Current experiment O078 may change only that resolver scan into a bounded
+   upper-bound lookup over the producer-generated, post-Gate2 immutable
+   monotonic prefix.  Gate2 does not rescan every prefix value.  Preserve row
+   endpoint, final containment, slot/capacity checks and all currently tested
+   fault/recovery paths; do not claim arbitrary nonmonotonic-memory detection.
+   Do not change plan/quota/slots, TMA, layout, queue/atomics, block geometry,
+   barriers, return, public ABI, capability bits or default-off behavior.
+9. Audit valid-prefix and endpoint/out-of-range semantics before editing.  Then
+   run fresh-JIT focused source/return/vnode/fault/default-off correctness and
+   sanitizer.
+   Recheck idle GPUs before repeating the same three-run H256/H7168
+   profiler-free matrix.  Repeat source Nsys only after a positive no-profiler
+   result; use NCU only if the instruction prediction needs confirmation.
+   Default kernel/range replay, relaxed matching and `full` remain forbidden.
+10. Transfer matrices and compute interference remain after O078.  C105 then
+   packages the fastest real-cluster bring-up; real D>1 Gin remains C080-H.
 
 Pinned runtime for accepted commands:
 

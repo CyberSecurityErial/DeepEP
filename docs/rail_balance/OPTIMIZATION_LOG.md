@@ -1784,3 +1784,126 @@ prefix-filtered racecheck all pass.  The first three report zero errors;
 racecheck reports zero hazards, zero errors and zero warnings.  This is the
 final correctness gate for O077; it is not performance evidence and does not
 claim that racecheck proves cross-GPU system-scope ordering.
+
+## Measurement decision O077 — retain the result, not the current hot-path cost
+
+The complete profiler-free B side, identity-matched cross-run Nsys diagnostics
+and exact NCU controls make O077 a mixed result rather than an unconditional
+optimization.  The three run-median aggregates show source H256/H7168
+regressions of 53.20%/42.06% and return H256/H7168 improvements of
+24.24%/22.73%.  These are independent checked adapters, not additive
+production-EP phases, so neither their sums nor their diagnostic NVTX envelopes
+are called an end-to-end speedup.
+
+Nsys isolates both directions in unchanged-launch, unchanged-SASS kernels.  At
+H7168 the pooled return-kernel p50 falls from 135.168 to 59.232 us and its
+copy/barrier-excluded union falls from 93.871 to 56.470 us.  Conversely, the
+unchanged source kernel on device 6 rises from a 53.952-us pre-O077 p50 to
+105.376 us and is longest in 100/100 post iterations.  Prefix materialization
+itself rises only about 1.9 us.  Exact NCU application-replay controls then show
+2,971,264 dynamic instructions on the high-channel device 6 versus 906,250 on
+the same-code low-channel device 0, with neither SM nor DRAM saturated.  NCU
+durations are not compared because replay clocks differ.
+
+This proves target-channel packing is a return bottleneck for the frozen C100
+checked adapter only.  It does not prove a production Hybrid critical-path
+fraction.  Typical medians are repeatable, but p95/p99/max tails are not
+accepted as stable; post return-H7168 retains a 2.468-ms maximum.
+
+The causal chain is therefore:
+
+```text
+O077 spreads return work from 32 to 224 channels
+-> return-unshuffle parallelism and finish skew improve
+-> moved target ordinals now resolve around later physical channels
+-> source's unchanged linear channel-prefix scan executes much more work
+-> source latency regresses in every profiler-free run
+```
+
+O077 remains committed as an auditable parent and proves that target-channel
+packing is a real return bottleneck for the frozen checked adapter.  It is not
+accepted as the final/default hot path by itself.  It may be retained only if
+the following independent resolver experiment removes the source cost without
+losing its return result; otherwise the production complexity is reverted
+while all measurements and failed-experiment logs stay retained.
+
+## Optimization experiment O078 — bounded monotonic prefix lookup
+
+O078 changes one variable inside `resolve_hybrid_copy`: replace the linear
+`channel=0..C-1` scan of `moved_channel_prefix` with a bounded upper-bound
+lookup for the first channel whose exclusive end is greater than the incoming
+ordinal.  With an endpoint check, C=256 needs eight bounded search iterations
+rather than a data-dependent average near one hundred.  After selection,
+the existing containment condition remains mandatory:
+
+```text
+prefix[channel] <= incoming_ordinal < prefix[channel + 1]
+```
+
+This deliberately reopens, rather than erases, an older rejected binary-search
+result.  The old tiny source fixture moved only three 576-byte records and was
+fixed-overhead dominated; its binary resolver was slower and remains rejected.
+O078 is a new large-volume hypothesis authorized by 7,168 copies, a stable
+rank/channel latency gradient and a 2.065-million-instruction device control.
+The new result must stand on its own no-profiler A/B data.
+
+The plan producer supplies a nondecreasing prefix and the runtime contract
+treats its tensors as immutable after Gate2.  Gate2 propagates plan status; it
+does not rescan every prefix value.  O078 therefore preserves explicit row
+endpoint, candidate containment, channel/slot and caller capacity checks, but
+does not claim to detect every arbitrary post-Gate2 nonmonotonic memory
+mutation.  The old linear scan cannot guarantee that either when a corrupt row
+still contains a plausible overlapping interval.  A full O(C) integrity scan
+would erase the measured resolver objective and is not bundled into O078.
+
+No other variable may change: ABI, plan/quota/keep/segments, channel rotation,
+proxy count or slots, allocation, queue/atomic behavior, TokenLayout, payload
+bytes, TMA issue/wait/fence order, barriers, launch geometry, return kernel,
+public API, capability bits and default-off behavior remain identical.  No
+inverse manifest, per-copy cache or new workspace is added.
+
+Pre-registered predictions are:
+
+1. CPU/GPU plan bytes, 7,168 moved copies, proxy slots and all owner/egress/
+   destination mappings stay bit-exact.
+2. Device-6 source H7168 kernel p50 falls materially from about 105 us toward
+   the pre-O077 approximately 54-us value, and the rank-dependent duration
+   gradient contracts.
+3. Source dynamic instructions on the high-channel target fall materially
+   from 2.971 million toward the low-channel control's 0.906 million.
+4. Plan/prefix code and exact outputs remain unchanged.  Return must satisfy
+   the quantified no-regression gates below; in particular O077's approximately
+   59-us pooled return-kernel p50 should be retained.
+5. Profiler-free source H256/H7168 improves in three clean runs without a
+   corresponding return regression.
+
+Falsification order:
+
+1. Audit valid-prefix equivalence, endpoint/out-of-range rejection and the
+   pre-existing immutable-plan/fault boundary.
+2. Implement only the bounded lookup and run focused CPU/unit checks.
+3. Use fresh JIT caches for exact source, return, vnode, fault/WORLD and
+   default-off/codegen regressions affected by the shared resolver.
+4. Run focused memcheck/synccheck/initcheck/racecheck for the changed source
+   resolver; do not claim racecheck proves inter-GPU ordering.
+5. On an idle eight-GPU window, repeat the same three profiler-free source and
+   return H256/H7168 runs.  If positive, repeat the same H7168 source Nsys
+   window.  Repeat NCU only when needed to confirm the instruction prediction
+   or resolve an Nsys/no-profiler disagreement.
+
+The no-profiler acceptance rule is fixed before editing.  For both H256 and
+H7168, every one of the three same-label O078 source medians must beat O077,
+the median of run medians must improve by at least 25%, and pooled median plus
+ten-percent trimmed mean must each improve by at least 20%.  For each return
+width, the median of run medians, pooled median and trimmed mean may regress no
+more than 5%, and no same-label median may regress more than 10%.  Raw
+p95/p99/max remain reported but are not a primary accept gate because the
+frozen baseline already rejects their stability.  Nsys must show the device-6
+source-kernel p50 and rank gradient contract while return launch/SASS remains
+unchanged; no production end-to-end claim is inferred.
+
+Reject O078 if exact semantics change or any quantified source/return gate
+fails.  In that case revert the resolver complexity and reassess whether O077
+itself should leave the production hot path.  Do not escalate to TMA
+pipelining, queues, block-geometry changes or a work manifest without a new
+evidence chain.

@@ -938,3 +938,44 @@ Out of scope until evidence expands the project:
   segments, proxy slots/count, payload bytes, TMA loop, synchronization,
   default-off behavior and public API must stay unchanged.  Preserve a failed
   experiment and collect memory/source counters before any TMA-loop rewrite.
+
+## C100 O077 result and O078 resume context (2026-07-22)
+
+- O077 at clean `f895eff` is functionally and sanitizer complete.  It rotates
+  only pure-deficit target windows and changes the frozen C100 return layout
+  from 32 channels x 28 records to 224 channels x 4 records, with 7,168 moved
+  copies.  Plan schema, quota/keep/segments, proxy count/dense slots, payload
+  bytes and owner/egress/destination mapping stay unchanged; `moved` and
+  `moved_channel_prefix` values intentionally change physical channels.
+- Its complete no-profiler A/B is mixed: source H256/H7168 median-of-run-medians
+  regress 53.20%/42.06%, while return H256/H7168 improve 24.24%/22.73%.
+  Source and return are independent adapters and cannot be summed into a model
+  step or claimed as production end-to-end performance.
+- Identity-matched cross-run Nsys diagnostics prove the tradeoff is inside the
+  device kernels: pooled return
+  p50 falls 135.168 to 59.232 us, while unchanged-SASS device-6 source p50
+  rises 53.952 to 105.376 us.  Exact NCU controls show 2,971,264 dynamic
+  instructions on device 6 versus 906,250 on low-channel device 0, without SM
+  or DRAM saturation.  The root cause is the source resolver's linear scan over
+  later O077 channel-prefix positions, not prefix materialization itself.
+- Raw A/B, Nsys and NCU reports live under
+  `.cache/rail_balance/c100/o077/`; immutable hashes and query boundaries are
+  in `DEVELOPMENT_LOG.md` D089-D091 and `C100_PERFORMANCE_EVIDENCE.md`.
+- O077 is retained as an auditable parent and return-parallelism proof, not an
+  accepted final hot path.  Current work is O078: replace only the
+  producer-generated monotonic-prefix linear scan in `resolve_hybrid_copy`
+  with a bounded
+  upper-bound lookup.  Preserve endpoint/containment/slot validation and every
+  currently tested fault/recovery path; do not change ABI, plan, slots, layout,
+  TMA, barriers, launch, return, public API or default-off identity.
+- Before editing, audit valid-prefix equivalence and malformed-prefix behavior.
+  Gate2 propagates producer status but does not rescan every prefix element;
+  the post-Gate2 plan is immutable by contract.  Neither the old linear scan
+  nor O078 promises detection of every adversarial nonmonotonic memory edit.
+  After the one-variable edit, use fresh JIT caches for focused resolver,
+  source/return/vnode/fault/default-off correctness and sanitizer.  Only on an
+  idle eight-GPU window repeat the three-run H256/H7168 profiler-free matrix;
+  repeat source Nsys if positive and NCU only if attribution remains ambiguous.
+- Transfer-matrix and compute-interference experiments remain after this
+  resolver decision.  Real D>1 Rail/Gin runtime remains C080-H/C110's external
+  environment gate and is not inferred from LSA/vnode results.

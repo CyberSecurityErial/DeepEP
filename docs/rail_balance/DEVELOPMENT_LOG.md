@@ -5004,3 +5004,237 @@ env OMP_NUM_THREADS=1 EP_DISABLE_GIN=1 \
 
 No sanitizer command failed in D088.  O077 can now enter profiler-free B-side
 measurement on an eligibility-gated idle eight-GPU window.
+
+## 2026-07-22 — D089: retain the complete O077 profiler-free B side
+
+The final `f895eff` tree was clean, all eight GPUs were idle, and no Megatron,
+MGT or other compute application was present.  Twelve direct, unwrapped runs
+used OMP=1, independent empty JIT roots, 10 warmups and 100 steady iterations.
+All twelve automatic identity, persistence, GPU-state, MPS and co-tenant gates
+passed.  An independent audit parsed all 24 A/B reports, recomputed every
+summary from 2,400 raw steady samples, and found zero disagreement.  Across 84
+paired JIT artifact identities recorded in the reports, only
+`rail_balance_hybrid_prefix_v1` changes cubin identity between A and B.  A
+read-only `cuobjdump` audit while all 168 generated cubins were still present
+confirmed 12/12 changed prefix SASS pairs and 72/72 identical non-prefix
+pairs.  The B cubin files live in temporary JIT roots and are not called
+retained artifacts; their cubin byte hashes, source identities and report
+paths remain recorded in the persistent JSON.  Source, return, count, plan,
+barrier and epilogue cubin identities are bit-identical.
+
+The median of the three run medians is:
+
+| Checked adapter | A (us) | B (us) | B/A latency |
+| --- | ---: | ---: | ---: |
+| source H256 | 118.382 | 181.365 | +53.20% |
+| source H7168 | 132.721 | 188.542 | +42.06% |
+| return H256 | 207.612 | 157.288 | -24.24% |
+| return H7168 | 333.360 | 257.583 | -22.73% |
+
+The benchmark's coarse `finish` envelope contains the node-local plan barrier,
+plan/prefix kernels, status D2H, stream synchronization and Python status
+materialization.  Its median of three run medians is:
+
+| Transaction label | A finish (us) | B finish (us) | B/A latency |
+| --- | ---: | ---: | ---: |
+| source H256 | 368.428 | 367.907 | -0.14% |
+| source H7168 | 300.568 | 364.664 | +21.32% |
+| return H256 | 324.961 | 337.255 | +3.78% |
+| return H7168 | 365.680 | 387.053 | +5.84% |
+
+These coarse values are noisy synchronization envelopes, not an additive plan
+kernel or production phase.  The post Nsys source report later isolates the
+prefix kernel at only about +1.9 us.  The table is retained because O077
+pre-registered plan cost; it prevents the favorable H7168 source-plus-return
+adapter sum from being misreported as an overall win.
+
+For each of the four checked-adapter rows, all three same-label comparisons
+have the same direction.  Pooled medians and ten-percent trimmed means agree,
+so the tradeoff is not produced by the retained millisecond tails.  The coarse
+finish same-label directions are mixed, consistent with treating that metric
+only as a noisy synchronization envelope.  Source and return are independent
+checked adapters and are not added into a production EP time.  Their
+same-label H7168 sums are only a diagnostic selection signal: they fall 2.31%,
+4.35% and 5.67%, whereas H256 rises 1.39%, 2.01% and 4.13%.  O077 therefore
+advances to Nsys as an H7168-conditional experiment, not as an unconditional
+speedup.
+
+The retained B-side JSON hashes are:
+
+```text
+6c121b2b24ee8a252a9bc33387fec5b0deaa8ae167190143ec2b68f16e5a4efa  source-h256-r1.json
+fd98db6f830401f85f938d0ba256227cc27bdebe816595e51d800993ad7a9c1a  source-h256-r2.json
+724e60fa1eba7179a72fb4d75c8d9f333c4c9273f139aae53f22107251eabf8b  source-h256-r3.json
+1be9aeeb46367abc74ad965b2cb9f7add0656d0e5188cf9dbc2b2948c719208f  source-h7168-r1.json
+855f91aa5272c2df26c96f4dff6899bcdd145b9cd1d0fa2dcf5deddff2fb9711  source-h7168-r2.json
+e5862e3962d532f08157bf6e6a234b24be39fe326ebedfa2b7ae878ac161a64e  source-h7168-r3.json
+3fa37bcf2365a7c43427adff5a967f78e23c149d3103c14c55323e87e9f142ee  return-h256-r1.json
+061cd10d552ed96f801b124262ee3de02ff9a9b346e774c463db69cd52ce3144  return-h256-r2.json
+11bdb59d0c2c74eeb92f2aeb376da3128bafadf9222c736ccd4ba8085074f39d  return-h256-r3.json
+4bd8bacabe0e0ceda4e8c68a5345e1a13f04b2a7aa30a383561b8d5fafb8ad11  return-h7168-r1.json
+7d37dc7da5c7294f22fcde153ee4b64f370232169ff8f01274ad63371e4edd90  return-h7168-r2.json
+a6d6065b2c85e863db642a102a2c059cb1b877a4bf4ae8c52b94af3b3b5cbe2c  return-h7168-r3.json
+```
+
+The first read-only schema command used the absent unqualified `python` and
+failed with `python: command not found`; it was repeated with the pinned
+interpreter.  A broad `rg` also named a nonexistent top-level `tools/` path and
+reported that path error while still returning the existing matches.  Neither
+failure touched a benchmark, artifact or source file.
+
+## 2026-07-22 — D090: Nsys proves the source/return tradeoff in device kernels
+
+Nsys 2024.6.2 collected separate H7168 source and return diagnostics at clean
+`f895eff`.  Both used the already accepted full-process-tree topology,
+`cuda,nvtx,osrt`, no CPU sampling or context-switch sampling, `wait=primary`,
+10 warmups, 100 steady iterations and SQLite export.  Both commands exited
+zero, produced one outer `c100_nsys_window`, exactly 800 exact target ranges,
+and left no process or GPU allocation.
+
+The source report matches one grid-256/block-32, REG74, 14,432-byte dynamic-
+shared source kernel plus one 4-byte D2H in every exact range.  Device 6 is the
+longest kernel in 100/100 iterations: its p50 is 105.376 us versus 53.952 us
+in the unchanged-SASS pre-O077 prerequisite source.  The per-ordinal maximum
+p50 changes 55.520 to 105.376 us.  The post source target union p50 is
+154.975 us and is 140.806 us with overlapping memcpy removed.  Its run-local tail
+still follows rank launch skew, but the A/B median regression lives inside the
+source kernel.
+
+The return report preserves grid-256/block-32, REG60, 14,400-byte dynamic
+shared memory and the exact D2D/B1/return/B4/D2D/D2H sequence.  The pooled
+return-kernel p50 changes 135.168 to 59.232 us, the eight-device union changes
+144.726 to 64.450 us, and the union with every simultaneous copy/barrier
+removed changes 93.871 to 56.470 us.  All four memcpy distributions are
+effectively unchanged.  Return completion skew falls from 52.000 to 9.435 us.
+B1 arrival remains the diagnostic tail source, so no return NCU result is used
+to explain those host/rank-arrival outliers.
+
+The changed prefix kernel itself moves only from 86.912 to 88.848 us pooled
+p50 and from REG62 to REG64; its approximately 1.9-us cost cannot explain the
+approximately 50-us source regression.  The installed Nsys recipes are not
+used because their Python environment lacks `pandas`; installed stats/analyze,
+the verified SQLite schema and retained interval SQL provide the evidence
+without modifying the machine environment.
+
+Raw hashes are:
+
+```text
+85f64b34059b1df648de4cc5b31cfae146f68e7a12b2ad45ae06d0a1d395d7dd  source-h7168.json
+570dce21d74a7e3a037bb5c852505298839ce150dd169eea2cf88b8f3355b45d  source-h7168.nsys-rep
+82bffcad8e4c78ed546b55da15a7155247b60455113b9384a2822ac60f958268  source-h7168.sqlite
+76796122cdacb4a790f82f1995620094da6e4f660f1a793c638b3d84e1889b78  source-h7168.console.log
+9b3247e3ab53e68d708389d21116595a8540781fc70167454875471f9d76e143  return-h7168.json
+cc68ff0e4635a722fb22a1d4e911e3541de629ad36e7fe953247cdaa2f804879  return-h7168.nsys-rep
+10d0501796e6ae6b5f480b8f47cb2ff86798610fb66cb7ec22f93e036719d4b5  return-h7168.sqlite
+8501e55144288578bdc475ad1adfa40b4a258036b21bae8f6af81b53a3112f9b  return-h7168.console.log
+```
+
+## 2026-07-22 — D091: exact NCU basic control identifies linear resolver work
+
+Nsys selected device 6, `c100/source/stage/steady/26`, source-shuffle
+`<7168,4>`.  Default kernel/range replay remains unsafe because the kernel
+writes peer proxy memory.  Two strict whole-application controls therefore use
+NCU 2025.1.1 application replay, `kill 0`, exact NVTX/kernel filters, `basic`,
+uncontrolled cache and unmodified clocks.  Device 6 is the exposed target;
+device 0 is a low-scan control with identical code, shape, copy count, launch
+and payload bytes.  Each report completes ten passes, each pass prints the
+full eight-rank PASS, and cleanup is exact.
+
+| Basic metric | device 0 | device 6 |
+| --- | ---: | ---: |
+| dynamic instructions | 906,250 | 2,971,264 |
+| LSU-pipe percent of peak | 0.092655% | 0.505456% |
+| waves/SM | 0.13 | 0.13 |
+| theoretical / achieved occupancy | 23.44% / 2.66% | 23.44% / 2.65% |
+| achieved active warps/SM | 1.70 | 1.70 |
+| SM / DRAM throughput | 0.29% / 0.84% | 1.02% / 0.71% |
+| observed SM / DRAM clock | 1.98 / 3.20 GHz | 1.50 / 3.20 GHz |
+
+Device 6 executes 2,065,014 more instructions, or 3.2786 times device 0, while
+neither compute nor DRAM is saturated.  This is the clock-independent control
+needed to connect the stable Nsys rank gradient to the channel-prefix loop;
+the replay durations 311.360 and 370.272 us are deliberately not compared.
+The basic report is sufficient to authorize one bounded resolver experiment;
+a full or speculative TMA rewrite is not authorized.
+
+```text
+6ea81dd88f9823b93f071aff46e3bc1e30513cdbc8ffde743b8b667c4de79820  source-h7168-rank0-basic.json
+d4c43783c800c85ec37db3d1b1608cae0cd4831daca964991bf01514d1286ba1  source-h7168-rank0-basic.log
+83baa42dea96d3e6241565e53f0e5683454ad42cf315f38984c3e024379a8247  source-h7168-rank0-basic.ncu-rep
+f3a54903c2c9f50244658d43d235d0d711b8cc449386e3f81afcc29249010ebf  source-h7168-rank0-basic.console.log
+d0c4361325f1a27630056e39f6ea6bcd8223d0e0dfae5954c8247285842ee1e7  source-h7168-rank6-basic.json
+6617a2c7cc11e3d6fd932fe61139277a17880121c1347c8103a57fec18764d59  source-h7168-rank6-basic.log
+dd835e5518cd160304d6a3d8883e9002556feffcfed14cd86df701d380aa0c27  source-h7168-rank6-basic.ncu-rep
+edf521c5265b673c7312a6f08beef63de0c41a57d2cdbc7b9980596614d82217  source-h7168-rank6-basic.console.log
+```
+
+## 2026-07-22 — D092: close O077 evidence and pre-register O078
+
+The long-running Goal remains active.  Three independent read-only audits
+checked the 24 profiler-free reports, post source/return Nsys reports, source
+NCU controls, current documents and the proposed resolver semantics.  All
+reported performance values and 28 newly indexed artifact hashes match their
+raw files.  The audit also corrected several claim boundaries before any hot-
+path edit:
+
+- the formal Nsys comparator is clean `6339ee2`, not the immediate `fc39bf7`
+  no-profiler A side;
+- source/return fixture times are independent checked adapters and their sum is
+  never a production Hybrid or model step;
+- O077 intentionally changes `moved` and `moved_channel_prefix`, while schema,
+  quota/keep/segments, dense proxy count/slots, payload bytes and logical
+  owner/egress/destination identity remain fixed;
+- diagnostic copy/barrier-nonoverlap union is not a production exposed
+  critical-path fraction;
+- basic NCU proves excess dynamic work without proving a secondary TMA or
+  global-memory limiter, and replay durations remain incomparable;
+- typical medians are repeatable but tails remain unstable, including one
+  2.468-ms post return-H7168 event;
+- the coarse plan `finish` envelope is retained but includes barriers, status
+  D2H, synchronization and Python status materialization.  Its H256/H7168
+  source changes are -0.14%/+21.32% and return changes +3.78%/+5.84%; these are
+  not additive kernel times.  Nsys isolates the changed prefix kernel at only
+  about +1.9 us.
+
+`docs/rail_balance/sql/o077_nsys_queries.sql` now persists the Nsys 2024.6.2
+globalTid/globalPid join, exact NVTX containment, launch identity/cardinality,
+target-duration distributions, interval union and copy/barrier overlap logic.
+The host has no `sqlite3` executable, so the first documented CLI validation
+failed with `sqlite3: command not found`.  The pinned Python sqlite3 3.53.2
+module then executed the exact file read-only.  Its first CTE version omitted
+`MATERIALIZED` and left four slow read-only Python/SQLite processes; after
+positive PID/command inspection, only those diagnostic process pairs
+`1710191/1710192`, `1713001/1713002`, `1713414/1713415` and
+`1714942/1714943` were terminated with SIGTERM.  Adding materialization made
+both reports finish in under a second and reproduced:
+
+```text
+post source: 100 rows, target union 154975.0 ns, clean union 140806.0 ns
+post return: 100 rows, target union 64449.5 ns, clean union 56470.0 ns
+```
+
+A broad `/tmp` `find` used while checking temporary B-side cubins traversed
+other users' protected directories and emitted permission-denied noise.  It
+did not read those directories, write a file or affect a process.  The query
+was narrowed afterward.  B cubin files are explicitly temporary; persistent
+JSON retains their byte/source identities.  A read-only cuobjdump audit while
+they existed found 12/12 changed prefix and 72/72 identical non-prefix pairs.
+
+The O078 semantic audit proves upper-bound lookup equals the linear resolver
+for producer-generated nondecreasing prefixes, including zero-width channels.
+With an endpoint check, the inclusive C=256/C=1024 search takes at most 8/10
+iterations and then rechecks the complete local containment.  Gate2 propagates
+plan status but does not rescan every prefix element.  Neither the old linear
+resolver nor a logarithmic resolver can reject every adversarial nonmonotonic
+row that still contains a plausible overlapping interval.  O078 therefore
+keeps the actual immutable-plan contract, row endpoint, containment,
+channel/slot/capacity checks and existing fault recovery; it does not add an
+O(C) integrity pass or claim arbitrary memory-corruption detection.
+
+O078 is a single-variable experiment.  It may replace only the source
+resolver's prefix scan.  Quantified accept/reject thresholds are frozen in
+`OPTIMIZATION_LOG.md`: every same-label source median improves, aggregate
+source medians/trimmed statistics clear 25%/20% gates, and return aggregate/
+per-run regressions stay within 5%/10%.  ABI, plan, channel rotation, proxy
+layout, TMA, barriers, launch geometry, return, public API, capability bits and
+default-off identity remain closed.  No GPU command ran in D092.
