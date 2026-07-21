@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -243,7 +244,8 @@ def _run_case(name: str) -> None:
     # The compile-only comparison owns two independent LaunchRuntime-derived
     # caches. It must never initialize CombineRuntime's function-static include
     # hash with a synthetic probe geometry.
-    assert "CombineRuntime::generate" not in runtime_header
+    assert not re.search(
+        r"(?<![A-Za-z0-9_])CombineRuntime::generate\(", runtime_header)
     assert '#include "combine.hpp"' not in runtime_header
     assert "RailBalanceHybridCombineRuntime::generate" in runtime_header
     assert "RailBalanceHybridLegacyCombineProbeRuntime::generate" in \
