@@ -5,7 +5,9 @@
 #include <climits>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <tuple>
+#include <vector>
 
 #include <c10/cuda/CUDAGuard.h>
 #include <nccl.h>
@@ -854,6 +856,28 @@ struct RailBalanceHybridDispatchRawPointers {
     int* status;
 };
 
+struct RailBalanceHybridDispatchCompletionRawPointers {
+    void* recv_x;
+    topk_idx_t* recv_topk_idx;
+    float* recv_topk_weights;
+    int* recv_src_metadata;
+};
+
+// Exact receive storage is the only dispatch ownership which cannot exist
+// before Gate #1: its leading dimension is published by the main kernel.
+// Install this owner before submitting the copy epilogue so a later launch,
+// status-readback, or synchronization failure cannot release in-flight memory.
+struct RailBalanceHybridDispatchCompletion {
+    torch::Tensor recv_x;
+    torch::Tensor recv_topk_idx;
+    torch::Tensor recv_topk_weights;
+    torch::Tensor recv_src_metadata;
+    int num_recv_tokens;
+    int num_expanded_tokens;
+    std::vector<int> num_recv_tokens_per_expert_list;
+    RailBalanceHybridDispatchCompletionRawPointers raw;
+};
+
 // The first force dispatch prepares the complete round trip.  Receive payload
 // tensors are deliberately absent: their exact leading dimension is only
 // known after the main dispatch publishes CPU counts.  Every other Tensor,
@@ -879,6 +903,8 @@ struct RailBalanceHybridDispatchBundle {
     std::shared_ptr<PreparedRailBalanceHybridCombine> main_combine;
 
     RailBalanceHybridDispatchRawPointers raw;
+    std::optional<RailBalanceHybridDispatchCompletion>
+        dispatch_completion;
     at::cuda::CUDAStream compute_stream;
     int num_tokens;
     int hidden;

@@ -32,6 +32,27 @@ using RailBalanceProtocolTensors = std::tuple<
     torch::Tensor,
     torch::Tensor>;
 
+// Keep the private force completion byte-for-byte compatible with the native
+// dispatch return contract so Python can reuse its existing unpack/EPHandle
+// construction without adding a second public result shape.
+using RailBalanceHybridDispatchResult = std::tuple<
+    torch::Tensor,
+    std::optional<torch::Tensor>,
+    std::optional<torch::Tensor>,
+    std::optional<torch::Tensor>,
+    std::optional<torch::Tensor>,
+    int,
+    int,
+    std::vector<int>,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    torch::Tensor,
+    std::optional<torch::Tensor>,
+    std::optional<torch::Tensor>,
+    std::optional<EventHandle>>;
+
 using RailBalanceVNodeTensors = std::tuple<
     torch::Tensor,
     torch::Tensor,
@@ -577,6 +598,10 @@ public:
             static_cast<int64_t>(num_destinations) * num_rails *
                 num_max_tokens_per_rank <= INT_MAX);
         EP_HOST_ASSERT(
+            static_cast<int64_t>(num_destinations) * num_rails *
+                num_max_tokens_per_rank *
+                std::min(num_topk, num_local_experts) <= INT_MAX);
+        EP_HOST_ASSERT(
             static_cast<int64_t>(rank_idx) * num_max_tokens_per_rank +
                 (num_tokens > 0 ? num_tokens - 1 : 0) <= INT_MAX);
 
@@ -866,6 +891,7 @@ public:
                     .dispatch_epilogue = std::move(dispatch_epilogue),
                     .main_combine = std::move(main_combine),
                     .raw = dispatch_raw,
+                    .dispatch_completion = std::nullopt,
                     .compute_stream = compute_stream,
                     .num_tokens = num_tokens,
                     .hidden = hidden,
@@ -1125,6 +1151,182 @@ public:
             scaleout_rank_idx, scaleup_rank_idx, comm_stream);
         pending.shuffled = true;
         pending.state = RailBalanceHybridPlanState::DispatchLive;
+    }
+
+    RailBalanceHybridDispatchResult rail_balance_hybrid_dispatch_finish(
+        const int& invocation_id) {
+        EP_HOST_ASSERT(not destroyed);
+        EP_HOST_ASSERT(rail_balance_hybrid_plan_pending.has_value());
+        auto& pending = rail_balance_hybrid_plan_pending.value();
+        EP_HOST_ASSERT(pending.invocation_id == invocation_id);
+        EP_HOST_ASSERT(
+            pending.state == RailBalanceHybridPlanState::DispatchLive);
+        EP_HOST_ASSERT(pending.plan_status == 0);
+        EP_HOST_ASSERT(pending.shuffled);
+        EP_HOST_ASSERT(pending.dispatch_bundle != nullptr);
+        auto& bundle = *pending.dispatch_bundle;
+        EP_HOST_ASSERT(bundle.dispatch_epilogue != nullptr);
+        EP_HOST_ASSERT(not bundle.dispatch_completion.has_value());
+        EP_HOST_ASSERT(bundle.raw.host_scaleup_rank_count != nullptr);
+        EP_HOST_ASSERT(bundle.raw.host_expert_count != nullptr);
+        EP_HOST_ASSERT(bundle.raw.status != nullptr);
+        EP_HOST_ASSERT(
+            at::cuda::getCurrentCUDAStream(device_index).id() ==
+            bundle.compute_stream.id());
+
+        const auto& prepared_epilogue = *bundle.dispatch_epilogue;
+        const auto raw = bundle.raw;
+        const int num_local_experts = bundle.num_local_experts;
+        const int hidden = bundle.hidden;
+        const int num_topk = bundle.num_topk;
+        const int scaleout_rank_idx = bundle.scaleout_rank_idx;
+        const int scaleup_rank_idx = bundle.scaleup_rank_idx;
+        const int64_t max_num_recv_tokens =
+            static_cast<int64_t>(bundle.num_destinations) *
+            bundle.num_rails * bundle.num_max_tokens_per_rank;
+        const int64_t max_num_expanded_tokens =
+            max_num_recv_tokens * std::min(num_topk, num_local_experts);
+
+        // Main dispatch has already crossed the publication boundary. Every
+        // fallible completion step below is therefore fail-closed; only a
+        // fully owned, synchronized result may restore DispatchLive.
+        pending.state = RailBalanceHybridPlanState::Invalid;
+        const c10::cuda::CUDAGuard device_guard(device_index);
+
+        int64_t num_recv_tokens_i64 = 0;
+        int64_t num_expanded_tokens_i64 = 0;
+        int counter_scaleup_rank_idx = 0;
+        int counter_local_expert_idx = 0;
+        std::vector<int> num_recv_tokens_per_expert_list;
+        num_recv_tokens_per_expert_list.reserve(num_local_experts);
+        const auto start_cpu_time =
+            std::chrono::high_resolution_clock::now();
+        while (true) {
+            bool ready = true;
+            while (counter_scaleup_rank_idx < bundle.num_rails and ready) {
+                const int64_t encoded_count =
+                    raw.host_scaleup_rank_count[counter_scaleup_rank_idx];
+                EP_HOST_ASSERT(encoded_count != INT64_MIN);
+                const int64_t count =
+                    math::encode_decode_positive(encoded_count);
+                if ((ready = math::is_decoded_positive_ready(count))) {
+                    EP_HOST_ASSERT(
+                        count >= 0 and
+                        count <= max_num_recv_tokens - num_recv_tokens_i64);
+                    num_recv_tokens_i64 += count;
+                    ++counter_scaleup_rank_idx;
+                }
+            }
+            while (counter_local_expert_idx < num_local_experts and ready) {
+                const int64_t encoded_count =
+                    raw.host_expert_count[counter_local_expert_idx];
+                EP_HOST_ASSERT(encoded_count != INT64_MIN);
+                const int64_t count =
+                    math::encode_decode_positive(encoded_count);
+                if ((ready = math::is_decoded_positive_ready(count))) {
+                    EP_HOST_ASSERT(
+                        count >= 0 and count <= INT_MAX and
+                        count <= max_num_expanded_tokens -
+                            num_expanded_tokens_i64);
+                    num_recv_tokens_per_expert_list.push_back(
+                        static_cast<int>(count));
+                    num_expanded_tokens_i64 += count;
+                    ++counter_local_expert_idx;
+                }
+            }
+            if (ready)
+                break;
+            const auto now = std::chrono::high_resolution_clock::now();
+            if (std::chrono::duration_cast<std::chrono::seconds>(
+                    now - start_cpu_time).count() > num_cpu_timeout_secs)
+                throw EPExceptionWithLineInfo(
+                    "Rail-balance dispatch CPU wait",
+                    "mapped receive counters did not become ready");
+        }
+        EP_HOST_ASSERT(num_recv_tokens_i64 <= INT_MAX);
+        EP_HOST_ASSERT(num_expanded_tokens_i64 <= INT_MAX);
+        const int num_recv_tokens =
+            static_cast<int>(num_recv_tokens_i64);
+        const int num_expanded_tokens =
+            static_cast<int>(num_expanded_tokens_i64);
+
+        auto recv_x = torch::empty(
+            {num_recv_tokens, hidden}, bundle.x.options());
+        auto recv_topk_idx = torch::empty(
+            {num_recv_tokens, num_topk}, bundle.topk_idx.options());
+        auto recv_topk_weights = torch::empty(
+            {num_recv_tokens, num_topk}, bundle.topk_weights.options());
+        auto recv_src_metadata = torch::empty(
+            {num_recv_tokens, num_topk + 2},
+            bundle.dst_buffer_slot_idx.options());
+
+        bundle.dispatch_completion.emplace(
+            RailBalanceHybridDispatchCompletion{
+                .recv_x = std::move(recv_x),
+                .recv_topk_idx = std::move(recv_topk_idx),
+                .recv_topk_weights = std::move(recv_topk_weights),
+                .recv_src_metadata = std::move(recv_src_metadata),
+                .num_recv_tokens = num_recv_tokens,
+                .num_expanded_tokens = num_expanded_tokens,
+                .num_recv_tokens_per_expert_list =
+                    std::move(num_recv_tokens_per_expert_list),
+                .raw = {},
+            });
+        auto& completion = bundle.dispatch_completion.value();
+        completion.raw = {
+            .recv_x = completion.recv_x.data_ptr(),
+            .recv_topk_idx =
+                completion.recv_topk_idx.data_ptr<topk_idx_t>(),
+            .recv_topk_weights =
+                completion.recv_topk_weights.data_ptr<float>(),
+            .recv_src_metadata =
+                completion.recv_src_metadata.data_ptr<int>(),
+        };
+
+        launch_prepared_rail_balance_hybrid_dispatch_epilogue(
+            prepared_epilogue,
+            raw.buffer, raw.workspace,
+            raw.psum_num_recv_tokens_per_scaleup_rank,
+            raw.psum_num_recv_tokens_per_expert_inclusive,
+            completion.raw.recv_x,
+            completion.raw.recv_topk_idx,
+            completion.raw.recv_topk_weights,
+            completion.raw.recv_src_metadata,
+            raw.channel_linked_list,
+            num_recv_tokens,
+            scaleout_rank_idx, scaleup_rank_idx, comm_stream);
+
+        // This is the first safe synchronization after H4c's adjacent
+        // source/main commit. It observes source status and turns every
+        // asynchronous source, main, or epilogue failure into sticky Invalid.
+        int host_status = 0;
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            &host_status, raw.status, sizeof(host_status),
+            cudaMemcpyDeviceToHost, comm_stream));
+        CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
+        pending.plan_status = host_status;
+        EP_HOST_ASSERT(host_status == 0);
+
+        RailBalanceHybridDispatchResult result = {
+            completion.recv_x,
+            std::nullopt,
+            completion.recv_topk_idx,
+            completion.recv_topk_weights,
+            bundle.copied_topk_idx,
+            completion.num_recv_tokens,
+            completion.num_expanded_tokens,
+            completion.num_recv_tokens_per_expert_list,
+            bundle.psum_num_recv_tokens_per_scaleup_rank,
+            bundle.psum_num_recv_tokens_per_expert,
+            bundle.num_unaligned_recv_tokens_per_expert,
+            completion.recv_src_metadata,
+            bundle.dst_buffer_slot_idx,
+            bundle.token_metadata_at_forward,
+            bundle.channel_linked_list,
+            std::nullopt,
+        };
+        pending.state = RailBalanceHybridPlanState::DispatchLive;
+        return result;
     }
 
     void rail_balance_hybrid_source_shuffle(
@@ -4868,6 +5070,10 @@ static void register_apis(pybind11::module_& m) {
         .def(
             "_rail_balance_hybrid_dispatch_commit",
             &ElasticBuffer::rail_balance_hybrid_dispatch_commit,
+            pybind11::arg("invocation_id"))
+        .def(
+            "_rail_balance_hybrid_dispatch_finish",
+            &ElasticBuffer::rail_balance_hybrid_dispatch_finish,
             pybind11::arg("invocation_id"))
         .def(
             "_rail_balance_hybrid_source_shuffle",
