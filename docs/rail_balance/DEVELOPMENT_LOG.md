@@ -3018,3 +3018,49 @@ does not claim real Gin/RDMA behavior.
 Commits `2f39a46` and `878b0db` are pushed to the fork. H4a may now connect the
 same fixed Gate1/Gate2 protocol to the force dispatch transaction while both
 capability bits remain false.
+
+## 2026-07-21 — D049: make pending-plan state transitions explicit
+
+H4a replaces the pending plan's ambiguous `finished` bit with the smallest
+state machine needed by the production transaction:
+
+```text
+Preparing -> PlanReady -> DispatchLive
+                              |
+                              v
+                           Invalid
+```
+
+`finish` accepts only `Preparing` or an idempotent `PlanReady`. Source shuffle,
+return unshuffle, combine epilogue, and snapshots require `PlanReady`; their
+existing one-shot flags remain unchanged. Abort is invocation-scoped: a stale
+ID is a no-op, a matching precommit transaction is released, a matching live
+dispatch becomes permanently `Invalid`, and an already invalid transaction is
+left unchanged. `DispatchLive` is intentionally unreachable until H4c owns the
+real dispatch commit.
+
+The H3b EP8 test now calls abort with stale invocation 8300 while invocation
+8301 is pending. It still completes the same eighteen fixed MAX gates, so this
+proves stale cleanup cannot erase a newer plan without adding another
+collective or test-only runtime path.
+
+Accepted evidence after rebuilding the extension:
+
+```text
+PASS C080-H3b real planner WORLD gates ... 18 fixed MAX gates
+PASS C080-D true 8-GPU source shuffle, including H256/H7168 arena reuse
+PASS C080-F true 8-GPU return unshuffle, one-shot rejection, abort/recovery
+PASS C080-D source-shuffle faults: sticky status, capacity, duplicate, recovery
+PASS prepared source and return raw-submit adapter gates
+PASS six Hybrid combine codegen cases plus constraints 8/8
+PASS 9/9 C080-A Hybrid API tests
+PASS 4/4 legacy Hybrid identity goldens
+PASS full extension build, py_compile, and git diff --check
+PASS independent state audit: no blocking issue
+```
+
+No performance claim is made and no NCU/Nsys run was started. Public `force`
+and both capability bits remain disabled. Commit `52b165e` is the recoverable
+H4a code checkpoint; H4b next prepares the complete owning dispatch bundle
+before Gate1, and H4c performs the uninterrupted raw commit and enters
+`DispatchLive`.

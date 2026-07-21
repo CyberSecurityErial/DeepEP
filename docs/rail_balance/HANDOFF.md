@@ -83,6 +83,10 @@ the exact file snapshots without inventing commit identity.
 - The H3a EP8 command was rerun immediately before the pause on port 29951 and
   passed. H3b later passed its final EP8 run with eighteen fixed MAX gates and
   final audits of 0 Blocker/High/Medium.
+- H4a explicit pending states are committed at `52b165e`. After a full rebuild,
+  H3b's eighteen-gate EP8 suite (including stale abort), true 8-GPU source and
+  return LSA paths, source faults, raw adapters, combine codegen, API 9/9, and
+  legacy 4/4 all pass. Independent state audit found no blocking issue.
 
 ## Mandatory retained boundary
 
@@ -103,11 +107,13 @@ No C070 timing is performance evidence.
 2. Verify branch and state with `git status --short --branch` and run
    `git diff --cached --check`.
 3. Do not redo C061/C070 unless the relevant code changes.
-4. H3b already connects H3a storage to private plan Gate1/Gate2. Implement the
-   production C080 dispatch transaction next; do not return to vnode or the
-   obsolete CPU-manifest/sidecar path. Keep the pre-window mixed-mode boundary
-   explicit, derive C/topology in C++, and launch shuffle→force dispatch in one
-   C++ commit call.
+4. H3b already connects H3a storage to private plan Gate1/Gate2, and H4a owns
+   explicit fail-closed states. Implement H4b's complete owning dispatch
+   prepare bundle next, then H4c's production commit; do not return to vnode or
+   the obsolete CPU-manifest/sidecar path. Keep the pre-window mixed-mode
+   boundary explicit, derive C/topology in C++, and launch shuffle→force
+   dispatch in one C++ commit call. Only that successful commit may enter
+   `DispatchLive`.
    Its accepted evidence is in
    `tests/elastic/test_rail_balance_hybrid_plan_world_gate.py`: CPU and EP8
    watchdog, four abort/retry states, capacity/asymmetric fail-close,

@@ -470,3 +470,9 @@ Out of scope until evidence expands the project:
   on a zero-N rank, invalid route, real capacity failure, asymmetric Gate2
   error, four abort/retry states, fourteen exact outputs, and eighteen MAX
   calls. This is the H4 transaction substrate; public force remains disabled.
+- H4a now gives that substrate explicit host-only ownership states:
+  `Preparing`, `PlanReady`, reserved `DispatchLive`, and permanent `Invalid`.
+  Stale abort is a no-op; matching precommit abort releases state; matching
+  live abort poisons it. A true EP8 stale-ID case plus source/return/fault
+  regressions pass after the extension rebuild. No CUDA ABI or hot path changed,
+  and `DispatchLive` must remain unreachable until H4c commits real dispatch.

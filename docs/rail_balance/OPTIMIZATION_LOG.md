@@ -984,3 +984,23 @@ This matters for zero-token ranks: shape `(0,K+1)` is locally valid and can
 otherwise prepare a different JIT/layout while contributing no route data. A
 focused EP8 fault now proves Gate1 rejects this difference before the LSA
 barrier. N and local rail identities remain deliberately absent.
+
+## Host-path decision O048 — use four explicit states, not a coordinator
+
+The pending force transaction needs to distinguish a prepared plan from a
+published dispatch. A second Boolean would permit invalid combinations, while
+a generic transaction/coordinator class would add indirection and lifecycle
+surface without helping the CUDA hot path. The accepted representation is one
+host-only `uint8_t` enum: `Preparing`, `PlanReady`, `DispatchLive`, `Invalid`.
+
+This change adds no device field, Tensor, collective, allocation, launch,
+branch, or JIT specialization. Existing one-shot stage flags stay local to the
+private validation path. A stale abort compares only the invocation ID and
+does nothing; precommit abort releases ownership; post-publication abort poisons
+the object instead of pretending published network work can be rolled back.
+The permanent invalid state is deliberate fail-closed behavior.
+
+`DispatchLive` is reserved until the real shuffle-to-dispatch commit exists.
+Making it reachable early was rejected because it would make state evidence
+stronger than the implementation. H4c must set it only after the adjacent raw
+source and main-dispatch launches have been committed successfully.
