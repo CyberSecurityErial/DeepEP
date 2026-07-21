@@ -1659,3 +1659,64 @@ long-latency memory dependency, not the exact responsible instruction; if
 channel distribution fails to improve the no-profiler result, collect bounded
 memory/source evidence before touching that loop.  This is deliberately a
 simple plan-layout experiment, not a new runtime abstraction.
+
+## Optimization experiment O077 — rotate destination channel windows
+
+The first O076 experiment uses destination-window rotation, not balanced
+waterfill and not a `channels * destinations` return grid.  For one egress and
+destination, define:
+
+```text
+incoming[d] = quota[e,d] - keep[e,d]
+span[d]     = ceil(incoming[d] / channel_capacity)
+start[d]    = exclusive_prefix_sum(span)[d] mod num_channels
+```
+
+Retained counts remain the native source-channel prefixes.  Starting at
+`start[d]`, one cyclic O(C) pass greedily places the unchanged `incoming[d]`
+copies into each channel's `channel_capacity - retained` spare space.  A final
+physical-channel pass rebuilds the existing monotonic moved prefix; the
+channel-major/destination-minor group prefix and dense proxy slots are
+unchanged.  The capacity proof remains
+`sum(spare) >= quota - keep`, so a complete cyclic pass must consume every
+incoming copy.
+
+This is the smallest natural change because each destination lane can reuse the
+current warp scan to obtain `start`; no field, allocation, atomic, queue,
+manifest, kernel argument, public option or return-kernel instruction changes.
+For the frozen C100 G8/D9/N1024/C256 case, the exact prediction per egress is:
+
+```text
+before: 32 channels * 28 records, 224 empty
+after:  224 channels * 4 records, 32 empty
+```
+
+The following facts must remain bit-exact: count/quota/keep/segments,
+`proxy_required=896`, global `moved_copies=7168`, proxy slot density, payload,
+metadata, owner/egress/destination identity and final combine output.  Add
+explicit zero-move, cyclic-wrap, non-divisible, retained-capacity and exact
+C100 distribution checks.  CPU oracle and validator change first; the GPU
+prefix materializer then mirrors them and must pass exact CPU/GPU parity before
+any performance run.
+
+Two costs are pre-registered rather than hidden.  The planner gains one channel
+pass.  More importantly, the current source resolver linearly scans physical
+target-channel prefixes; the C100 average resolved channel is expected to move
+from about 15.5 to about 111.5.  Therefore source, return and plan are all
+measured at H256 and H7168.  A return-only win is rejected if source/plan cost
+absorbs it.  Binary search, waterfill, TMA pipelining and a compact work queue
+are separate future hypotheses and must not be bundled into O077.
+
+The falsification order is fixed:
+
+1. Capture a clean, immediate profiler-free pre-change source/return baseline
+   if all eight GPUs are idle; otherwise preserve the prior accepted baseline
+   and defer timing without blocking functional work.
+2. Change CPU oracle/validator and focused goldens; run CPU correctness.
+3. Change only the GPU target-channel materializer; run exact GPU parity and
+   all affected source/return/vnode/default-off correctness.
+4. On idle GPUs run three profiler-free H256/H7168 source and return trials with
+   the frozen warmup/sample contract, retaining median/p95/p99/raw samples.
+5. Retain O077 only if the combined evidence is favorable, then collect the
+   same Nsys window.  Otherwise revert the production complexity while keeping
+   the failed experiment and artifacts in the logs.

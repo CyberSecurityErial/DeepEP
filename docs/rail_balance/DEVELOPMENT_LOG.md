@@ -4707,3 +4707,25 @@ instruction attribution boundary above.  It agrees that MemoryWorkloadAnalysis
 is not required before one target-channel-distribution falsification, provided
 the TMA loop, payload, slot count and synchronization protocol stay unchanged.
 No performance hot path changed in D081.
+
+## 2026-07-22 — D082: pre-register the first one-variable optimization
+
+O077 fixes the implementation before editing: destination lanes stagger their
+channel windows by an exclusive prefix of nominal
+`ceil(incoming / channel_capacity)` spans, then cyclically consume existing
+spare capacity.  Current C100 target work is predicted to change from
+32-by-28 to 224-by-4 per egress without changing any count, quota, segment,
+proxy count, slot density, TokenLayout, TMA loop or synchronization rule.
+
+Balanced waterfill and a `C * D` return grid were reviewed and rejected for the
+first experiment: the former adds planning/code complexity without evidence;
+the latter can launch up to 32,768 mostly empty CTAs.  O077 remains O(C), uses
+the existing per-destination warp lanes and prefix arrays, and introduces no
+ABI or public surface.
+
+The pre-registered downside is source resolution: its linear prefix scan will
+visit later target channels.  Plan, source and return must therefore all be
+measured, and a return-only improvement is insufficient.  CPU oracle and
+validator are the first code slice; GPU materialization follows only after its
+focused correctness passes.  This is a design/measurement checkpoint; no hot
+path changed in D082.
