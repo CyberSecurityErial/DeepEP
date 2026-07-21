@@ -21,9 +21,10 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Latest pushed checkpoints are `1888908` (complete profiler-free collection),
-  `f5e7906` (Nsys contract), and `feaf03e` (steady-only diagnostic NVTX mode)
-  on `fork/feat/rail-balance-prototype`.
+- Recent code and measurement checkpoints are `1888908` (complete
+  profiler-free collection), `f5e7906` (Nsys contract), `feaf03e` (steady-only
+  diagnostic NVTX mode), and `bf01ccd` (final clean instrumentation smokes) on
+  `fork/feat/rail-balance-prototype`.
 - Both capability bits remain false and no result claims real Gin/RDMA
   behavior. The local activation evidence is complete, but the public methods
   deliberately remain unreachable through a normal force construction until a
@@ -178,8 +179,8 @@ the exact file snapshots without inventing commit identity.
   the remaining global-span variability follows post-Gloo release skew.
   Reports plus a verified manifest live under
   `.cache/rail_balance/c100/stability-omp1/4211bae/`.  No Nsys/NCU or hot-path
-  change has occurred.  Resume with one minimal release-skew falsification,
-  then collect stable source/return distributions.
+  change occurred in that experiment.  It led to the now-complete
+  release-skew falsification recorded in the next bullet.
 - That release-skew falsification is now complete.  The reviewed CPU-only
   probe at `ee41415` produces three clean Gloo return medians of
   38.693/36.319/38.028 us; rank1-first and rank7-last each dominate at least
@@ -202,8 +203,13 @@ the exact file snapshots without inventing commit identity.
   are now collected; retained tail attribution is the remaining baseline task.
 - The clean `feaf03e` benchmark has a default-off, baseline-ineligible NVTX
   diagnostic mode.  Final-commit default-off and NVTX-on EP8 smokes pass after
-  one separate co-tenant tester report was correctly rejected.  Nsys capture
-  must explicitly use `--capture-range-end=stop --kill=none`.
+  one separate co-tenant tester report was correctly rejected.
+- Nsys's child-owned range trigger is experimentally rejected.  Default
+  `wait=all` holds a resource-tracker zombie in the watchdog PGID;
+  `--wait=primary` fixes cleanup, but a child range still cannot start
+  collection.  The accepted topology is full-process capture plus global-time
+  filtering to `c100_nsys_window`.  A 0+1 report/SQLite pair proves all eight
+  devices are present; formal return-H7168 10+100 collection is next.
 
 ## Mandatory retained boundary
 
@@ -224,8 +230,8 @@ No C070 timing is performance evidence.
 
 1. Read this file plus `CONTEXT.md`, `CHECKPOINTS.md`, the tail of
    `DEVELOPMENT_LOG.md`, and `OPTIMIZATION_LOG.md` decisions O011-O012.
-2. Verify branch and state with `git status --short --branch` and run
-   `git diff --cached --check`.
+2. Verify branch and state with `git status --short --branch`, then run both
+   `git diff --check` and `git diff --cached --check`.
 3. Do not redo C061/C070 unless the relevant code changes.
 4. Do not rerun C080-G or every historical exhaustive seed unless a relevant
    production core changes. Its final-tree matrix and sanitizer closure pass.
@@ -233,12 +239,13 @@ No C070 timing is performance evidence.
    Rail/Gin correctness passes. D1 evidence is never a D>1 Gin success claim.
 6. C090 is complete. Do not rerun its unchanged full suites or sanitizer
    kernels unless production device code changes.
-7. The GPU evidence-chain skill is installed. Freeze the completed H256/H7168
-   source/return checksums and tail conclusion, then notify the user immediately
-   before Nsys. Use Nsys first to classify host/CUDA/kernel tail exposure. NCU
-   may target only an exact exposed invocation selected by Nsys; hot-path
-   optimization remains blocked until that evidence exists. C105 packages the
-   fastest possible real-cluster bring-up afterward.
+7. The GPU evidence-chain skill is installed and the user has already been
+   notified that Nsys started.  Run the pre-registered full-process
+   return-H7168 10+100 capture with `--wait=primary`; analyze all ranks through
+   the global steady timestamp window.  NCU may target only an exact exposed
+   invocation selected by that report, and hot-path optimization remains
+   blocked until the evidence exists.  C105 packages the fastest possible
+   real-cluster bring-up afterward.
 
 Pinned runtime for accepted commands:
 

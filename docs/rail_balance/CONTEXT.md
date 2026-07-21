@@ -605,10 +605,10 @@ Out of scope until evidence expands the project:
   The accepted ordering closes them. Final C++ and protocol reviews are each
   Blocker/High/Medium/Low 0/0/0/0; C090 exit review is 0/0/0 with one corrected
   documentation Low.
-- The next local gate is to resume C100. Start its next controlled NCU/Nsys run
-  only after the user supplies the promised profiling workflow, and do not time
-  under unrelated GPU load. C080-H/Gin remains deferred to a truthful D>1
-  environment.
+- At that checkpoint the next local gate was C100 after the user's profiling
+  workflow arrived; that workflow is now installed and the later C100 sections
+  supersede this historical resume point.  C080-H/Gin remains deferred to a
+  truthful D>1 environment.
 
 ## Post-C090 Goal and readiness audit (2026-07-21)
 
@@ -654,9 +654,10 @@ Out of scope until evidence expands the project:
 - A definite Megatron PGID 173641 with four approximately 36 GiB workers was
   terminated under the standing authorization; all GPUs were empty before the
   final functional runs.
-- The next new NCU/Nsys invocation still waits for the user's workflow.  The
-  standalone return-unshuffle harness must reuse this plan before profiling its
-  runtime; vnode remains correctness scaffolding, not a performance fixture.
+- At that checkpoint the next NCU/Nsys invocation still waited for the user's
+  workflow.  The workflow and standalone return harness are now complete; the
+  later C100 Nsys sections supersede this historical state.  Vnode remains
+  correctness scaffolding, not a performance fixture.
 
 ## C100 controlled return-fixture context (2026-07-21)
 
@@ -812,9 +813,10 @@ Out of scope until evidence expands the project:
 - Only PGID 1097012 was terminated under standing authorization; post-kill
   process and `nvidia-smi` checks were empty.  The accepted replacement runs
   then passed every automatic gate.
-- No benchmark, CUDA/JIT, runtime, Hybrid hot path, Nsys or NCU code changed.
-  Finish return-H7168 next; notify the user before Nsys, and do not enter NCU
-  until Nsys identifies an exact exposed invocation.
+- No benchmark, CUDA/JIT, runtime, Hybrid hot path, Nsys or NCU code changed at
+  that checkpoint.  Return-H7168 and the Nsys notification are now complete;
+  the following sections supersede that historical resume instruction.  NCU
+  still requires an exact exposed invocation from the formal Nsys report.
 
 ## C100 OMP-controlled return-H7168 context (2026-07-22)
 
@@ -848,5 +850,26 @@ Out of scope until evidence expands the project:
   leave GPUs empty.  Default target-stage timing semantics are unchanged; the
   broader host envelope has minimal added Python branching and is not claimed
   bit-for-bit overhead-free.
-- Nsys capture must explicitly select `--capture-range-end=stop --kill=none`.
-  NCU remains blocked until Nsys proves an exposed exact invocation.
+- The first pre-registered command selected
+  `--capture-range-end=stop --kill=none`; the experiment below supersedes that
+  command without deleting its audit history.  NCU remains blocked until Nsys
+  proves an exposed exact invocation.
+
+## C100 Nsys collection topology context (2026-07-22)
+
+- The earlier range-trigger command is superseded by experiment.  Nsys
+  2024.6's default `wait=all` reparents the multiprocessing resource tracker;
+  after it becomes a zombie the inner watchdog still sees the PGID, so Nsys
+  and the target wait on each other.  `stop-shutdown` does not fix this.
+- `--wait=primary` preserves the benchmark's own strict process-group cleanup
+  and lets Nsys exit normally.  A child-rank NVTX range is visible in a full
+  report but cannot start this launched collection, even with `@*` domain
+  matching.  Empty range-trigger runs are retained as failures, not reports.
+- The accepted topology is full-process `cuda,nvtx,osrt` collection with
+  `--capture-range=none --wait=primary`, then global-time filtering to rank 0's
+  `c100_nsys_window`.  The 0+1 proof report contains 11 kernels and 16 memcpy
+  records on each of all eight devices inside that interval.
+- Nsys `--filter-nvtx` is process-scoped here and shows rank 0 only.  Formal
+  multi-rank analysis must read `NVTX_EVENTS.start/end` and filter every CUDA
+  process by the same timestamp window.  NCU and hot-path edits remain blocked
+  until the formal H7168 trace establishes an exposed exact invocation.

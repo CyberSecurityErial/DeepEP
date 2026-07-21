@@ -13,7 +13,7 @@ large source fixture: FUNCTIONAL_PASS, UNPROFILED
 large return fixture: FUNCTIONAL_PASS, UNPROFILED
 checked-adapter benchmark harness: AUDITED_PASS
 profiler-free baseline: SOURCE_AND_RETURN_COLLECTED, TAIL_STABILITY_NOT_ACCEPTED
-new Nsys attribution: NOT_COLLECTED
+new Nsys attribution: COLLECTION_SMOKE_PASS, FORMAL_H7168_PENDING
 new NCU dossier: NOT_COLLECTED
 performance-path change: NONE
 ```
@@ -475,10 +475,10 @@ lists while returning status 1, and the correct trace-help form is
 `nsys profile --help=trace`, not `--trace=help`.  These tool behaviors are
 retained rather than misreported as workload failures.
 
-### Pre-registered first Nsys capture
+### Nsys capture contract and falsified trigger topology
 
-The profiler-free harness currently has no NVTX/capture mode and explicitly
-marks NVTX disabled.  Before collection it will receive one test-only
+The profiler-free harness originally had no NVTX/capture mode and explicitly
+marked NVTX disabled.  Commit `feaf03e` added one test-only, default-off
 `--nvtx` flag that:
 
 - leaves the default path disabled;
@@ -487,7 +487,7 @@ marks NVTX disabled.  Before collection it will receive one test-only
 - marks target prepare/finish/prerequisite/stage phases and exact steady
   invocation ordinals;
 - lets rank 0 delimit a single `c100_nsys_window` around the steady loop so
-  Nsys excludes cold JIT and warmup;
+  post-collection analysis excludes cold JIT and warmup;
 - changes no CUDA/JIT/Hybrid production code.
 
 The first diagnostic will target return-H7168 because accepted reports retain
@@ -497,24 +497,81 @@ pass.  The Nsys report and SQLite schema will determine whether a second pass
 needs process-tree sampling/backtraces.  NCU remains forbidden until this
 trace proves an exact exposed kernel invocation.
 
-Nsys 2024.6 defaults `--capture-range-end` to `stop-shutdown` and `--kill` to
-`sigterm`.  The first command must therefore make both lifecycle choices
-explicit so rank 0's capture-range pop cannot terminate the benchmark before
-JSON, buffer destruction and clean shutdown:
+The original range-trigger command was executed and rejected.  Under Nsys's
+default `--wait=all`, the launcher reparents a terminated multiprocessing
+resource tracker.  It remains a zombie in the worker PGID, so the strict
+watchdog correctly refuses to call cleanup complete.  Changing only capture
+end from `stop` to `stop-shutdown` reproduces the failure.  Changing only the
+Nsys wait policy to `primary` fixes the lifecycle, but neither the default
+domain nor `@*` child NVTX trigger produces a report.  A child range is visible
+after collection starts but cannot start this launched session.
 
-```text
-nsys profile \
+The working, intentionally simple formal command captures the process tree and
+cuts the report afterward by the rank-0 steady range:
+
+```bash
+mkdir -p .cache/rail_balance/c100/nsys/formal
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+EP_DISABLE_GIN=1 OMP_NUM_THREADS=1 \
+PYTHONPATH=$PWD/tests:$PWD/tests/elastic:$PWD \
+/usr/local/cuda/bin/nsys profile \
   --trace=cuda,nvtx,osrt \
   --sample=none --cpuctxsw=none \
-  --capture-range=nvtx --nvtx-capture=c100_nsys_window \
-  --capture-range-end=stop --kill=none \
+  --capture-range=none --wait=primary \
   --force-overwrite=true --export=sqlite \
-  --output=<run-dir>/return-h7168-low-overhead \
-  <frozen-python> -B tests/elastic/bench_rail_balance_hybrid_lsa.py \
+  --output=.cache/rail_balance/c100/nsys/formal/return-h7168-r1 \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/bench_rail_balance_hybrid_lsa.py \
   --stage return --case-name c100_volume_h7168 \
   --warmup-iters 10 --steady-iters 100 --nvtx \
-  --json-out <run-dir>/return-h7168-low-overhead.json ...
+  --json-out .cache/rail_balance/c100/nsys/formal/return-h7168-r1.json \
+  --master-port 30246 --timeout 180 --watchdog-seconds 1800
 ```
+
+The full raw report includes cold JIT and setup, but no custom parent/child
+capture controller is added merely to reduce file size.  Analysis reads the
+single `c100_nsys_window` start/end from `NVTX_EVENTS` and applies that global
+nanosecond interval to all eight devices.  Installed `--filter-nvtx` is not
+used for multi-rank totals because it projects only the owning rank here.
+
+The 0+1 proof report is 40,914,531 bytes, its SQLite is 175,443,968 bytes, and
+the steady interval contains exactly 11 kernels plus 16 memcpy records on each
+device.  Its report SHA-256 is
+`0d143ed73025993fcb5f03fba5d5366dd86c947b13f3937e7c070585e2562ac9`;
+the SQLite SHA-256 is
+`ccd0572ca9ba259ef64b56df8b2cd99a844a415d26bf55aa7a237959f3b3be03`.
+It is a collection-topology smoke, not performance evidence or an NCU target.
+
+The exact installed-schema SQL used to prove the multi-rank window is retained
+here; formal analysis must first require exactly one outer range:
+
+```sql
+SELECT start, end
+FROM NVTX_EVENTS
+WHERE text = 'c100_nsys_window';
+
+SELECT deviceId, COUNT(*) AS kernels, SUM(end - start) AS kernel_ns,
+       MIN(start) AS first_start, MAX(end) AS last_end
+FROM CUPTI_ACTIVITY_KIND_KERNEL
+WHERE end > :window_start AND start < :window_end
+GROUP BY deviceId
+ORDER BY deviceId;
+
+SELECT deviceId, COUNT(*) AS memcpys, SUM(end - start) AS memcpy_ns
+FROM CUPTI_ACTIVITY_KIND_MEMCPY
+WHERE end > :window_start AND start < :window_end
+GROUP BY deviceId
+ORDER BY deviceId;
+```
+
+The first failing outer command is retained in D077 together with its JSON
+hash.  Its console showed adapter PASS, then watchdog cleanup failure and Nsys
+exit 1; no `.nsys-rep`, SQLite or qdstrm existed.  Console output and the
+external process-observer stream were not redirected to standalone files, so
+that is an explicit missing raw artifact rather than reconstructed evidence.
+The observer did record resource tracker PID 1291724 transitioning to `Z`,
+remaining in PGID 1291618 and being reparented to profiler-side PID 1291474;
+that parent's executable mapping was not separately persisted.
 
 The default target-stage call and its timer boundary are unchanged.  Moving
 phase callables into locals introduces a few disabled Python branches in the
@@ -582,10 +639,10 @@ No old report may be relabelled as evidence for the new 7,168-record fixture.
 
 1. Explanation for the H200 operational target versus the management labels,
    compute-capability field and P2P `NS` output.
-2. Stable, accepted profiler-free source and return samples for H256/H7168.
-   Raw collection is complete for all four stage/width groups, but p95/p99/max
-   tail stability is not closed.  The reports establish typical-latency
-   distributions and retained tail events, not a kernel root cause.
+2. Accepted profiler-free source and return samples for H256/H7168.  This is
+   complete for repeatable typical latency.  p95/p99/max tail stability is
+   deliberately not claimed; the retained tail events are inputs to Nsys,
+   rather than a circular prerequisite that would forbid profiling them.
 3. Nsys exposed critical-path attribution for the new large fixture.
 4. An exact NCU invocation selected from that Nsys report.
 5. Sustained same-machine peer-copy/HBM reference if a bandwidth percentage is
@@ -593,9 +650,13 @@ No old report may be relabelled as evidence for the new 7,168-record fixture.
 6. Real D>1 Gin/RDMA/QP/NIC behavior and network-visible counters.
 7. Full-MoE or training-level target metric and compute/communication overlap.
 
-Until items 2--4 exist, standalone TMA waits, segment scans, QP choice, tail
-publication cadence, planner launch, and barriers are hypotheses only.  No
-performance-path code change is authorized by this manifest.
+Item 2's profiler-free truth is present.  Until items 3--4 exist, standalone
+TMA waits, segment scans, QP choice, tail publication cadence, planner launch,
+and barriers are hypotheses only.  No performance-path code change is
+authorized by this manifest.  Unstable tails continue to limit confidence and
+must be represented in any later no-profiler validation; they do not prevent
+Nsys from determining whether a tail is host-, API-, synchronization-, or
+kernel-owned.
 
 ## Environment collection commands
 

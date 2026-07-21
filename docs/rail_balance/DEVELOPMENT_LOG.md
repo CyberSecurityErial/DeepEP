@@ -4479,3 +4479,90 @@ b99c7991334314aa96f5c222e29f539e60b8bd64c665a01559890ccd14134b43  default-off-sm
 
 The local manifest verifies all three.  GPUs are empty and the first actual
 Nsys range-trigger smoke is next.
+
+## 2026-07-22 — D077: falsify child-trigger capture and establish a usable Nsys topology
+
+The first Nsys smoke did not fail in CUDA.  The checked adapter printed PASS
+and wrote a valid diagnostic JSON, but Nsys exited 1 without a report because
+the benchmark watchdog still observed its private process group after TERM and
+KILL.  `--capture-range-end=stop-shutdown --kill=none` reproduced the same
+result, falsifying the original session-shutdown hypothesis.  An external
+process-table observer then identified the final member: the Python
+`multiprocessing.resource_tracker` became `Z` after the worker-suite leader
+exited and was reparented to the Nsys launcher while retaining the old PGID.
+Signals cannot remove a zombie, and it disappeared as soon as Nsys exited.
+No GPU process remained and no missing report is represented as a CUDA or
+kernel failure.
+
+The exact first outer command was:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+EP_DISABLE_GIN=1 OMP_NUM_THREADS=1 \
+PYTHONPATH=$PWD/tests:$PWD/tests/elastic:$PWD \
+/usr/local/cuda/bin/nsys profile \
+  --trace=cuda,nvtx,osrt --sample=none --cpuctxsw=none \
+  --capture-range=nvtx --nvtx-capture=c100_nsys_window \
+  --capture-range-end=stop --kill=none \
+  --force-overwrite=true --export=sqlite \
+  --output=.cache/rail_balance/c100/nsys/bf01ccd/range-smoke \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/bench_rail_balance_hybrid_lsa.py \
+  --stage return --case-name c100_volume_h256 \
+  --warmup-iters 0 --steady-iters 1 --nvtx \
+  --json-out .cache/rail_balance/c100/nsys/bf01ccd/range-smoke.json \
+  --master-port 30237 --timeout 180 --watchdog-seconds 1800
+```
+
+Its console output was not independently redirected, which is retained as a
+missing raw artifact.  The observed terminal sequence was adapter PASS,
+`watchdog process group survived SIGTERM and SIGKILL`, Nsys exit 1 and an
+empty `Generated:` list.  The external observer stream was likewise not
+persisted as a file; it recorded PID 1291724 (`resource_tracker`) as `Z`, PGID
+1291618 and profiler-side PPID 1291474.  The PPID's executable mapping was not
+separately persisted.  The next formal collection will retain the report,
+SQLite, JSON and checksums.  No performance or kernel claim relies on the
+missing console stream; the topology diagnosis retains this disclosed raw-
+artifact gap.
+
+The principal trigger/lifecycle JSONs are checksum-frozen even though they are
+not performance evidence:
+
+```text
+42b78a50fc4d37abf68df08b98083693ea13cefd6a39a2c990b650e3b50f96b7  range-smoke.json
+89c05595440b952064dae22df2a385ab0f33257ded1f7c9ae6173d1261b4a7a2  range-smoke-shutdown.json
+1a72fc0241146b7c05ec334e8cc81ce46b8cdfec0682f102b73b89e8c1726607  range-smoke-primary.json
+88bfd3c81ba622d599f6054637e69c087bdfb2ae58adcb0a33adf671f673bcb7  range-smoke-any-domain.json
+```
+
+A proposed Python `waitpid` fix was implemented only long enough to falsify
+it.  The zombie is a child of the Nsys launcher, not the benchmark, so the
+benchmark cannot reap it.  The patch was removed and no speculative watchdog
+or hot-path complexity remains.  The installed `--wait=primary` option is the
+minimal working lifecycle choice: it prevents Nsys's default `wait=all` from
+holding the reparented descendant, the benchmark exits 0, and the watchdog
+continues to require its private process group to disappear.
+
+The original child-owned NVTX capture trigger is also insufficient on this
+Nsys 2024.6 process topology.  Both the default-domain and `@*` variants exit
+0 under `--wait=primary` but create no qdstrm, `.nsys-rep`, or SQLite file.
+This proves that Nsys can see the child ranges after collection starts but
+does not use them to start this launched session.  A 0+1 full-process
+diagnostic with `--capture-range=none --wait=primary` succeeds and generates:
+
+```text
+8156222399a47fc7d4f18fffda27167feb33702b6bbd9f2032d0d051805ad56f  full-smoke-primary.json
+0d143ed73025993fcb5f03fba5d5366dd86c947b13f3937e7c070585e2562ac9  full-smoke-primary.nsys-rep
+ccd0572ca9ba259ef64b56df8b2cd99a844a415d26bf55aa7a237959f3b3be03  full-smoke-primary.sqlite
+```
+
+The report is 40,914,531 bytes and the SQLite export is 175,443,968 bytes.
+Its inspected schema has 193 NVTX events, 216 kernels and 77,720 CUDA runtime
+records.  The rank-0 `c100_nsys_window` is present, and its global timestamp
+window contains exactly 11 kernels and 16 memcpy records on each of devices
+0--7.  Nsys's `--filter-nvtx` projection is process-scoped and therefore shows
+only rank 0; formal multi-rank analysis must extract that range's start/end
+from `NVTX_EVENTS` and use the same global time interval for every process and
+device.  This smoke is diagnostic only, not a latency baseline or NCU target.
+The formal return-H7168 full trace is next; no device/JIT/Hybrid hot path has
+changed.

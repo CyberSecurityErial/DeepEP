@@ -1526,6 +1526,31 @@ The default target-stage timer still surrounds the same checked adapter call.
 The wider transaction now constructs local callables and evaluates a handful
 of false branches, so the change is minimal-overhead rather than literal
 zero-overhead.  No before/after claim may mix the old and new harness commits.
-The actual Nsys command must use `--capture-range-end=stop --kill=none`; relying
-on installed defaults would terminate the target at range end and invalidate
-cleanup/report evidence.
+The pre-registered Nsys command used `--capture-range-end=stop --kill=none`;
+O072 below preserves this falsified decision as history and supersedes the
+actual collection command.
+
+## Measurement decision O072 — profile the full process tree, then cut by the steady timestamp window
+
+The pre-registered child-owned range-trigger topology is rejected by direct
+experiment.  With Nsys's default `wait=all`, an orphaned resource-tracker
+zombie is held by the launcher and the benchmark correctly refuses to declare
+its process group clean.  `stop-shutdown` does not change this.  The installed
+`--wait=primary` mode fixes lifecycle without weakening the watchdog, but a
+range pushed by rank 0 still does not start collection: both default-domain
+and any-domain trigger runs produce no report.
+
+Adding an interprocess start/stop controller solely to obtain a smaller trace
+would be over-designed test infrastructure.  The smallest working experiment
+is therefore `--capture-range=none --wait=primary`, followed by schema-aware
+filtering to the already existing `c100_nsys_window`.  The 0+1 smoke proves
+that this full capture sees all eight devices.  Because installed
+`--filter-nvtx` projects only the process that owns the range, multi-rank
+statistics will use the range's global nanosecond start/end as a time filter.
+
+This decision accepts a larger diagnostic report and profiler perturbation;
+it does not alter profiler-free truth.  Cold JIT and setup records remain in
+the raw file for audit but are excluded from steady-window SQL and stats.
+No kernel conclusion may be drawn from the one-sample smoke.  Formal H7168
+10+100 Nsys data must identify representative and tail invocations before any
+NCU capture or performance-path edit.
