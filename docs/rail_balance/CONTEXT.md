@@ -446,3 +446,9 @@ Out of scope until evidence expands the project:
   and preserves the existing launch-only local barrier. Grid and source token
   count have one Prepared owner. H4 must still connect fixed-tensor WORLD gates
   plus owning transaction state before capability activation.
+- Host integration H2 keeps the native single registered window. Force-only
+  construction proves `total_bytes == legacy_bytes + arena_bytes`, passes the
+  total to the unchanged C++ runtime, and records the arena at exact offset
+  `legacy_bytes`. Off invokes no force helper and owns no rail-balance field.
+  Both capabilities remain false until H3/H4 close cross-rank consensus and
+  the production transaction.

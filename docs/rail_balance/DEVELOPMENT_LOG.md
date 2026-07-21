@@ -2779,3 +2779,54 @@ CUDA hot loop, public operator, Python dispatch/combine, capability bit, or
 legacy JIT identity. H2 is the minimal force-only constructor sizing/ownership
 slice; H3/H4 still own the pre-window/fixed-tensor WORLD decisions and the
 actual uninterrupted dispatch/combine transaction.
+
+## 2026-07-21 — D045: own the force arena as a legacy buffer tail
+
+H2 connects the existing checked arena calculator to construction without
+changing the C++ runtime signature or adding a second allocation. Only after
+the host and compiled capability gates both report true, force construction
+now performs:
+
+```text
+legacy_bytes = calculate_elastic_buffer_size(..., BF16, Hybrid, multi-reduce)
+arena_bytes  = HybridArenaLayout(H, K, Pcap).arena_bytes
+total_bytes  = calculate_rail_balance_hybrid_buffer_size(..., Pcap)
+require total_bytes == legacy_bytes + arena_bytes
+arena_offset = legacy_bytes
+```
+
+The unchanged `ElasticBuffer` runtime receives `total_bytes`, so NCCL registers
+one symmetric window containing the original DeepEP buffer followed by the
+2 MiB-aligned force tail. Four private force-only scalar fields retain mode,
+Pcap, arena offset, and arena bytes for H4. They are published only after the
+three formulas agree. The normal off branch does not call either force helper,
+does not gain a field, and passes the exact original runtime argument tuple.
+The public size hint, public OP set, runtime signature, and both capability
+defaults remain unchanged.
+
+Accepted evidence:
+
+```text
+PASS 9/9 C080-A Hybrid API tests
+PASS 5/5 C080-A Hybrid layout tests
+PASS distributed Hybrid buffer formula on eight H200 ranks
+PASS 4/4 legacy Hybrid identity goldens
+PASS py_compile and git diff --check
+PASS independent H2 audit: Blocker/High/Medium/Low = 0/0/0/0
+```
+
+The API tests monkeypatch both capabilities true only inside the force fixture.
+They freeze helper order, exact arguments, complete runtime tuple, one barrier,
+and the four-field ownership set. A stale total and exceptions from each of the
+legacy/layout/total helpers all fail before runtime construction. The off test
+installs tripwires on both force helpers and rejects any `_rail_balance_*`
+instance field.
+
+One command failure is retained: the main thread initially passed unsupported
+`--oracle-only` to `test_rail_balance_hybrid_layout.py`; argparse exited before
+testing. The corrected `--num-processes 8` command passed all five layout cases
+and the distributed formula.
+
+Commit `c05ff0d` is pushed. Public force remains unavailable. H3 must settle
+the constructor pre-window consensus boundary and implement fixed CUDA tensor
+WORLD gates; H4 then connects the prepared raw stages and owning handle state.

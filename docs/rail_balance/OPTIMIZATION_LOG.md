@@ -905,3 +905,17 @@ existing symmetric buffer, TokenLayout, JIT runtime, streams, and handle
 lifetime in place. Vnode remains disposable validation scaffolding; it must not
 become a second transport/runtime framework or contribute a branch to the
 production Hybrid hot path.
+
+## Host-path decision O044 — extend the registered buffer, do not add storage
+
+The force arena is a checked, aligned tail of the exact legacy Hybrid buffer.
+It is not a second allocation, workspace extension, side window, or Python
+tensor owner. This preserves the native NCCL symmetric-memory lifecycle and
+lets every raw kernel derive peer addresses from the same registered base.
+
+Force construction deliberately computes both the legacy formula and the
+independent combined C++ helper, then requires the combined result to equal
+`legacy + arena`. The redundancy is outside every operation hot path and
+guards Python/C++ layout drift. No analogous call or field is allowed on off;
+the capability remains false while pre-window cross-rank configuration safety
+is unresolved.
