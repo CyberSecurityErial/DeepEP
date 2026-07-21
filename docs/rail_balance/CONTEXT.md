@@ -657,3 +657,23 @@ Out of scope until evidence expands the project:
 - The next new NCU/Nsys invocation still waits for the user's workflow.  The
   standalone return-unshuffle harness must reuse this plan before profiling its
   runtime; vnode remains correctness scaffolding, not a performance fixture.
+
+## C100 controlled return-fixture context (2026-07-21)
+
+- The standalone production-shared return-unshuffle harness now imports the
+  exact C100 source plan.  Named H256 and H7168 runs each consume 7,168 moved
+  records with Pcap 896 and differ only in complete TokenLayout width.
+- Both named cases pass true EP8 LSA exact owner/row/token bytes and prove all
+  non-target bytes remain poisoned.  CPU fingerprint enumeration is cheaper,
+  but full GPU proxy-return rows and byte comparisons are unchanged.
+- Large cases remain named-only; the default C080-F GPU suite retains its three
+  historical cases and allocation sizes and passes a fresh true-EP8 regression.
+  No public API, JIT kernel, device source, planner, layout, or capability bit
+  changed.  Independent review is Blocker0/High0/Medium0.
+- The first named CPU run failed because an assertion still described exactly
+  three default cases.  It was split into base and profile invariants without
+  weakening either and is retained in D063.
+- The user supplied an auditable profiler-free → Nsys → targeted NCU →
+  one-variable change → profiler-free retest contract.  Fixture correctness is
+  now ready for the environment manifest and baseline; no new performance
+  evidence has yet been collected.

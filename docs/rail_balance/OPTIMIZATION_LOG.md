@@ -1291,3 +1291,25 @@ will instead import the same plan into its existing standalone harness.
 Both final widths pass full byte correctness.  No performance tool was invoked
 and no duration was recorded.  The next accepted evidence requires the user's
 workflow, an idle-GPU audit, a separate warmup, and one pinned target launch.
+
+## Fixture decision O060 — measure both directions with one immutable plan
+
+Source-shuffle and return-unshuffle now consume the same named C100 plan.  This
+removes route variance from their later comparison: H256/H7168 differ only in
+TokenLayout width, and both directions see the same 7,168 moved copies and 896
+slots per egress.  A separate vnode, planner variant, descriptor queue, timing
+branch, or public API was not added.
+
+The return harness derives allocation limits from the selected case and keeps
+the two large fixtures behind explicit `--case-name`.  Default correctness
+work therefore neither allocates nor launches the large profile shapes.  Its
+CPU identity check computes all fingerprints without materializing every wide
+row, while the actual GPU transaction still performs complete raw-byte and
+poison comparison; this is test-overhead removal, not a device optimization.
+
+Both widths pass true EP8 LSA functionality.  That result establishes a valid
+measurement fixture but no performance finding.  Under the supplied evidence
+contract, the next sequence is: record the exact environment and tool
+capabilities, collect repeated profiler-free H256/H7168 samples, use Nsys to
+prove the exposed timeline contribution, and only then pin an invocation in
+NCU.  No performance-path code may change before that causal evidence exists.

@@ -3920,3 +3920,57 @@ warm separately, pin one device/kernel/launch, and compare these H256/H7168
 cases rather than reusing the old three-record fixture.  Return-unshuffle still
 needs the same large plan wired into its existing standalone harness before its
 own runtime attribution.
+
+## 2026-07-21 — D063: reuse the controlled plan in return-unshuffle
+
+The standalone production-shared return-unshuffle harness now accepts the two
+named-only C100 source fixtures.  It imports the exact G8/D9/K4/N1024/C256 plan
+rather than rebuilding a second workload: H256 and H7168 therefore retain the
+same routes, counts, quota, segment assignment, source channels, egresses,
+proxy slots, total 7,168 moved records, and Pcap 896.  Only the raw combine
+TokenLayout width changes.
+
+The first CPU-oracle run failed before CUDA because `_selected_cases()` still
+asserted that its complete tuple contained exactly the three default C080
+cases.  Appending a fourth named C100 case correctly tripped both the hidden-
+width and moved-count tuple assertions.  The fix does not weaken those
+regression checks: they now apply to an explicit `base_cases` tuple, while the
+optional named profile case has independent `moved == 7168` and `Pcap == 896`
+assertions.  This failed attempt is retained because it exposed a test
+assumption rather than a device or product failure.
+
+Enumerating CPU fingerprints no longer constructs all 896 full H7168 return
+rows for every egress.  The oracle checks the exact deterministic fingerprint
+formula for every slot and constructs the last raw row as a formula probe.
+The GPU test remains strict: it creates every full proxy-return row, invokes
+the unchanged production-shared return-unshuffle kernel, compares every target
+row byte-for-byte, and proves every non-target byte retains its poison value.
+Buffer sizing is derived from the selected plan's maximum token count, top-k,
+hidden width, and arena layout; the default three-case GPU suite is unchanged.
+
+Accepted checks use the pinned ABI Python and ports 30012/30013:
+
+```text
+PASS py_compile
+PASS default C080-F CPU oracle
+PASS named C100 H256 CPU oracle: moved=7168, Pcap=896
+PASS named C100 H7168 CPU oracle: moved=7168, Pcap=896
+PASS C100 H256 true EP8 LSA return-unshuffle, exact targets/non-targets
+PASS C100 H7168 same plan and exact checks
+PASS default three-case C080-F true EP8 regression, one-shot and recovery
+PASS git diff --check
+```
+
+GPU compute-process inspection was empty before these runs; no process was
+terminated in this checkpoint.  Neither run recorded duration or bandwidth,
+and no Nsys/NCU command was invoked.  The user then supplied the profiling
+measurement contract, which is saved in the active Codex profile as
+`gpu-performance-evidence-chain`; its required order is profiler-free baseline,
+Nsys critical-path attribution, targeted NCU, one-variable change, and
+profiler-free retest.
+
+Independent final review reports Blocker 0 / High 0 / Medium 0.  Its three
+Low observations are either resolved by documenting the two named commands or
+explicitly accepted test structure: the CPU-only probe is intentionally
+lighter while GPU bytes remain exhaustive, and the return harness imports the
+already committed source fixture instead of duplicating its private schedule.
