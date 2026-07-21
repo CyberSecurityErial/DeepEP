@@ -15,6 +15,11 @@ Strict H200 path::
     PYTHONPATH=. EP_DISABLE_GIN=1 \
       CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
       python -B tests/elastic/test_rail_balance_hybrid_unshuffle_lsa.py
+
+Named C100 functionality fixtures add either::
+
+    --case-name c100_volume_h256
+    --case-name c100_volume_h7168
 """
 
 from __future__ import annotations
@@ -42,6 +47,7 @@ from rail_balance_hybrid_reference import (
 )
 from test_rail_balance_hybrid_shuffle_lsa import (
     ShuffleCase,
+    _C100_CASE_NAMES,
     _WORLD_SIZE,
     _abort,
     _assert_shuffle_oracle,
@@ -61,8 +67,6 @@ from test_rail_balance_hybrid_shuffle_lsa import (
 from test_rail_balance_hybrid_plan_lsa import PlanCase
 
 
-_MAX_TOKENS = 10
-_NUM_TOPK = 4
 _POISON = 0xA7
 _STREAM_DELAY_CYCLES = 2_000_000
 _OPERATION = "rail_balance_hybrid_return_unshuffle"
@@ -74,26 +78,41 @@ def _combine_token_bytes(hidden: int, num_topk: int) -> int:
     return align(hidden_bytes, 32) + align(metadata_bytes, 32)
 
 
-def _selected_cases() -> tuple[ShuffleCase, ...]:
+def _selected_cases(
+    profile_case_name: str | None = None,
+) -> tuple[ShuffleCase, ...]:
     by_name = {
-        spec.plan.name: spec for spec in _assert_shuffle_oracle()
+        spec.plan.name: spec for spec in _assert_shuffle_oracle(
+            include_c100_profiles=profile_case_name is not None)
     }
-    cases = (
+    base_cases = (
         by_name["c061_source_shuffle_seed62"],
         by_name["all_owner_c1024_d32_k4"],
         by_name["c061_h7168_moved_seed64"],
     )
-    assert tuple(spec.hidden for spec in cases) == (256, 256, 7168)
-    assert tuple(spec.expected_moved_copies for spec in cases) == (21, 24, 21)
-    assert cases[1].plan.num_scaleout_ranks == 32
-    assert cases[1].plan.num_topk == 4
-    assert cases[1].plan.num_scaleout_ranks > cases[1].plan.num_topk
+    assert tuple(spec.hidden for spec in base_cases) == (256, 256, 7168)
+    assert tuple(spec.expected_moved_copies for spec in base_cases) == (
+        21, 24, 21)
+    assert base_cases[1].plan.num_scaleout_ranks == 32
+    assert base_cases[1].plan.num_topk == 4
+    assert (
+        base_cases[1].plan.num_scaleout_ranks
+        > base_cases[1].plan.num_topk
+    )
 
     wide_records = _moved_copies(
-        cases[1].plan, _schedule(cases[1].plan))
+        base_cases[1].plan, _schedule(base_cases[1].plan))
     assert wide_records
-    assert all(_legacy_reduce_row(cases[1].plan, record) == 3
+    assert all(_legacy_reduce_row(base_cases[1].plan, record) == 3
                for record in wide_records)
+
+    cases = base_cases
+    if profile_case_name is not None:
+        assert profile_case_name in _C100_CASE_NAMES
+        profile_case = by_name[profile_case_name]
+        assert profile_case.expected_moved_copies == 7_168
+        assert profile_case.plan.proxy_capacity_per_egress == 896
+        cases += (profile_case,)
     return cases
 
 
@@ -189,8 +208,10 @@ def _target_map(
     return targets
 
 
-def _assert_cpu_oracle() -> tuple[ShuffleCase, ...]:
-    cases = _selected_cases()
+def _assert_cpu_oracle(
+    profile_case_name: str | None = None,
+) -> tuple[ShuffleCase, ...]:
+    cases = _selected_cases(profile_case_name)
     global_fingerprints: set[int] = set()
     for spec in cases:
         schedule = _schedule(spec.plan)
@@ -198,14 +219,20 @@ def _assert_cpu_oracle() -> tuple[ShuffleCase, ...]:
         targets = _target_map(spec, schedule, records)
         assert len(targets) == spec.expected_moved_copies
         for egress in range(_WORLD_SIZE):
-            rows = _proxy_return_cpu(spec, egress)
             for proxy_slot in range(spec.plan.proxy_capacity_per_egress):
-                fingerprint = int.from_bytes(
-                    bytes(rows[proxy_slot, :8].tolist()), "little")
+                fingerprint = _fingerprint(
+                    spec.iteration, egress, proxy_slot)
                 # Iterations differ across cases, so every full-suite record
                 # identity is globally unique as well as egress-local.
                 assert fingerprint not in global_fingerprints
                 global_fingerprints.add(fingerprint)
+            if spec.plan.proxy_capacity_per_egress > 0:
+                probe_slot = spec.plan.proxy_capacity_per_egress - 1
+                row = _raw_return_row(
+                    _combine_token_bytes(spec.hidden, spec.plan.num_topk),
+                    spec.iteration, egress, probe_slot)
+                assert int.from_bytes(bytes(row[:8].tolist()), "little") == \
+                    _fingerprint(spec.iteration, egress, probe_slot)
         if spec.plan.num_scaleout_ranks > spec.plan.num_topk:
             assert {key[1] for key in targets} == {3}
     return cases
@@ -472,7 +499,9 @@ def _worker(local_rank: int, num_local_ranks: int,
     buffer = None
     clean_shutdown = False
     try:
-        cases = _assert_cpu_oracle()
+        profile_case_name = (
+            args.case_name if args.case_name in _C100_CASE_NAMES else None)
+        cases = _assert_cpu_oracle(profile_case_name)
         if args.case_name is not None:
             cases = tuple(
                 spec for spec in cases if spec.plan.name == args.case_name)
@@ -490,12 +519,16 @@ def _worker(local_rank: int, num_local_ranks: int,
             layouts.append(layout)
         arena_bytes = max(layout[-1] for layout in layouts)
         max_hidden = max(spec.hidden for spec in cases)
+        max_tokens = max(
+            spec.plan.num_max_tokens_per_rank for spec in cases)
+        max_topk = max(spec.plan.num_topk for spec in cases)
+        assert all(spec.plan.num_topk == max_topk for spec in cases)
         alignment = int(_C.get_elastic_buffer_alignment())
         base_bytes = deep_ep.ElasticBuffer.get_buffer_size_hint(
             ep_group,
-            num_max_tokens_per_rank=_MAX_TOKENS,
+            num_max_tokens_per_rank=max_tokens,
             hidden=max_hidden,
-            num_topk=_NUM_TOPK,
+            num_topk=max_topk,
             use_fp8_dispatch=False,
             allow_hybrid_mode=False,
             allow_multiple_reduction=True,
@@ -505,9 +538,9 @@ def _worker(local_rank: int, num_local_ranks: int,
         buffer = deep_ep.ElasticBuffer(
             ep_group,
             num_bytes=arena_offset + arena_bytes,
-            num_max_tokens_per_rank=_MAX_TOKENS,
+            num_max_tokens_per_rank=max_tokens,
             hidden=max_hidden,
-            num_topk=_NUM_TOPK,
+            num_topk=max_topk,
             allow_hybrid_mode=False,
             allow_multiple_reduction=True,
             prefer_overlap_with_compute=False,
@@ -545,15 +578,26 @@ def _worker(local_rank: int, num_local_ranks: int,
             buffer = None
             _monitored_barrier(control_group, args.timeout)
             if rank == 0:
-                print(
-                    "PASS C080-F Hybrid return unshuffle: true 8-GPU LSA, "
-                    "C061 H256, all-owner C1024/D32>K4 highest-lane, "
-                    "C061 H7168, unique complete combine TokenLayout raw "
-                    "bytes, exact owner row/token targets, poison-preserved "
-                    "non-targets, collision freedom, one-shot rejection, "
-                    "and abort/recovery",
-                    flush=True,
-                )
+                if len(cases) == 1 and cases[0].plan.name in _C100_CASE_NAMES:
+                    spec = cases[0]
+                    print(
+                        "PASS C100 controlled Hybrid return-unshuffle fixture: "
+                        f"{spec.plan.name}, true 8-GPU LSA, "
+                        f"moved={spec.expected_moved_copies}, "
+                        "exact owner row/token bytes and poison-preserved "
+                        "non-targets (functionality only)",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        "PASS C080-F Hybrid return unshuffle: true 8-GPU LSA, "
+                        "C061 H256, all-owner C1024/D32>K4 highest-lane, "
+                        "C061 H7168, unique complete combine TokenLayout raw "
+                        "bytes, exact owner row/token targets, poison-preserved "
+                        "non-targets, collision freedom, one-shot rejection, "
+                        "and abort/recovery",
+                        flush=True,
+                    )
             dist.destroy_process_group()
 
 
@@ -609,18 +653,28 @@ def main() -> None:
     if arguments.timeout <= 0 or arguments.watchdog_seconds <= 0:
         parser.error("timeouts must be positive")
 
-    cases = _assert_cpu_oracle()
+    profile_case_name = (
+        arguments.case_name
+        if arguments.case_name in _C100_CASE_NAMES else None)
+    cases = _assert_cpu_oracle(profile_case_name)
     by_name = {spec.plan.name: spec for spec in cases}
     if arguments.case_name is not None and arguments.case_name not in by_name:
         parser.error(
             "unknown --case-name; expected one of "
-            + ", ".join(sorted(by_name)))
-    print(
+            + ", ".join(sorted(set(by_name) | set(_C100_CASE_NAMES))))
+    message = (
         "PASS C080-F CPU oracle: C061 H256/H7168 plus all-owner "
         "C1024/D32>K4 highest matching lane, unique return records, "
-        "collision-free legacy targets, and poison-preserved non-targets",
-        flush=True,
+        "collision-free legacy targets, and poison-preserved non-targets"
     )
+    if profile_case_name is not None:
+        spec = by_name[profile_case_name]
+        message += (
+            f"; C100 {profile_case_name}, "
+            f"moved={spec.expected_moved_copies}, "
+            f"Pcap={spec.plan.proxy_capacity_per_egress} (named only)"
+        )
+    print(message, flush=True)
     if arguments.oracle_only:
         return
 
