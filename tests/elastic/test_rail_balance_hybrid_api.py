@@ -13,7 +13,6 @@ from deep_ep.buffers import elastic as elastic_module
 
 _INVALID_PREFIX = '[DeepEP rail_balance:InvalidConfiguration] '
 _UNSUPPORTED_PREFIX = '[DeepEP rail_balance:UnsupportedConfiguration] '
-_INTERNAL_PREFIX = '[DeepEP rail_balance:InternalInvariant] '
 
 _LEGACY_BYTES = 4 * 1024 * 1024
 _ARENA_BYTES = 2 * 1024 * 1024
@@ -94,6 +93,7 @@ def _run_force_constructor(legacy_helper=None, layout_helper=None,
     original_force_size = elastic_module._C._calculate_rail_balance_hybrid_buffer_size
     original_runtime = elastic_module._C.ElasticBuffer
     original_synchronize = elastic_module.torch.cuda.synchronize
+    original_world_gate = elastic_module._run_rail_balance_world_gate
     old_host_capability = elastic_module._RAIL_BALANCE_FORCE_HOST_AVAILABLE
     had_capability = hasattr(elastic_module._C, capability_name)
     old_capability = getattr(elastic_module._C, capability_name, None)
@@ -111,6 +111,13 @@ def _run_force_constructor(legacy_helper=None, layout_helper=None,
         elastic_module._C._calculate_rail_balance_hybrid_buffer_size = fake_force_size
         elastic_module._C.ElasticBuffer = FakeRuntime
         elastic_module.torch.cuda.synchronize = lambda: None
+
+        def fake_world_gate(device_words, host_words, group):
+            calls['order'].append('constructor_gate')
+            calls['constructor_gate'] = (device_words, host_words, group)
+            return elastic_module._decode_rail_balance_world_gate(host_words)
+
+        elastic_module._run_rail_balance_world_gate = fake_world_gate
 
         try:
             buffer = elastic_module.ElasticBuffer(
@@ -130,6 +137,7 @@ def _run_force_constructor(legacy_helper=None, layout_helper=None,
         elastic_module._C._calculate_rail_balance_hybrid_buffer_size = original_force_size
         elastic_module._C.ElasticBuffer = original_runtime
         elastic_module.torch.cuda.synchronize = original_synchronize
+        elastic_module._run_rail_balance_world_gate = original_world_gate
         elastic_module._RAIL_BALANCE_FORCE_HOST_AVAILABLE = old_host_capability
         if had_capability:
             setattr(elastic_module._C, capability_name, old_capability)
@@ -201,12 +209,20 @@ def test_force_constructor_matrix_fails_with_stable_reasons():
          'hidden must be a positive multiple of 256'),
         ('num_topk', 0,
          'num_topk must be an integer in [1, 32]'),
+        ('use_fp8_dispatch', 0,
+         'use_fp8_dispatch must be a bool'),
         ('use_fp8_dispatch', True,
          'FP8 dispatch is not supported'),
+        ('deterministic', 0,
+         'deterministic must be a bool'),
         ('deterministic', True,
          'deterministic mode is not supported'),
+        ('allow_hybrid_mode', 1,
+         'allow_hybrid_mode must be a bool'),
         ('allow_hybrid_mode', False,
          'allow_hybrid_mode must be true'),
+        ('allow_multiple_reduction', 1,
+         'allow_multiple_reduction must be a bool'),
         ('allow_multiple_reduction', False,
          'allow_multiple_reduction must be true'),
     )
@@ -427,7 +443,8 @@ def test_force_path_owns_checked_tail_arena_and_runtime_total():
     assert error is None, error
     assert buffer is not None
     assert calls['order'] == [
-        'capability', 'comm', 'legacy', 'layout', 'force_size', 'runtime']
+        'capability', 'layout', 'constructor_gate',
+        'comm', 'legacy', 'force_size', 'constructor_gate', 'runtime']
     assert calls['comm'][1] is False
     assert calls['legacy_args'] == (
         1234, 128, 1024, 4, False, True, True)
@@ -445,11 +462,24 @@ def test_force_path_owns_checked_tail_arena_and_runtime_total():
         '_rail_balance_proxy_slots_per_rank',
         '_rail_balance_arena_offset',
         '_rail_balance_arena_bytes',
+        '_rail_balance_world_gate_device_words',
+        '_rail_balance_world_gate_host_words',
+        '_rail_balance_owner_token',
+        '_rail_balance_next_invocation_id',
+        '_rail_balance_live_ticket',
+        '_rail_balance_terminal',
     }
     assert buffer._rail_balance_mode == 'force'
     assert buffer._rail_balance_proxy_slots_per_rank == 32
     assert buffer._rail_balance_arena_offset == _LEGACY_BYTES
     assert buffer._rail_balance_arena_bytes == _ARENA_BYTES
+    assert buffer._rail_balance_next_invocation_id == 1
+    assert buffer._rail_balance_live_ticket is None
+    assert buffer._rail_balance_terminal is False
+    assert buffer._rail_balance_world_gate_device_words is \
+        calls['constructor_gate'][0]
+    assert buffer._rail_balance_world_gate_host_words is \
+        calls['constructor_gate'][1]
 
 
 def test_force_size_mismatch_fails_before_runtime_construction():
@@ -458,10 +488,11 @@ def test_force_size_mismatch_fails_before_runtime_construction():
     assert buffer is None
     assert type(error) is RuntimeError
     assert str(error) == (
-        _INTERNAL_PREFIX +
-        'force-v1 buffer size must equal legacy bytes plus arena bytes')
+        '[DeepEP rail_balance:CollectivePreflight] constructor-sizing '
+        'rejected rank 3 with error priority 17')
     assert calls['order'] == [
-        'capability', 'comm', 'legacy', 'layout', 'force_size']
+        'capability', 'layout', 'constructor_gate',
+        'comm', 'legacy', 'force_size', 'constructor_gate']
     assert 'runtime_args' not in calls
 
 
@@ -480,8 +511,17 @@ def test_force_sizing_helper_exceptions_fail_before_runtime_construction():
         overrides[f'{failing_helper}_helper'] = fail
         calls, buffer, error = _run_force_constructor(**overrides)
         assert buffer is None
-        assert error is marker
-        assert calls['order'][-1] == failing_helper
+        if failing_helper == 'layout':
+            assert type(error) is RuntimeError
+            assert str(error) == (
+                '[DeepEP rail_balance:CollectivePreflight] constructor '
+                'rejected rank 3 with error priority 13')
+        else:
+            assert type(error) is RuntimeError
+            assert str(error) == (
+                '[DeepEP rail_balance:CollectivePreflight] '
+                'constructor-sizing rejected rank 3 with error priority 17')
+        assert calls['order'][-1] == 'constructor_gate'
         assert 'runtime' not in calls['order']
         assert 'runtime_args' not in calls
 
