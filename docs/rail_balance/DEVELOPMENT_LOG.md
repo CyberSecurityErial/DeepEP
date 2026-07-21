@@ -5238,3 +5238,107 @@ source medians/trimmed statistics clear 25%/20% gates, and return aggregate/
 per-run regressions stay within 5%/10%.  ABI, plan, channel rotation, proxy
 layout, TMA, barriers, launch geometry, return, public API, capability bits and
 default-off identity remain closed.  No GPU command ran in D092.
+
+## 2026-07-22 — D093: implement and functionally close O078
+
+O078 was implemented in three reviewable commits without changing the public
+API or any buffer/plan ABI:
+
+```text
+9997546 test: define bounded hybrid prefix lookup
+b1fd199 perf: bound hybrid prefix resolution
+32b9cfd test: report all hybrid prefix faults
+```
+
+The only production-path edit is in `resolve_hybrid_copy`.  It first checks
+the canonical row endpoints (`P[0] == 0` and `incoming < P[C]`), then uses an
+inclusive upper-bound search for the first `P[channel + 1] > incoming`, and
+finally rechecks the complete local containment
+`P[channel] <= incoming < P[channel + 1]`.  C256 and C1024 therefore require at
+most 8 and 10 search iterations.  Plan production, quota/keep/segments,
+channel rotation, dense proxy slots, TMA issue/wait/fence order, barriers,
+launch geometry, return, force/off API behavior and both disabled capability
+bits are unchanged.
+
+The independent linear CPU oracle covers C=1/2/3/256/1024, all-zero and
+repeated prefixes, random nonnegative increments, endpoint ordinals and the
+complete valid ordinal range.  It also retains a deliberately nonmonotonic
+overlap counterexample.  That counterexample documents the actual boundary:
+neither the old linear resolver nor a logarithmic candidate lookup validates
+an arbitrarily modified whole prefix row after Gate2.  O078 trusts the
+producer-generated nondecreasing, post-Gate2 immutable plan and does not hide
+an O(C) integrity pass in the data path.
+
+Focused CPU/static validation passed:
+
+- Hybrid reference 15/15;
+- planner CUDA oracle-only seed smoke;
+- source shuffle and fault CPU oracles;
+- Hybrid API 9/9, constructor 9/9, lifecycle and legacy 4/4;
+- `git diff --check`.
+
+Fresh-cache GPU validation then passed on all eight local GPUs:
+
+- source: C100 H256 and H7168 each moved exactly 7,168 copies; C1024/D32/K4,
+  the complete source suite, five independent prefix/plan fault classes,
+  sticky second-call rejection, capacity-one, three duplicate routes and
+  abort/recovery all passed;
+- planner: 76 exact CUDA cases plus the true eight-rank LSA plan transaction;
+- return: focused C100 H256/H7168 and the complete return suite;
+- vnode: focused 4x2 H256 plus the nine-case 4x2/2x4 H256/H7168, rounding,
+  empty-egress, all-zero, plan-fault and transit-liveness matrix;
+- WORLD gate: equal, mismatch and error-first cases;
+- force codegen: four dispatch and six combine specializations, with both
+  constraint reject matrices 8/8;
+- native default-off EP8 `test_ep.py`; its debug negative counts are the
+  expected poison values, not a failure.
+
+The fresh JIT roots were:
+
+```text
+/tmp/deepep-o078-source-correctness.I2tkOc
+/tmp/deepep-o078-return-correctness.pU1m0e
+/tmp/deepep-o078-vnode-correctness.pP8caj
+/tmp/deepep-o078-world.fTP55S
+/tmp/deepep-o078-codegen.5EOUeF
+/tmp/deepep-o078-native.uBKxyJ
+```
+
+Focused sanitizer artifacts are retained under
+`.cache/rail_balance/c100/o078/sanitizer-b1/`.  The first memcheck run used
+default CUDA API error reporting and reported 328
+`cudaErrorNoKernelImageForDevice` events from NCCL's
+`ncclInitKernelsForDevice` architecture-probe calls to
+`cudaFuncGetAttributes`/`cudaGetLastError`; the target eight-rank C100 source
+fixture itself passed.  This raw failed/noisy capture is deliberately kept:
+
+```text
+f0d47e6aff2a94291f22d426dcd26b8d5eb8146b8881300b94f72ea820016891  memcheck.log
+```
+
+The installed-tool-supported rerun used `--report-api-errors no`, which
+suppresses API return-code reporting but leaves device-memory checking on.  It
+reported zero memory errors.  Synccheck, unfiltered initcheck and source-filter
+racecheck also completed with zero errors/hazards/warnings:
+
+```text
+a9d061cee538182f762e132abeea7bac7bddb844338f25751bbbb043f242c425  memcheck-no-api.log
+a9d061cee538182f762e132abeea7bac7bddb844338f25751bbbb043f242c425  synccheck.log
+a9d061cee538182f762e132abeea7bac7bddb844338f25751bbbb043f242c425  initcheck.log
+91dbb142f8feb8786cd6fde6ac035e816b67db14e4b7b400a01386ec106b75c4  racecheck.log
+```
+
+The corresponding fresh roots were
+`/tmp/deepep-o078-memcheck.aGWBT4`,
+`/tmp/deepep-o078-synccheck.04v6vL`,
+`/tmp/deepep-o078-initcheck.Yyxz7I` and
+`/tmp/deepep-o078-racecheck.jnMWyr`.  Racecheck proves only the checked local
+shared-memory hazards; it is not evidence for cross-GPU/system-scope ordering.
+
+Two maintenance failures are retained.  After adding two prefix fault cases,
+the success text still said `x3`; the GPU result exposed the stale label and
+`32b9cfd` corrected it to `x5` without changing the assertions.  The noisy
+memcheck API-probe run above was not relabelled as a clean sanitizer pass.
+There is no unresolved functional or sanitizer blocker after D093, but O078
+still requires the pre-registered profiler-free/Nsys decision before it can be
+accepted as the C100 hot path.
