@@ -292,7 +292,7 @@ def _worker(local_rank: int, num_local_ranks: int,
             if rank == 0:
                 print(
                     "PASS C080-D Hybrid source-shuffle faults: status4 "
-                    "sticky x3, second-call rejection, capacity status1, "
+                    "sticky x5, second-call rejection, capacity status1, "
                     "duplicate status3, abort/recovery",
                     flush=True,
                 )
