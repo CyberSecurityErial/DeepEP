@@ -638,3 +638,22 @@ Out of scope until evidence expands the project:
   capability override can exercise public D>1 code while leaving production
   defaults false, but it must restore both values and label unavailable Gin/QP
   counters honestly.
+
+## C100 controlled source-fixture context (2026-07-21)
+
+- Named-only `c100_volume_h256` and `c100_volume_h7168` cases use the same
+  G8/D9/K4/N1024/C256/seed100 schedule.  Each owner keeps 128 and moves 896;
+  every egress receives 896, total moved is 7,168, and 224 source channels per
+  rank perform four records each.  H256 and H7168 differ only in payload width.
+- Both final C256 cases pass true EP8 LSA exact raw TokenLayout, dense slot,
+  immutable input, CPU oracle, and capacity checks.  They are excluded from the
+  default correctness suite and are functionality-only evidence.
+- C8 passed both widths but was rejected for profiling because seven moved CTAs
+  underfill H200.  C128 passed H256 during the review transition; C256 is the
+  retained production-scale fixture.  No timing was accepted from any version.
+- A definite Megatron PGID 173641 with four approximately 36 GiB workers was
+  terminated under the standing authorization; all GPUs were empty before the
+  final functional runs.
+- The next new NCU/Nsys invocation still waits for the user's workflow.  The
+  standalone return-unshuffle harness must reuse this plan before profiling its
+  runtime; vnode remains correctness scaffolding, not a performance fixture.

@@ -1264,3 +1264,30 @@ C105 likewise uses a dedicated narrow force-v1 harness instead of adding
 conditionals to the broad `test_ep.py` matrix.  Planner-derived puts and bytes
 may be reported as derived values, but missing physical Gin wait/QP counters
 must remain explicitly unavailable until the real runtime exposes them.
+
+## Fixture decision O059 — fill the source kernel without profiling vnode
+
+The retained source-scaling pair fixes G8/D9/K4/N1024/C256 and seed 100.  Each
+owner is hot for a different remote destination, so all eight ranks are both
+producers and consumers: each keeps 128 records, moves 896, receives 896, and
+uses exactly Pcap 896.  Four duplicate-server top-k lanes remain distinct
+experts but produce one deduplicated payload copy.  H256 and H7168 have equal
+plans and differ only in record width (576 versus 14,400 bytes).
+
+C=8 was functionally correct but left only seven moved CTAs per rank.  It was
+rejected before profiling because such a grid would repeat the old fixed-
+latency mistake.  C=128 also passed functionality during review.  C=256 is
+retained because a normal non-overlap force configuration caps at four channels
+per SM and commonly selects at least 64 SMs; here 224 channels per rank move
+four records each.  This is a controlled microbenchmark shape, not a claim that
+every production launch always uses exactly 256 channels.
+
+The fixture stays in the existing source LSA harness and is named-only, which
+keeps default regression cost unchanged.  Vnode is rejected for this purpose:
+its pack, synthetic transport/expert, demux, two buffers, Gloo gates, and strict
+snapshots would contaminate timeline and replay attribution.  Return-unshuffle
+will instead import the same plan into its existing standalone harness.
+
+Both final widths pass full byte correctness.  No performance tool was invoked
+and no duration was recorded.  The next accepted evidence requires the user's
+workflow, an idle-GPU audit, a separate warmup, and one pinned target launch.

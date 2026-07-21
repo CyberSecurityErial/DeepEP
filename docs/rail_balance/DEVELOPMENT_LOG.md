@@ -3858,3 +3858,65 @@ user's promised workflow and an idle-GPU check.  The unrelated light CUDA
 sample remains untouched as requested.  C100 is still `IN_PROGRESS` and C105
 is still `PLANNED`; this audit closes only the C080 local-integration slice, not
 the full long-running Goal.
+
+## 2026-07-21 — D062: build the controlled large-volume source fixture
+
+C100 now has a fixed source-only fixture large enough for later payload-scaling
+attribution without pulling vnode B0--B5, synthetic expert, demux, or two-window
+validation work into the profile.  Eight owners each route 1,024 tokens to a
+different remote destination in a nine-destination namespace (destination zero
+is local padding).  The four distinct top-k experts for each token belong to
+the same server, so production destination deduplication emits one payload copy
+per token.  The exact schedule is:
+
+```text
+G=8, D=9, K=4, N=1024/rank, C=256, seed=100
+keep=128 per hot owner/destination
+moved=896 per owner and 896 per egress
+total moved=7168, Pcap=896 exactly
+moved-active source channels=224/rank, four records/channel
+```
+
+`c100_volume_h256` and `c100_volume_h7168` differ only in hidden width.  Their
+top-k routes, token count, iteration, remainder seed, count/quota/segments,
+source channels, egresses, proxy slots, and complete CPU schedule are equal.
+Explicit owner and egress counters each equal `(896,) * 8`.  The two cases are
+available only through `--case-name`; the default exhaustive C080-D suite does
+not inherit their larger cost.  The raw verifier caches each remote owner's
+expected source once instead of rebuilding a full N×H tensor for every proxy
+slot; this changes only test cost, not the comparison or device path.
+
+The first implementation used C=8 and passed both H256 and H7168 functionality,
+but independent review rejected it for profiling because only seven source
+CTAs per rank moved data.  C=128 also passed H256 after review requested higher
+production-like concurrency.  The final C=256 matches the normal
+`num_sms * four-channels-per-SM` scale for a non-overlap force configuration;
+224 CTAs move payload on every rank.  No C8/C128 result is retained as a timing
+or optimization claim.
+
+Final C256 evidence uses the existing warmed cache
+`/tmp/deepep-c100-fixture.heZiRA` and ports 30010/30011:
+
+```text
+PASS C100 H256: true EP8 LSA, moved=7168, per-owner/egress=896,
+     exact raw legacy TokenLayout and immutable source inputs
+PASS C100 H7168: same plan and the same exact checks
+PASS CPU oracle and py_compile
+PASS git diff --check
+```
+
+The Hybrid arena is 2 MiB/GPU for H256 and 26 MiB/GPU for H7168; the complete
+H7168 symmetric test allocation is approximately 140 MiB/GPU, safely below an
+H200 OOM boundary.  These runs are functionality evidence only: no duration,
+bandwidth, NCU, Nsys, or speedup result was collected.
+
+Before these functional runs, process inspection found one definite Megatron
+torchrun group, PGID 173641, with four 36,212 MiB workers.  Under the user's
+standing authorization, the exact launch group was terminated and GPU compute
+processes were verified empty; no unrelated process was touched.
+
+The next source measurement must use the user's profiling workflow.  It will
+warm separately, pin one device/kernel/launch, and compare these H256/H7168
+cases rather than reusing the old three-record fixture.  Return-unshuffle still
+needs the same large plan wired into its existing standalone harness before its
+own runtime attribution.
