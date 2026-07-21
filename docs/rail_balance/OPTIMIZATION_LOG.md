@@ -1632,3 +1632,30 @@ SourceCounters is not collected from the current no-lineinfo cubin; a later
 lineinfo build must first prove identical SASS/resources.  MemoryWorkloadAnalysis
 is conditional, and `full` remains rejected.  A hot-path single-variable
 experiment is still blocked.
+
+## Measurement decision O076 — authorize only target-channel distribution
+
+The directed report closes O075's attribution gate.  Deterministic schedule
+reconstruction gives 32 payload-bearing and 224 empty one-warp CTAs per egress.
+NCU simultaneously reports 98.238888% no-eligible scheduler cycles,
+0.017611 eligible warps/scheduler, and 49.733468 long-scoreboard cycles per
+issued instruction, 86.3304% of the 57.608302-cycle interval.  Barrier,
+membar, and execution-pipe throttle states are zero.  Exact logical payload
+bytes appear as 12,873,728 NVLink TX user bytes, while aggregate TX peak
+utilization is only 5.730689%.
+
+This evidence authorizes one variable: change how the existing incoming copies
+are assigned to target channels so more existing return CTAs carry work.  Keep
+quota, minimum moved-copy count, segment ownership, proxy count/capacity,
+TokenLayout, group-major static slots, TMA payload loop, barriers, public API,
+JIT specialization and default-off behavior unchanged.  Predict unchanged
+logical bytes and correctness, more nonempty target channels, lower no-profiler
+return latency, and a shorter Nsys return kernel.  A later NCU rerun is needed
+only if the profiler-free and Nsys result disagree with the prediction.
+
+Do not pipeline TMA, alter shared memory, raise channel count, change block
+geometry, or add a work queue in this experiment.  Long scoreboard proves a
+long-latency memory dependency, not the exact responsible instruction; if
+channel distribution fails to improve the no-profiler result, collect bounded
+memory/source evidence before touching that loop.  This is deliberately a
+simple plan-layout experiment, not a new runtime abstraction.

@@ -224,9 +224,13 @@ the exact file snapshots without inventing commit identity.
   application-replay passes produce one device-6 target and preserve two prior
   failures (invalid output option and no-match NVTX syntax).  Basic plus plan
   audit shows sparse utilization and 32 active versus 224 empty target channels,
-  but no dominant wait/link root cause.  Resume with the bounded
-  SchedulerStats/WarpStateStats/Nvlink capture; do not edit the hot path or jump
-  to `full`.
+  but no dominant wait/link root cause.
+- The directed NCU report is accepted at clean `e4bd800`.  Ten further strict
+  replays preserve the exact target and prove 98.238888% no-eligible scheduler
+  cycles, 49.733468 long-scoreboard cycles per issued instruction, exact
+  12,873,728-byte NVLink TX user traffic, and only 5.730689% aggregate TX peak
+  utilization.  The precise LDG/TMA source remains unproved.  O076 permits only
+  a target-channel-distribution experiment; no other hot-path change is open.
 
 ## Mandatory retained boundary
 
@@ -256,14 +260,14 @@ No C070 timing is performance evidence.
    Rail/Gin correctness passes. D1 evidence is never a D>1 Gin success claim.
 6. C090 is complete. Do not rerun its unchanged full suites or sanitizer
    kernels unless production device code changes.
-7. The GPU evidence-chain skill is installed; formal Nsys attribution and the
-   exact `basic` NCU capture are complete.  Recheck idle GPUs, then retain the
-   same strict whole-application replay, name+grid matching, device 6, `kill 0`
-   and cache/clock `none` for the bounded SchedulerStats/WarpStateStats/Nvlink
-   capture.  Default kernel/range replay, relaxed matching and `full` remain
-   forbidden.  A hot-path edit is still blocked until that report maps the
-   active-channel limiter.  C105 packages the fastest possible real-cluster
-   bring-up afterward.
+7. The GPU evidence-chain skill is installed; formal Nsys attribution plus the
+   exact `basic` and directed scheduler/warp/NVLink NCU captures are complete.
+   Implement and test only O076's target-channel-distribution variable.  Do not
+   change the TMA loop, block geometry, proxy ABI, barriers or public/default-
+   off contract.  Recheck idle GPUs before no-profiler A/B, then use the same
+   H256/H7168 contract and Nsys window.  Default kernel/range replay, relaxed
+   matching and `full` remain forbidden.  C105 packages the fastest possible
+   real-cluster bring-up afterward.
 
 Pinned runtime for accepted commands:
 

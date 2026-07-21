@@ -919,3 +919,22 @@ Out of scope until evidence expands the project:
   channels are empty.  This is distinct from the source-producer distribution.
   Scheduler/warp/link attribution is next; no performance-path edit is yet
   authorized.
+
+## C100 directed NCU hypothesis context (2026-07-22)
+
+- The same device-6 steady-26 return target completed ten strict application
+  replays at clean `e4bd800` with SchedulerStats, WarpStateStats and Nvlink.
+  Exactly one grid-256/block-32 launch is retained; the artifact hashes are in
+  `C100_PERFORMANCE_EVIDENCE.md`.
+- Every egress still has 896 records packed into 32 one-warp target channels;
+  224 channels carry no payload.  NCU observes 98.238888% no-eligible cycles,
+  0.017611 eligible warps/scheduler, and 49.733468 long-scoreboard cycles per
+  issued instruction.  The report cannot identify the exact LDG/TMA source of
+  those dependencies without PC/source counters.
+- TX user bytes are exactly 12,873,728 and aggregate TX peak utilization is
+  5.730689%.  Therefore local NVLink saturation is not the captured limiter.
+  This remains LSA/TMA evidence, not real Gin/RDMA evidence.
+- O076 authorizes only a target-channel-distribution experiment.  Quotas,
+  segments, proxy slots/count, payload bytes, TMA loop, synchronization,
+  default-off behavior and public API must stay unchanged.  Preserve a failed
+  experiment and collect memory/source counters before any TMA-loop rewrite.

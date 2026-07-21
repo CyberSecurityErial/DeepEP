@@ -14,7 +14,7 @@ large return fixture: FUNCTIONAL_PASS, NSYS_ATTRIBUTED
 checked-adapter benchmark harness: AUDITED_PASS
 profiler-free baseline: SOURCE_AND_RETURN_COLLECTED, TAIL_STABILITY_NOT_ACCEPTED
 new Nsys attribution: FORMAL_H7168_PASS, EXACT_NCU_TARGET_SELECTED
-new NCU dossier: NOT_COLLECTED
+new NCU dossier: BASIC_AND_DIRECTED_SCHEDULER_WARP_NVLINK_PASS
 performance-path change: NONE
 ```
 
@@ -781,6 +781,101 @@ The rejected no-match retry is retained as JSON/log under hashes
 invalid-`--output` attempt failed before target launch and produced no raw file,
 which remains an explicit missing artifact rather than reconstructed evidence.
 
+### Accepted directed scheduler, warp and NVLink evidence
+
+The pre-registered follow-up kept the same whole-application replay, exact
+device/range/kernel identity, cache/clock policy and complete eight-rank
+lifecycle.  It changed only the requested counter sections.  The command core
+and its explicit environment were:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+EP_DISABLE_GIN=1 OMP_NUM_THREADS=1 \
+PYTHONPATH=$PWD/tests:$PWD/tests/elastic:$PWD \
+/usr/local/cuda/bin/ncu \
+  --config-file off --target-processes all --devices 6 \
+  --replay-mode application --app-replay-mode strict \
+  --app-replay-match grid \
+  --nvtx --nvtx-include 'c100\/return\/stage\/steady\/26/' \
+  --kernel-name-base demangled \
+  --kernel-name 'regex:.*rail_balance_hybrid_return_unshuffle_impl.*' \
+  --launch-count 1 --kill 0 \
+  --section SchedulerStats --section WarpStateStats --section Nvlink \
+  --cache-control none --clock-control none --force-overwrite \
+  --log-file .cache/rail_balance/c100/ncu/formal/return-h7168-rank6-sched-warp-nvlink.log \
+  --export .cache/rail_balance/c100/ncu/formal/return-h7168-rank6-sched-warp-nvlink \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/bench_rail_balance_hybrid_lsa.py \
+  --stage return --case-name c100_volume_h7168 \
+  --warmup-iters 10 --steady-iters 27 --nvtx \
+  --json-out .cache/rail_balance/c100/ncu/formal/return-h7168-rank6-sched-warp-nvlink.json \
+  --master-port 30249 --timeout 180 --watchdog-seconds 1800
+```
+
+Ten strict application-replay passes completed and each observed outer run
+passed.  As with the first capture, that outer console stream was observed but
+not independently persisted.  The command exited zero, left no worker or GPU
+allocation, and the report again contains exactly one device-6, stream-26,
+grid-256/block-32 `return_unshuffle<7168,4>` launch in steady range 26.  The
+final-pass JSON is clean commit `e4bd800`, declares no co-tenant, and records
+the unchanged G8/D9/K4/H7168/N1024/C256 workload with 896 proxy records per
+egress.  Exit and cleanup were session observations rather than a separate
+console artifact; the log/report persist replay and target state.  Only the
+expected uncontrolled-cache and unmodified-clock warnings appear.  The raw
+artifacts are:
+
+```text
+3b00510e7d8013a820af498f257d3b3f022e537d298bc52d6e0db605b486ebda  return-h7168-rank6-sched-warp-nvlink.json
+7b2848a3075db729211eba058daf3c8d5de17439dbf2c0b85ac67cb490281974  return-h7168-rank6-sched-warp-nvlink.log
+e67706da8aa1ccdd29aeb46eff720468c7fc3ee873ea00435c44b5f4a468ffb3  return-h7168-rank6-sched-warp-nvlink.ncu-rep
+```
+
+The scheduler is starved rather than throughput-saturated:
+
+```text
+active warps / scheduler                         1.0145
+eligible warps / scheduler                       0.0176
+issued warps / scheduler                         0.02
+cycles with one or more eligible warps           1.7611%
+cycles with no eligible warp                    98.2389%
+warp cycles per issued instruction              57.6083
+long-scoreboard stall cycles / issued inst      49.7335
+sleeping / wait stall cycles / issued inst       4.9348 / 2.7344
+barrier / membar / LG / MIO / TEX throttle       0 / 0 / 0 / 0 / 0
+```
+
+Long scoreboard accounts for 86.3% of the reported cycles per issued
+instruction.  The source's elected-lane payload loop contains metadata/global
+loads, a TMA load and completion wait, an LSA peer TMA store, and a store wait
+at `rail_balance_hybrid_unshuffle.cuh:160-253`.  Without PC sampling or source
+counters this report cannot identify which LDG/TMA dependency supplies the
+scoreboard cycles.  It does reject barrier, membar and execution-pipe throttle
+states as the primary explanation for this capture.  Combined with the
+deterministic 32-active/224-empty target-channel map, it establishes the
+actionable hypothesis: the current launch exposes too little independent
+channel work to hide the long-latency memory dependencies in the per-record
+payload loop.  O076 must still falsify or confirm the causal benefit.
+
+The link counters provide an independent byte and saturation check.  Device 6
+transmitted exactly 12,873,728 user bytes, equal to 896 records times the
+14,368-byte TokenLayout stride.  Total transmit traffic was 18,503,952 bytes,
+including 5,630,224 protocol bytes, at 26.253 GB/s and 5.73% of the reported
+peak.  Receive traffic was 13,334,432 protocol bytes and zero user bytes, which
+is NCU's protocol/user classification rather than an endpoint attribution.  The
+link counters are device/kernel-window counters and may include peer protocol
+traffic; they prove neither a production Gin rate nor a complete fabric
+attribution.  They do prove that this local return path is not close to
+saturating aggregate NVLink transmit bandwidth while its logical payload byte
+count is exact.
+
+NCU reports 761.504 us for this counter pass.  It is replay-instrumented and is
+not compared with the prior basic pass, Nsys, or profiler-free latency.
+`MemoryWorkloadAnalysis` is not required before the first falsification: the
+single variable will change independent channel work while leaving every TMA
+instruction, TokenLayout byte, proxy count and link endpoint unchanged.  If
+that experiment fails, memory-path attribution becomes the next bounded
+section rather than an assumed explanation.
+
 The exact installed-schema SQL used to prove the multi-rank window is retained
 here; formal analysis must first require exactly one outer range:
 
@@ -885,21 +980,21 @@ No old report may be relabelled as evidence for the new 7,168-record fixture.
 3. Nsys exposed critical-path attribution for the new large fixture.  This is
    complete for return-H7168 and selects the exact invocation above.
 4. An exact NCU invocation selected from that Nsys report.  The strict `basic`
-   capture is complete; scheduler/warp/link attribution is still pending.
+   and directed scheduler/warp/NVLink captures are complete.  They identify
+   target-channel packing plus unhidden long-scoreboard latency without a
+   saturated NVLink payload path.
 5. Sustained same-machine peer-copy/HBM reference if a bandwidth percentage is
    later needed; published peak alone is insufficient.
 6. Real D>1 Gin/RDMA/QP/NIC behavior and network-visible counters.
 7. Full-MoE or training-level target metric and compute/communication overlap.
 
-Items 2--4 now exist, but the first NCU set only establishes low broad
-utilization plus deterministic target-channel packing; it cannot yet name the
-dominant wait state or link behavior.  TMA waits, segment scans, QP choice,
-tail publication cadence, planner launch, and barriers remain hypotheses.  No
-performance-path code change is authorized until the bounded scheduler/warp/
-link capture closes that gap.  Unstable tails continue to limit confidence and
-must be represented in any later no-profiler validation; they do not prevent
-Nsys from determining whether a tail is host-, API-, synchronization-, or
-kernel-owned.
+Items 2--4 now exist.  The directed NCU capture closes the pre-edit gate:
+eligible-warp starvation and long scoreboard dominate active execution, the
+logical peer-store bytes are exact, and aggregate NVLink transmit utilization
+is low.  This authorizes one target-channel-distribution experiment only.  It
+does not authorize changing the TMA chain, proxy layout, barriers, QP choice,
+tail publication, public API or production defaults.  Unstable tails continue
+to limit confidence and must be represented in the no-profiler A/B validation.
 
 ## Environment collection commands
 

@@ -4674,3 +4674,36 @@ The next bounded capture is SchedulerStats+WarpStateStats+Nvlink under the
 unchanged strict replay contract.  SourceCounters is deferred because the
 accepted JIT cubin has no lineinfo; enabling lineinfo later requires identical-
 SASS/resource proof.  No CUDA/JIT/runtime hot path changed.
+
+## 2026-07-22 — D081: close the directed scheduler/warp/NVLink attribution gate
+
+The unchanged rank-6 steady-26 target completed ten more strict whole-
+application replays with only `SchedulerStats`, `WarpStateStats`, and `Nvlink`.
+The command exited zero, retained one exact device-6 return-unshuffle launch,
+and left no worker or GPU allocation.  The final JSON is clean `e4bd800`, shape
+G8/D9/K4/H7168/N1024/C256, with 896 proxy records per egress.  JSON, log and
+report hashes are `3b00510e...ebda`, `7b2848a3...974`, and
+`e67706da...ffb3`.  The observed outer runs passed; as in D080, their console
+stream was not separately persisted.  Cache and clocks remain deliberately
+uncontrolled and unmodified.
+
+NCU records only 0.017611 eligible warps/scheduler and an issued rate rounded
+to 0.02, with 98.238888% of scheduler cycles having no eligible warp.  The
+57.608302-cycle issue interval contains 49.733468 long-scoreboard cycles
+(86.3304%); barrier, membar, and execution-pipe throttle metrics are zero.
+This does not identify a particular LDG or TMA instruction without PC/source
+counters.  Together with the 32 payload-bearing one-warp channel CTAs, it
+supports the hypothesis that current independent work cannot hide the long-
+latency memory dependencies in the serial payload loop; O076 remains the
+causal falsification.
+
+NVLink transmitted user bytes are exactly 12,873,728, equal to
+`896 * 14,368`; transmit peak utilization is only 5.730689%.  Protocol TX/RX
+bytes are retained separately and are not relabelled as payload.  This rejects
+aggregate local NVLink saturation for the captured invocation but makes no
+Gin/RDMA or production-fabric claim.  An independent read-only audit reports
+Blocker 0 / High 0 / Medium 1 / Low 3; the Medium is precisely the source-
+instruction attribution boundary above.  It agrees that MemoryWorkloadAnalysis
+is not required before one target-channel-distribution falsification, provided
+the TMA loop, payload, slot count and synchronization protocol stay unchanged.
+No performance hot path changed in D081.
