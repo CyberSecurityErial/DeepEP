@@ -4404,3 +4404,26 @@ Medium was an active HANDOFF sentence that still said return-H7168 remained;
 the Low was a PID range that could imply nonexistent intermediate PIDs.  The
 handoff now points to the completed group and the evidence file lists all eight
 actual PIDs explicitly.
+
+## 2026-07-22 — D074: freeze the installed Nsys contract before instrumentation
+
+No profile was started in this slice.  The installed CLI is Nsys
+2024.6.2.225.  Read-only help and installation inspection prove that
+`cuda,nvtx,osrt`, 39 stats reports and seven analyze rules are available.  The
+33 installed recipes are not currently runnable because their Python
+environment lacks `pandas`; stats/analyze and SQLite export remain usable.
+There is no separate `nccl` trace collector in this version.
+
+Retained command/tool failures are: the first benchmark `--help` invocation
+lacked the frozen `PYTHONPATH` and raised `ModuleNotFoundError: deep_ep`; the
+corrected command passed.  `nsys stats --help-reports` and
+`nsys analyze --help-rules` print valid lists but return 1.  The attempted
+`nsys profile --trace=help` form is invalid; `--help=trace` is the installed
+syntax.  Representative recipe probes all fail with the same missing-pandas
+error, not missing trace support.
+
+Static audit confirms the benchmark has no profiler CLI or NVTX range and its
+report intentionally declares profiling disabled.  A minimal benchmark-only
+`--nvtx` mode is therefore the next code slice.  It will fail closed for
+baseline eligibility, delimit only the steady window, and add sparse phase and
+invocation ranges.  No device kernel or production runtime edit is authorized.

@@ -1506,3 +1506,18 @@ CUDA API/synchronization, and GPU-kernel intervals.  We will not optimize from
 the stable median alone, and will not profile the rejected co-tenant run as a
 kernel workload.  NCU remains conditional on Nsys identifying an exact
 exposed invocation with end-to-end impact.
+
+## Measurement decision O071 — add only a diagnostic NVTX window
+
+Full-process Nsys collection would include cold JIT, initialization and report
+generation, while the current harness has no valid capture trigger.  Reusing
+the vnode profiler ranges would profile a test-only transport rather than the
+checked source/return adapter under study.  The minimum natural extension is
+one default-off `--nvtx` flag in the C100 benchmark itself.
+
+Rank 0 will own one steady-only capture range; every rank will expose sparse
+phase and exact-invocation ranges.  Diagnostic reports must set automatic
+baseline eligibility false.  The first Nsys pass uses no CPU sampling, GPU
+metrics or NCU counters; it asks only whether host API/synchronization or GPU
+execution owns the exposed stage and tail.  This instrumentation is not a
+performance optimization and cannot create a speedup claim.

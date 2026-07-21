@@ -457,14 +457,45 @@ ComputeWorkloadAnalysis, MemoryWorkloadAnalysis, SchedulerStats,
 WarpStateStats, SourceCounters, InstructionStats, Nvlink, PmSampling, and the
 installed roofline charts.
 
-Nsys 2024.6 lists the relevant recipes `cuda_gpu_kern_sum`,
-`cuda_gpu_kern_hist`, `cuda_gpu_kern_pace`, `cuda_api_sum`,
-`cuda_gpu_mem_{time,size}_sum`, `gpu_gaps`, `gpu_time_util`,
-`nvtx_gpu_proj_{sum,trace,pace}`, `osrt_sum`, `nccl_sum`,
-`nccl_gpu_proj_sum`, `nccl_gpu_overlap_trace`, `nvlink_sum`,
-`network_traffic_map`, and `diff`.  Recipe Python dependencies must be checked
-before treating recipe failure as missing trace data.  Every SQLite analysis
-must inspect the actual exported schema and time units first.
+Nsys 2024.6 installs 39 stats reports.  Relevant installed report identifiers
+include `cuda_gpu_kern_{sum,gb_sum}`, `cuda_gpu_trace`,
+`cuda_kern_exec_{sum,trace}`, `cuda_api_{sum,trace}`,
+`cuda_gpu_mem_{time,size}_sum`, `nvtx_gpu_proj_{sum,trace}`, `nvtx_kern_sum`,
+`nvtx_sum`, and `osrt_sum`.  Installed analyze rules include `cuda_api_sync`,
+`gpu_gaps`, `gpu_time_util`, and synchronous/asynchronous memcpy checks.  The
+installed trace collectors include `cuda,nvtx,osrt` but not a separate `nccl`
+value; this local fixture uses Gloo control plus CUDA-visible device work.
+
+Thirty-three Nsys recipes are present, but the installed recipe Python
+environment currently lacks the common `pandas` dependency; representative
+recipe invocations all fail with `No module named 'pandas'`.  This does not
+block collection, stats/analyze, SQLite export, or schema-aware custom SQL.
+`nsys stats --help-reports` and `nsys analyze --help-rules` also print their
+lists while returning status 1, and the correct trace-help form is
+`nsys profile --help=trace`, not `--trace=help`.  These tool behaviors are
+retained rather than misreported as workload failures.
+
+### Pre-registered first Nsys capture
+
+The profiler-free harness currently has no NVTX/capture mode and explicitly
+marks NVTX disabled.  Before collection it will receive one test-only
+`--nvtx` flag that:
+
+- leaves the default path disabled;
+- makes any persistent report automatically ineligible as a profiler-free
+  baseline;
+- marks target prepare/finish/prerequisite/stage phases and exact steady
+  invocation ordinals;
+- lets rank 0 delimit a single `c100_nsys_window` around the steady loop so
+  Nsys excludes cold JIT and warmup;
+- changes no CUDA/JIT/Hybrid production code.
+
+The first diagnostic will target return-H7168 because accepted reports retain
+the largest rank-local tails.  It will collect `cuda,nvtx,osrt` separately
+from NCU, without GPU metrics or CPU sampling in the initial low-perturbation
+pass.  The Nsys report and SQLite schema will determine whether a second pass
+needs process-tree sampling/backtraces.  NCU remains forbidden until this
+trace proves an exact exposed kernel invocation.
 
 ## Matching official hardware and tool facts
 
