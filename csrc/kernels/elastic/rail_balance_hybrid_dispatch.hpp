@@ -424,10 +424,11 @@ prepare_rail_balance_hybrid_dispatch(
     };
 }
 
-// Gate #2 is the last fallible host phase. This adapter therefore only binds
-// the already-owned pointers to the frozen force ABI and submits the already-
-// compiled specialization. In particular, keep validation, JIT, allocation,
-// D2H status reads, and stream synchronization out of this function.
+// Gate #2 is the last planned validation/materialization phase. This adapter
+// therefore only binds already-owned pointers to the frozen force ABI and
+// submits the compiled specialization. Runtime config/launch may still fail;
+// the H4c owner poisons the transaction before entering that job-fatal window.
+// Keep validation, JIT, allocation, D2H reads, and synchronization out.
 static void launch_prepared_rail_balance_hybrid_dispatch(
     const PreparedRailBalanceHybridDispatch& prepared,
     void* x,
@@ -826,7 +827,8 @@ struct RailBalanceHybridDispatchRawPointers {
     topk_idx_t* copied_topk_idx;
     int* cumulative_local_expert_recv_stats;
     int* psum_num_recv_tokens_per_scaleup_rank;
-    int* psum_num_recv_tokens_per_expert;
+    int* psum_num_recv_tokens_per_expert_storage;
+    int* psum_num_recv_tokens_per_expert_inclusive;
     int* num_unaligned_recv_tokens_per_expert;
     int* dst_buffer_slot_idx;
     int* token_metadata_at_forward;

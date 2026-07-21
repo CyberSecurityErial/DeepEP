@@ -805,8 +805,10 @@ public:
                     cumulative_stats.data_ptr<int>() : nullptr,
             .psum_num_recv_tokens_per_scaleup_rank =
                 psum_num_recv_tokens_per_scaleup_rank.data_ptr<int>(),
-            .psum_num_recv_tokens_per_expert =
+            .psum_num_recv_tokens_per_expert_storage =
                 psum_num_recv_tokens_per_expert_storage.data_ptr<int>(),
+            .psum_num_recv_tokens_per_expert_inclusive =
+                psum_num_recv_tokens_per_expert_storage.data_ptr<int>() + 1,
             .num_unaligned_recv_tokens_per_expert =
                 num_unaligned_recv_tokens_per_expert.data_ptr<int>(),
             .dst_buffer_slot_idx = dst_buffer_slot_idx.data_ptr<int>(),
@@ -1052,6 +1054,77 @@ public:
         pending.plan_status = host_status;
         pending.state = RailBalanceHybridPlanState::PlanReady;
         return pending.outputs.as_tuple();
+    }
+
+    void rail_balance_hybrid_dispatch_commit(const int& invocation_id) {
+        EP_HOST_ASSERT(not destroyed);
+        EP_HOST_ASSERT(rail_balance_hybrid_plan_pending.has_value());
+        auto& pending = rail_balance_hybrid_plan_pending.value();
+        EP_HOST_ASSERT(pending.invocation_id == invocation_id);
+        EP_HOST_ASSERT(
+            pending.state == RailBalanceHybridPlanState::PlanReady);
+        EP_HOST_ASSERT(pending.plan_status == 0);
+        EP_HOST_ASSERT(not pending.shuffled);
+        EP_HOST_ASSERT(pending.source_shuffle != nullptr);
+        EP_HOST_ASSERT(pending.dispatch_bundle != nullptr);
+        auto& bundle = *pending.dispatch_bundle;
+        EP_HOST_ASSERT(bundle.main_dispatch != nullptr);
+        const c10::cuda::CUDAGuard device_guard(device_index);
+
+        // Freeze the complete raw submission ABI before poisoning ownership.
+        // From Invalid through the two adjacent submissions there may be no
+        // Tensor access, validation, allocation, JIT, status readback, or
+        // synchronization. Both launch adapters are still allowed to throw;
+        // in that case the transaction remains permanently Invalid.
+        const auto& prepared_source = *pending.source_shuffle;
+        const auto& prepared_dispatch = *bundle.main_dispatch;
+        const auto raw = bundle.raw;
+        const auto nccl_dev_comm = nccl_context->dev_comm;
+        const auto nccl_window = nccl_context->window;
+        const int num_experts = bundle.num_experts;
+        const int num_destinations = bundle.num_destinations;
+        const int scaleout_rank_idx = bundle.scaleout_rank_idx;
+        const int num_rails = bundle.num_rails;
+        const int scaleup_rank_idx = bundle.scaleup_rank_idx;
+        const int num_max_tokens_per_rank =
+            bundle.num_max_tokens_per_rank;
+        const int rank_idx = bundle.rank_idx;
+        const int proxy_capacity_per_egress =
+            bundle.proxy_capacity_per_egress;
+        const int num_tokens = bundle.num_tokens;
+
+        pending.state = RailBalanceHybridPlanState::Invalid;
+        submit_prepared_rail_balance_hybrid_source_shuffle(
+            prepared_source,
+            nccl_dev_comm, nccl_window,
+            raw.x, raw.topk_idx, raw.topk_weights,
+            raw.arena,
+            raw.owner_channel_prefix, raw.keep_count,
+            raw.segments, raw.num_segments,
+            raw.retained, raw.moved_channel_prefix,
+            raw.group_prefix, raw.proxy_required, raw.status,
+            num_experts, num_destinations, scaleout_rank_idx,
+            num_rails, scaleup_rank_idx,
+            num_max_tokens_per_rank, rank_idx,
+            proxy_capacity_per_egress, comm_stream);
+        launch_prepared_rail_balance_hybrid_dispatch(
+            prepared_dispatch,
+            raw.x, nullptr,
+            raw.topk_idx, raw.topk_weights, raw.copied_topk_idx,
+            raw.cumulative_local_expert_recv_stats,
+            raw.psum_num_recv_tokens_per_scaleup_rank,
+            raw.psum_num_recv_tokens_per_expert_storage,
+            raw.num_unaligned_recv_tokens_per_expert,
+            raw.dst_buffer_slot_idx, raw.token_metadata_at_forward,
+            num_tokens, 0, 0,
+            nccl_dev_comm, nccl_window,
+            raw.buffer, raw.workspace, raw.mapped_host_workspace,
+            raw.arena,
+            raw.retained, raw.moved,
+            raw.group_prefix, raw.proxy_required,
+            scaleout_rank_idx, scaleup_rank_idx, comm_stream);
+        pending.shuffled = true;
+        pending.state = RailBalanceHybridPlanState::DispatchLive;
     }
 
     void rail_balance_hybrid_source_shuffle(
@@ -4791,6 +4864,10 @@ static void register_apis(pybind11::module_& m) {
         .def(
             "_rail_balance_hybrid_plan_finish",
             &ElasticBuffer::rail_balance_hybrid_plan_finish,
+            pybind11::arg("invocation_id"))
+        .def(
+            "_rail_balance_hybrid_dispatch_commit",
+            &ElasticBuffer::rail_balance_hybrid_dispatch_commit,
             pybind11::arg("invocation_id"))
         .def(
             "_rail_balance_hybrid_source_shuffle",
