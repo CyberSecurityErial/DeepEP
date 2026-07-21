@@ -2473,3 +2473,96 @@ active source slots cannot prove a physical rewrite, and that a one-rank
 constructor/setup failure still relies on the outer watchdog. Neither finding
 is a numerical error or a reason to expand the vnode scaffold before force
 dispatch codegen.
+
+## 2026-07-21 — D041: compile the isolated force Hybrid dispatch
+
+C080-E now has a force-only Hybrid dispatch implementation and JIT runtime in
+new files/paths; the legacy `hybrid_dispatch.cuh`, `dispatch.hpp`, and
+`combine.hpp` remain byte-identical. The new kernel retains the original
+notify, local-destination bypass, destination forwarding, Tag0/Tag1 barriers,
+and copy-epilogue contract. Its source-side difference is deliberately narrow:
+
+```text
+owner token scan:
+    remote ordinal < retained[g,c,d] -> legacy owner Gin put at slot ordinal
+    otherwise                         -> no owner put; source shuffle owns it
+
+egress grouped scan:
+    p = group_prefix[g,c,d] + u
+    remote slot = retained[g,c,d] + u
+    Gin put proxy_dispatch[p]
+
+after both scans:
+    publish one packed final tail = retained + moved
+```
+
+The local destination never enters this plan and still uses the original TMA
+bypass. There is no descriptor, ready word, queue, ring, per-put atomic, or
+success-path status check. `proxy_required` remains exactly one ABI declaration
+for the eventual transaction/counter surface, but the committed post-Tag0
+kernel does not read it. Gate2 owns validation; adding a device assert, trap,
+data-dependent return, or clamp after Tag0 would be a liveness bug.
+
+At destination ingress, the forwarder derives original owner-local rank from
+`src_token_global_idx`, compares it with the ingress `scaleup_rank_idx`, and
+snapshots `linked_list_idx[0]` only for a moved record before the existing
+linked-list overwrite. Force forward metadata is exactly
+`[src,last,p,src_scaleup[K],dst_slot[K]]`, or `3+2K` integers. Cached and FP8
+specializations are compile-time rejected; the first force specialization is
+BF16, non-cached, multiple-reduction, expert alignment one.
+
+The private compile probe uses production-shaped values: 64 SMs, four
+scaleout and four forward warps per SM, 384 threads, C=256, M=8192, E=256,
+and nine QPs. Both force and legacy baselines use independent LaunchRuntime
+types with recursive include hashes; the probe never initializes the legacy
+`DispatchRuntime` static hash with synthetic geometry. Fresh-cache SM90a
+results were:
+
+```text
+case                         force                 legacy
+G8 D2 H7168 K8              REG64 STACK96 S0/L0   REG68 STACK96 S0/L0
+G4 D2 H7168 K4              REG64 STACK96 S0/L0   REG68 STACK96 S0/L0
+G2 D4 H256  K4              REG69 STACK96 S0/L0   REG67 STACK96 S0/L0
+G2 D4 H7168 K2 (D>K)        REG64 STACK96 S0/L0   REG67 STACK96 S0/L0
+```
+
+All eight cubins passed `EP_JIT_PTXAS_CHECK=1`; PTX and SASS were emitted in
+fresh cache `/tmp/deepep-c080-e-8rail.2Hhgdd`. The H256 force kernel
+uses two more registers than legacy, while both retain the same 384-thread,
+full-dynamic-smem one-block launch class and zero spill. This small codegen
+cost is retained rather than hidden or optimized before measurement.
+
+The first fresh H7168 attempt compiled successfully at REG64/SPILL0, then the
+loader reported `CUDA_ERROR_INVALID_CONTEXT`: a cold test process had not
+created its current CUDA driver context. The test now explicitly selects the
+device and allocates one CUDA scalar before calling the C++ probe; the same
+cubin then loaded and passed. A later audit found the first legacy comparison
+called the compiler directly, so its key did not include the recursive include
+hash. It was replaced by a dedicated probe LaunchRuntime and the entire matrix
+was rebuilt from a fresh cache.
+
+Each valid codegen case is launched in a separate process group by the Python
+harness. Its internal watchdog terminates the whole NVCC/cuobjdump tree with
+TERM followed by KILL on timeout, so compiler hangs cannot leave an orphan to
+race a later cache rename.
+
+Accepted local evidence is main extension build PASS, codegen matrix 4/4,
+constraint rejection 6/6, static retained/moved/remote-slot/tail ordering,
+exact two payload-put sites, plan-derived dispatch-payload counter identity
+`payload_puts=sum(retained)+sum(moved)` and
+`payload_gin_bytes=payload_puts*dispatch_token_bytes`, post-Tag0 control-flow
+parity with legacy, API 6/6, recursive legacy goldens 4/4, and diff check PASS.
+This is
+`HYBRID_CODEGEN_PASS`, not Hybrid runtime evidence: the single-node machine
+still cannot execute truthful Rail/Gin peers, and public force remains disabled.
+
+The primary thread then repeated the acceptance independently after the source
+was frozen. The in-place extension build, API 6/6, and recursive legacy
+goldens 4/4 passed. A second empty cache,
+`/tmp/deepep-c080-e-root-final.zaH9ua`, rebuilt all four force/legacy pairs
+under the harness-owned process-group watchdog with PTX/SASS dumps and the
+same register/stack/spill results. Final read-only review reports Blocker 0,
+High 0, and Medium implementation defects 0. It keeps two environment/host
+boundaries explicit: this machine cannot launch truthful Rail/Gin peers, and
+the production WORLD transaction, force buffer/metadata ownership, and
+combine path are not connected yet.

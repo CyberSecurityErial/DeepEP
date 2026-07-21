@@ -370,8 +370,8 @@ without proving that rail balancing executed.
 
 The current 8xH200 node has a real `scaleout=1` logical topology. It can validate
 the GPU materializer, LSA source shuffle, proxy protocol, route persistence,
-and return-unshuffle, and it can compile synthetic 2x4/4x2 Hybrid cubins. It
-cannot truthfully execute Rail Gin teams.
+and return-unshuffle, and it can compile synthetic 2x4/4x2 plus production-
+target 8x2 Hybrid cubins. It cannot truthfully execute Rail Gin teams.
 
 C080 local results must use separate labels:
 
@@ -798,3 +798,40 @@ when it still catches failures that the real-cluster suite does not, and
 delete that remainder as well if it is redundant. Vnode-only bytes and
 branches are therefore forbidden from becoming production compatibility
 surface.
+
+## Hot-path decision O040 — compact retained/moved loops, one final tail
+
+The first force dispatch specialization makes no attempt to preserve legacy
+six-token interval tail publication. The owner scan issues only retained puts;
+the egress then consumes one descriptor-free static proxy group per
+destination and publishes one final dense tail after both classes of put. This
+is the smallest schedule whose remote namespace is exactly
+`[0,retained+moved)` and whose success path adds no atomic slot allocation,
+ready polling, or route load.
+
+The cost is reduced network/forward overlap within one channel. That tradeoff
+is intentional for correctness-first codegen and remains a C100 measurement,
+not an invitation to add a queue preemptively. A later candidate may publish
+one retained prefix and batched moved suffix only if Nsys/real Gin evidence
+shows the final-tail delay is material. It must keep dense slots and prove that
+every publication is ordered after its corresponding put.
+
+Dispatch-payload instrumentation is derived from immutable plan tensors
+instead of a per-put counter. It deliberately excludes notify and packed-tail
+control Gin operations:
+
+```text
+retained_puts = sum(retained)
+moved_puts    = sum(moved) = sum(proxy_required)
+payload_puts      = retained_puts + moved_puts
+payload_gin_bytes = payload_puts * dispatch_token_bytes
+```
+
+The codegen test freezes exactly two payload-put sites in the scaleout role and
+the retained threshold, `p=group_prefix+u`,
+`remote_slot=retained+u`, proxy-put-before-tail, and transit-snapshot ordering.
+`proxy_required` stays ABI-visible but is not read after Tag0; Gate2 validation
+is the liveness boundary. The H256 specialization costs two registers versus
+legacy (69 versus 67), while H7168 saves three to four; all retain the same
+96-byte stack, zero spill, 384-thread/full-smem launch class. No optimization
+is selected from these compiler counts alone.

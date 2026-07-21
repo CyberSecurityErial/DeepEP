@@ -409,4 +409,17 @@ Out of scope until evidence expands the project:
   and the highest matching top-k lane for D>K. True 8-GPU H256/H7168 and
   D32>K4 byte-exact tests pass without a return descriptor, ready flag, route
   sidecar, or success-path atomic. Full 4x2/2x4 vnode round trip and the
-  isolated force Hybrid dispatch/combine specializations remain open.
+  production-shaped vnode round trip now pass; destination-side force Hybrid
+  combine specialization remains open.
+- C080-E now has an isolated force Hybrid dispatch header/runtime. It preserves
+  legacy notify/local-forward behavior, sends retained owner prefixes plus
+  descriptor-free moved proxy groups, publishes one final dense tail, and
+  snapshots only four-byte `p` before linked-list overwrite into `3+2K`
+  forward metadata. Production-shaped G8xD2/H7168/K8, G4xD2/H7168/K4, and
+  G2xD4 H256/H7168 (including D>K) force cubins plus matched legacy baselines
+  compile with zero spill. The H256 force instance is two registers above
+  legacy but remains in the same launch/occupancy class. `proxy_required` is
+  ABI-only after trusted Gate2; dispatch-payload counters are derived from
+  existing plan tensors. Each cold-compile case runs under its own process-
+  group watchdog. Public force remains disabled, and no local result claims
+  real Gin/RDMA execution.
