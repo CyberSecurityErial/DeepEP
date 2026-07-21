@@ -4923,3 +4923,42 @@ All three pass without a profiler.  They prove local LSA functional semantics,
 not Gin/RDMA/NIC execution and not latency improvement.  H7168, the full
 source/return/vnode matrices, corruption recovery and default-off regression
 remain explicit next gates.
+
+## 2026-07-22 — D087: complete the O077 affected functional matrix
+
+The committed closed-form materializer now passes every ordinary local
+consumer and control-plane suite selected before implementation.  Each GPU
+suite started from a distinct empty JIT cache; no profiler was active and no
+timing value is accepted as performance evidence.
+
+| Gate | JIT cache | Port | Accepted result |
+| --- | --- | ---: | --- |
+| source default | `/tmp/deepep-o077-source-full.khERfH` | 30105 | C061 skew/zero-N/multi-copy, C1024/D32/K4, H7168, zero-move, single-token, capacity, reuse and non-default stream |
+| return default | `/tmp/deepep-o077-return-full.Rnw1PM` | 30106 | C061 H256/H7168, D>K highest lane, collision freedom, poison preservation and abort/recovery |
+| C100 source H7168 | `/tmp/deepep-o077-source-h7168.O8jY6y` | 30107 | 7168 copies, 896 per egress, exact legacy TokenLayout bytes |
+| C100 return H7168 | `/tmp/deepep-o077-return-h7168.5WX5ew` | 30108 | exact owner row/token bytes and poison-preserved non-targets |
+| vnode full | `/tmp/deepep-o077-vnode-full.ygJLQY` | 30109 | all 9 cases: 4x2/2x4, H256/H7168, rounding, empty egress, all zero, plan fault and transit liveness |
+| source faults | `/tmp/deepep-o077-faults.6E5vEt` | 30110 | sticky status4, second call, capacity1, duplicate3 and abort/recovery |
+| WORLD gate | `/tmp/deepep-o077-world-gate.8ynKDc` | 30111 | exact 14 outputs, mismatch/route/capacity/asymmetric recovery, stable storage and 18 MAX gates |
+| native default-off EP8 | `/tmp/deepep-o077-native.adjuVA` | automatic | exit 0 for FP8 dispatch/combine correctness with `allow-hybrid-mode=0`; debug poison counts are not failures |
+| force codegen | `/tmp/deepep-o077-codegen.5QQDGm` | none | dispatch 4 cases plus 8/8 rejects; combine 6 cases plus 8/8 rejects and unchanged legacy hashes |
+
+The exact common functional prefix was:
+
+```bash
+env OMP_NUM_THREADS=1 EP_DISABLE_GIN=1 \
+  EP_JIT_CACHE_DIR=<table-entry> \
+  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 PYTHONPATH=. \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B <test-script> \
+  [--case-name c100_volume_h7168] --master-port <table-port> \
+  --timeout 180 --watchdog-seconds 900
+```
+
+The vnode command used timeout/watchdog 300/1800.  The native command was
+`tests/elastic/test_ep.py --num-processes 8 --num-tokens 128 --hidden 1024
+--num-topk 2 --num-experts 64 --allow-hybrid-mode 0 --test-first-only
+--skip-perf-test` with `EP_BUFFER_DEBUG=1` and an outer 900-second watchdog.
+The codegen command used one visible GPU and ran the complete dispatch then
+combine scripts with their 900-second watchdogs in the same initially empty
+cache.  No failure occurred in D087.  Focused sanitizer remains the final
+correctness gate before B-side timing.

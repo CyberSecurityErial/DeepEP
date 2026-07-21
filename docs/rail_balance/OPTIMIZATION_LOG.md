@@ -1769,3 +1769,10 @@ owner row/token bytes with poison-preserved non-targets.  A fresh-JIT
 return and original-owner unshuffle round trip.  This establishes the minimal
 local semantic data path; it does not replace H7168/full-matrix/fault/default-
 off regression and carries no performance conclusion.
+
+Full functional status: the default source suite, default return suite, named
+C100 H7168 source/return, all nine vnode cases, compact-plan faults, fixed
+WORLD gates, default-off native EP8 smoke, and force dispatch/combine codegen
+all pass from fresh JIT caches.  This closes the ordinary local functional
+matrix for O077.  The changed prefix kernel still requires a focused sanitizer
+rerun before profiler-free B-side collection.
