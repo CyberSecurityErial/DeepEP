@@ -958,3 +958,29 @@ shared LSA snapshot. It proves real `finish` integration and recovery, but not
 an asymmetric multi-node Gate2 failure by itself. H3b may additionally inject
 one rank's post-finish Gate2 error before publication, then require WORLD-wide
 rejection and abort/retry; the real capacity case remains mandatory.
+
+## Host-path decision O047 — advance Gate2 by patching three prepared words
+
+Gate1 and Gate2 use the same fixed 19-field manifest; only the phase changes.
+After a successful Gate1, its D2H result is already a complete agreed manifest.
+Re-encoding all fields after `finish` was rejected because the checked encoder
+builds a Python list and repeats per-field validation after the local barrier.
+
+The accepted path reuses that same pinned storage and patches only:
+
+```text
+word[0] = local error key
+word[8] = phase 2
+word[9] = -phase 2
+```
+
+This is smaller than owning a second manifest/template and keeps the existing
+one-device/one-pinned-buffer identity. The private helper performs no field
+iteration or dynamic validation. All storage, field, and value checks remain
+before prepare.
+
+Manifest K is taken from the actual `topk_idx.shape[1]`, not a nominal config.
+This matters for zero-token ranks: shape `(0,K+1)` is locally valid and can
+otherwise prepare a different JIT/layout while contributing no route data. A
+focused EP8 fault now proves Gate1 rejects this difference before the LSA
+barrier. N and local rail identities remain deliberately absent.

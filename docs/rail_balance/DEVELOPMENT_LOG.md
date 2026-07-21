@@ -2938,3 +2938,83 @@ The next implementation step is to create only that focused test, run its CPU
 suite and true EP8 watchdog, independently audit its deadlock behavior, then
 commit and push it before starting H4a. No production code is partially edited
 at this checkpoint.
+
+## 2026-07-21 — D048: close H3b around the real planner
+
+H3b now wraps the existing private C++ planner in two real fixed-tensor NCCL
+WORLD gates:
+
+```text
+checked manifest encode before prepare
+-> prepare
+-> raw error-word patch
+-> Gate1: one int64[128] MAX
+-> finish: exactly one local LSA barrier
+-> raw error/phase-word patch
+-> Gate2: one int64[128] MAX
+-> abort or later commit boundary
+```
+
+The Gate2 patch reuses the exact pinned tensor copied back by Gate1. Since the
+two manifests differ only at phase field three, it changes only word zero and
+the phase pair at words eight/nine. It does not rebuild a field list or repeat
+dynamic manifest validation after the local barrier. The non-default-stream
+case enters one caller-stream context before prepare and leaves only after
+Gate2.
+
+The final true EP8 suite executes ten transactions and exactly eighteen MAX
+collectives. It covers:
+
+- variable/zero local N and exact comparison of all fourteen plan tensors;
+- a zero-N rank whose actual `topk_idx.shape[1]` is K+1, rejected at manifest
+  field ten before finish, followed by a successful retry;
+- one rank returning invalid-route status two while peers own pending state,
+  followed by a successful retry;
+- real all-rank capacity status one after finish, followed by a successful
+  retry;
+- an injected one-rank Gate2 error after successful finish, proving asymmetric
+  WORLD convergence, followed by a successful retry;
+- C1024/D32 and non-default-stream compatibility.
+
+Accepted evidence:
+
+```text
+PASS C080-B2 local LSA plan transaction (fresh resume baseline)
+PASS C080-H3 fixed WORLD gate on EP8
+PASS C080-H3b CPU contract
+PASS C080-H3b real planner WORLD gates ... 18 fixed MAX gates
+PASS 9/9 C080-A Hybrid API tests
+PASS 4/4 legacy Hybrid identity goldens
+PASS py_compile and git diff --cached --check
+PASS final transaction audit: Blocker/High/Medium/Low = 0/0/0/0
+PASS final minimality audit: Blocker/High/Medium = 0/0/0
+```
+
+Failures and review fixes retained:
+
+- the first implementation delegate remained at design state without writing
+  a file and was interrupted; the root implementation then created the single
+  focused test and checkpointed it;
+- the first EP8 run used remainder seed 71 for an intended success retry, but
+  the CPU oracle correctly showed that seed needs six proxy slots while Pcap
+  was five. The device returned capacity status one. The fixture now uses
+  oracle-enabled seed 66 and asserts schedule intent before every transaction;
+- an attempted legacy regression command named nonexistent
+  `test_rail_balance_hybrid_legacy_identity.py` and exited before testing. The
+  actual `test_rail_balance_hybrid_legacy_golden.py` passed 4/4;
+- audit found a second stream-context entry between Gate1 and finish, checked
+  list construction between finish and Gate2, and a fail-open manifest K taken
+  from PlanCase instead of the actual tensor. All three were fixed before the
+  accepted EP8 run;
+- an initially added C mismatch duplicated the stronger actual-K mismatch. It
+  was removed, restoring the planned eighteen gates rather than expanding the
+  test surface.
+
+Evidence boundaries remain explicit. The non-default case is compatibility,
+not asynchronous producer-ordering proof. The direct barrier/no-payload checks
+are source guards, not binary counters. H3b has not enabled public force and
+does not claim real Gin/RDMA behavior.
+
+Commits `2f39a46` and `878b0db` are pushed to the fork. H4a may now connect the
+same fixed Gate1/Gate2 protocol to the force dispatch transaction while both
+capability bits remain false.

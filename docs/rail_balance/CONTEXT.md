@@ -463,3 +463,10 @@ Out of scope until evidence expands the project:
   had reached design review only and left no file on disk. Resume by adding the
   focused real-planner Gate1/Gate2 test described in `HANDOFF.md`; do not infer
   that public force or production dispatch was connected.
+- H3b subsequently closed the private planner protocol: checked Gate1 state is
+  prepared before transaction ownership, `finish` consumes exactly one local
+  barrier after WORLD acceptance, and Gate2 reuses the same pinned manifest by
+  patching only error and phase words. True EP8 covers actual tensor-K mismatch
+  on a zero-N rank, invalid route, real capacity failure, asymmetric Gate2
+  error, four abort/retry states, fourteen exact outputs, and eighteen MAX
+  calls. This is the H4 transaction substrate; public force remains disabled.

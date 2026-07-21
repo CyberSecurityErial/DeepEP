@@ -6,8 +6,8 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 
 ## Safe pause state
 
-- Pause archive: 2026-07-21 lunch boundary. All child tasks are stopped, the
-  shared worktree is clean, and no half-written H3b file exists.
+- The lunch archive was resumed. H3b is now implemented, audited, committed,
+  and pushed; no half-written test remains.
 - C000 through C070 remain complete for the agreed single-node PoC scope.
 - C080-A/B are complete; C080-D shared source/return cores and vnode closure
   pass their current local gates. C080-C remains open only for the production
@@ -15,10 +15,9 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Latest implementation/docs checkpoint before this pause archive is
-  `dc2b42c` (fixed WORLD-gate record), following `63379bb` (private fixed CUDA
-  WORLD gate), `c05ff0d` (force-only registered tail sizing), and the H1b raw
-  submit closure, on
+- Latest pushed implementation checkpoint is `878b0db` (real planner WORLD
+  gate test), following `2f39a46` (prevalidated Gate2 word patch), `dc2b42c`
+  (H3a record), and the earlier H2/H1b closures, on
   `fork/feat/rail-balance-prototype`.
 - Public force still fails closed and no result claims real Gin/RDMA behavior.
 - Resume from the working tree and the newest entries in `DEVELOPMENT_LOG.md`;
@@ -82,7 +81,8 @@ the exact file snapshots without inventing commit identity.
   non-default-stream evidence, and independent audit 0/0/0/0. It is not yet
   connected to plan/dispatch.
 - The H3a EP8 command was rerun immediately before the pause on port 29951 and
-  passed. H3b was 35% complete in design only; no new file had reached disk.
+  passed. H3b later passed its final EP8 run with eighteen fixed MAX gates and
+  final audits of 0 Blocker/High/Medium.
 
 ## Mandatory retained boundary
 
@@ -103,16 +103,16 @@ No C070 timing is performance evidence.
 2. Verify branch and state with `git status --short --branch` and run
    `git diff --cached --check`.
 3. Do not redo C061/C070 unless the relevant code changes.
-4. Reuse H3a storage to connect private plan Gate1/Gate2, then implement the
-   production C080 dispatch transaction; do not return to vnode or the
+4. H3b already connects H3a storage to private plan Gate1/Gate2. Implement the
+   production C080 dispatch transaction next; do not return to vnode or the
    obsolete CPU-manifest/sidecar path. Keep the pre-window mixed-mode boundary
    explicit, derive C/topology in C++, and launch shuffle→force dispatch in one
    C++ commit call.
-   The first concrete resume artifact is
-   `tests/elastic/test_rail_balance_hybrid_plan_world_gate.py`; require CPU,
-   true EP8 watchdog, abort/retry, capacity fail-close, fourteen-output oracle,
-   stable storage, non-default stream, and exactly two MAX calls per successful
-   transaction before committing it.
+   Its accepted evidence is in
+   `tests/elastic/test_rail_balance_hybrid_plan_world_gate.py`: CPU and EP8
+   watchdog, four abort/retry states, capacity/asymmetric fail-close,
+   fourteen-output oracle, stable storage, actual-K mismatch, non-default
+   compatibility, and exactly two MAX calls per completed transaction.
 5. Keep public force unavailable until force combine is connected as one
    main-combine→return-unshuffle→local-barrier→legacy-epilogue commit and handle
    ownership/consumption is fail-closed.
