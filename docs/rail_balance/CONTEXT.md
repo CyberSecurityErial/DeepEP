@@ -515,3 +515,14 @@ Out of scope until evidence expands the project:
   identity, cached rejection, atomic handle consumption, and capability
   opening remain the next host slice. Local D=1 still supplies no successful
   production Gin evidence.
+- H6 constructor consensus is now committed at `1e0ea60` with tests at
+  `eb6b834`. With the host protocol enabled, off and force share one fixed
+  pre-comm Gate0; force alone reuses the same CUDA/pinned `int64[128]` storage
+  for a post-sizing/pre-window Gate1. The second manifest freezes exact bytes,
+  resolved SL/QP/timeouts, and runtime flags; local helper/config/alignment
+  failures reject every rank before window registration. Force deliberately
+  skips the legacy PCIe/object-collective topology helper to avoid collective
+  reordering. Constructor 9/9, API 9/9, legacy goldens 4/4, and an independent
+  Blocker0/High0 audit pass. Public dispatch/combine and the shared one-shot
+  ticket remain unimplemented, `_RAIL_BALANCE_FORCE_HOST_AVAILABLE` remains
+  false, and no local evidence claims a truthful D>1 Gin/RDMA execution.

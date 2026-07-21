@@ -3396,3 +3396,62 @@ ranks. Dispatch gates are too late to repair that mismatch.
 
 No capability bit opens until all three pieces and their default-off, fake
 lifecycle, and truthful EP8 D1 fail-close tests pass together.
+
+## 2026-07-21 — D055: close the public constructor consensus boundary
+
+H6 construction now has two deliberately different costs. When the host
+protocol is enabled, every rank first enters one fixed CUDA `int64[128]` MAX
+gate before communicator/window creation; this rejects mixed `off|force`,
+force geometry, capability, and ten-field arena-layout disagreements. A
+unanimous off construction then follows the unchanged legacy sizing, topology,
+SL/QP, CPU-communicator, runtime-argument, and field path and retains no
+`_rail_balance_*` state.
+
+Unanimous force reuses the same CUDA tensor and pinned mirror for a second MAX
+after the common NCCL communicator exists but before the symmetric window is
+registered. The second 20-field manifest freezes legacy/arena/total bytes,
+resolved SL/QP, CPU/GPU timeouts, overlap/destroy flags, and repeats the force
+geometry. Local sizing, environment parsing, QP probing, int32/int64, exact
+bool, equality, and fixed 2 MiB alignment failures are encoded into this gate,
+so a healthy peer cannot enter window creation alone. Runtime arguments are
+fully built before the gate; after acceptance the next substantive call is
+directly `_C.ElasticBuffer(*force_runtime_args)`.
+
+Accepted evidence:
+
+```text
+PASS H6 constructor preflight 9/9
+PASS C080-A Hybrid API 9/9
+PASS legacy Hybrid identity goldens 4/4
+PASS py_compile and git diff --check
+PASS independent final review: Blocker 0 / High 0
+```
+
+Failures and rejected designs retained:
+
+- the first Gate0 encoder validated layout elements only as nonnegative Python
+  integers; an element or `M` above signed-int64 could throw during encode and
+  strand peers. The complete manifest now validates the signed-int64 envelope
+  before the collective and uses a caller-independent fallback;
+- the first draft stopped after Gate0, leaving legacy sizing, force sizing,
+  SL/QP parsing, and Python-to-C++ conversion able to diverge before window
+  registration. The force-only sizing gate closes that interval without
+  charging off a second rendezvous;
+- a proposed force call to legacy `check_nvlink_connections()` was removed.
+  Its PCIe branch performs rank-local NVML/import/parsing before an object
+  collective, so catching a local failure and proceeding to the MAX gate could
+  create a collective-order deadlock. Force-v1 targets H200/NVSwitch and relies
+  on NCCL/C++ topology validation instead; off keeps the exact old helper;
+- the initial Gate1 placement still performed Python field publication and
+  argument construction after acceptance. Arguments are now frozen before the
+  gate and C++ window construction is the immediate accepted operation;
+- partial/broken sizing helpers could return mutually consistent but
+  unaligned bytes. A fixed 2 MiB contract check now rejects them uniformly.
+
+Implementation commit `1e0ea60` and test commit `eb6b834` are the recoverable
+constructor checkpoint. This does not yet expose public force dispatch or
+combine: the capability remains false, and the next slice is the buffer-bound
+one-shot `EPHandle` lifecycle plus its three per-call WORLD gates. A truthful
+EP8 constructor watchdog remains activation evidence; communicator creation
+and the accepted C++ window call are explicitly job-fatal distributed/resource
+boundaries rather than locally recoverable protocol errors.

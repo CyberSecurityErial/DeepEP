@@ -1118,3 +1118,30 @@ Two possible redundancies are recorded, not changed during H6 correctness:
 C100 must time gate, `.item()`, prepare, ticket validation, status D2H, and
 comm-stream synchronization separately. Removing either dependency without
 that evidence would mix correctness work with speculative optimization.
+
+## Host-path decision O054 — pay a second constructor gate only for force
+
+Mixed off/force ranks must agree before registering differently sized
+symmetric windows, so one constructor rendezvous is unavoidable when the host
+protocol is compiled in. Resolved force bytes and QP/runtime settings are not
+known until after a common NCCL communicator exists. Folding both facts into a
+single gate would either compare guesses or move fallible sizing past window
+creation. The minimal protocol is therefore one universal Gate0 and one
+force-only Gate1, both reusing the same fixed 1 KiB CUDA/pinned storage.
+
+The second gate adds no device kernel, buffer allocation, JIT specialization,
+payload movement, NVLink traffic, or RDMA traffic. Its cost is one-time
+collective startup and slowest-rank rendezvous during force buffer creation.
+Default off pays only Gate0, retains no gate storage, and follows the exact
+legacy hot path after construction. This keeps the per-operation cost model
+unchanged while making the experimental window size deterministic across
+ranks.
+
+The legacy Python NVLink heuristic is intentionally not reused by force. Its
+PCIe fallback contains an object collective after fallible local work, which
+cannot safely live between two fixed MAX gates. Splitting it into a local
+probe, another consensus, and a coordinated object collective would add
+machinery for a topology outside force-v1's H200/NVSwitch target. Relying on
+the existing NCCL/C++ topology boundary is smaller and avoids a new control
+path. Constructor-gate timing belongs in later host profiling; no performance
+claim is made from the CPU/fake correctness tests.
