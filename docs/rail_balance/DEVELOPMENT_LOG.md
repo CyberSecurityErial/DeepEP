@@ -3344,3 +3344,55 @@ checkpoint. This is private host/C++ closure, not public `EPHandle` closure:
 Python buffer identity, cached-handle rejection, consumed-state atomicity,
 constructor/dispatch WORLD consensus, and capability activation remain next.
 No local result claims a truthful D>1 Gin/RDMA run.
+
+## 2026-07-21 — D054: freeze the minimal public force lifecycle
+
+The public H6 slice is deliberately three small changes rather than a new
+transaction framework:
+
+1. one pre-window constructor consensus shared by off and force, with the
+   existing fixed force gate storage retained only by force;
+2. an early force branch in `dispatch` that executes prepare → WORLD Gate1 →
+   finish-plan → WORLD Gate2 → adjacent commit/finish, then publishes an
+   ordinary `EPHandle` with private owner/invocation/state fields;
+3. an early force branch in `combine` that validates the exact live ticket,
+   prepares all output ownership, executes one WORLD gate, marks the ticket
+   consumed, and invokes H5b commit.
+
+The legacy `dispatch`, `_unpack_handle`, `combine`, default `EPHandle`
+constructor, runtime ABI, buffer bytes, and JIT roots remain untouched when
+off. Force rejects cached dispatch, expansion, FP8, masking, missing weights,
+events/async allocation, bias, deterministic mode, and non-unit alignment.
+Every force attempt reserves a monotonic invocation before local validation so
+rank-local errors still enter the same fixed collective.
+
+Failure ownership is frozen as follows:
+
+- dispatch prepare/Gate1 or plan/Gate2 rejection invokes the stale-safe plan
+  abort and is retryable; a Busy attempt cannot destroy the older live handle;
+- any dispatch failure after Gate2 acceptance calls plan abort only to poison a
+  possible `DispatchLive` owner, marks the Python buffer terminal, and is not
+  retried;
+- combine validation/prepare/gate rejection invokes combine abort only and
+  leaves the exact ticket live;
+- combine gate acceptance changes the shared ticket state to consumed before
+  commit; every later failure is terminal and cannot resurrect the ticket;
+- a WORLD collective failure has unknown distributed state and is job-fatal,
+  never reported as a successful local abort.
+
+One full round trip therefore has exactly three per-call WORLD reductions:
+two before dispatch publication and one before combine publication. Ticket
+issuance and return are metadata-only and add no collective, payload copy,
+NVLink, or RDMA operation. H5a/H5b additionally retain one local comm-stream
+completion sync each in correctness-v1.
+
+The constructor must close mixed off/force before creating differently sized
+symmetric windows. The accepted minimal tradeoff is one fixed-tensor
+preflight for every buffer construction when the compiled feature is present.
+Off keeps no gate tensor or rail-balance field afterwards. The extra
+constructor rendezvous is one-time; claiming zero off construction overhead
+would be incompatible with detecting a valid off rank mixed with valid force
+ranks. Dispatch gates are too late to repair that mismatch.
+
+No capability bit opens until all three pieces and their default-off, fake
+lifecycle, and truthful EP8 D1 fail-close tests pass together.

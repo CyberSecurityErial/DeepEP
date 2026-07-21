@@ -1093,3 +1093,28 @@ be timed separately from prepare, ticket validation, stream dependency, and
 the four device stages. Removing or overlapping a gate is C100 work and
 requires the user's NCU/Nsys procedure plus real measurements; no extra
 collective or generic transaction layer is added speculatively.
+
+## Host-path decision O053 — retain three safety gates, expose their cost
+
+Dispatch Gate1 protects entry into the source-node LSA barrier. Gate2 depends
+on the plan/capacity result produced after that barrier and protects payload
+publication. Combine Gate1 depends on expert outputs and exact final-output
+ownership that do not exist at dispatch time. The three reductions therefore
+cannot be merged without either moving a fallible operation past publication
+or making buffers permanently worst-case sized.
+
+The fixed payload is 1 KiB and bandwidth is irrelevant; cost is collective
+startup plus waiting for the slowest rank. Constructor mixed-mode consensus is
+separate and paid once per buffer. Public ticket lookup is host-only and must
+remain synchronization-free.
+
+Two possible redundancies are recorded, not changed during H6 correctness:
+
+- Python currently observes Gate2 plan status through `outputs[-1].item()`
+  even though C++ plan finish has already synchronized and saved host status;
+- combine prepare records compute→comm ordering even though the current fixed
+  WORLD gate synchronizes the caller stream before commit.
+
+C100 must time gate, `.item()`, prepare, ticket validation, status D2H, and
+comm-stream synchronization separately. Removing either dependency without
+that evidence would mix correctness work with speculative optimization.
