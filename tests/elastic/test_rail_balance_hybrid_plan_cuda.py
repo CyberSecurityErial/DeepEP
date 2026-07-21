@@ -399,6 +399,73 @@ def _wide_destination_case() -> PlanCase:
     )
 
 
+def _c100_rotation_case() -> PlanCase:
+    routes = tuple(
+        ((owner + 1,),) * 1024
+        for owner in range(8)
+    )
+    topk_idx, num_experts = _encode_destination_routes(
+        routes,
+        num_destinations=9,
+        experts_per_destination=8,
+    )
+    return PlanCase(
+        name="c100_pure_deficit_rotation",
+        topk_idx=topk_idx,
+        num_channels=256,
+        num_max_tokens_per_rank=1024,
+        num_experts=num_experts,
+        num_scaleout_ranks=9,
+        local_scaleout_rank=0,
+        proxy_capacity_per_egress=896,
+        remainder_seed=100,
+    )
+
+
+def _partial_deficit_gate_case() -> PlanCase:
+    routes = (
+        ((1, 0), (0, 0), (1, 0), (0, 0)),
+        ((1, 0), (1, 0), (1, 2), (1, 2)),
+    )
+    topk_idx, num_experts = _encode_destination_routes(
+        routes,
+        num_destinations=3,
+        experts_per_destination=2,
+    )
+    return PlanCase(
+        name="partial_deficit_preserves_low_channel_fill",
+        topk_idx=topk_idx,
+        num_channels=2,
+        num_max_tokens_per_rank=4,
+        num_experts=num_experts,
+        num_scaleout_ranks=3,
+        local_scaleout_rank=0,
+        proxy_capacity_per_egress=2,
+    )
+
+
+def _pure_deficit_wrap_case() -> PlanCase:
+    routes = (
+        ((1, 2, 3),) * 4,
+        ((0, 0, 0),) * 4,
+    )
+    topk_idx, num_experts = _encode_destination_routes(
+        routes,
+        num_destinations=4,
+        experts_per_destination=4,
+    )
+    return PlanCase(
+        name="pure_deficit_windows_rotate_and_wrap",
+        topk_idx=topk_idx,
+        num_channels=2,
+        num_max_tokens_per_rank=4,
+        num_experts=num_experts,
+        num_scaleout_ranks=4,
+        local_scaleout_rank=0,
+        proxy_capacity_per_egress=6,
+    )
+
+
 def _zero_token_case() -> PlanCase:
     return PlanCase(
         name="zero_tokens",
@@ -487,6 +554,43 @@ def _assert_oracle_contract(num_random_seeds: int) -> tuple[PlanCase, ...]:
     assert wide_schedule.moved_copies == 24
     assert wide_schedule.proxy_required == (4, 1, 4, 4, 3, 2, 3, 3)
 
+    c100 = _c100_rotation_case()
+    c100_schedule = _build_schedule(c100)
+    assert c100_schedule.enabled
+    assert c100_schedule.proxy_required == (896,) * 8
+    assert c100_schedule.moved_copies == 7168
+    for egress in range(8):
+        target_loads = [
+            sum(c100_schedule.moved[egress][channel])
+            for channel in range(256)
+        ]
+        assert target_loads.count(4) == 224
+        assert target_loads.count(0) == 32
+
+    partial = _partial_deficit_gate_case()
+    partial_schedule = _build_schedule(partial)
+    assert partial_schedule.enabled
+    assert partial_schedule.moved == (
+        ((0, 0, 1), (0, 1, 0)),
+        ((0, 0, 0), (0, 0, 0)),
+    )
+    assert [
+        sum(partial_schedule.moved[0][channel])
+        for channel in range(2)
+    ] == [1, 1]
+
+    wrap = _pure_deficit_wrap_case()
+    wrap_schedule = _build_schedule(wrap)
+    assert wrap_schedule.enabled
+    assert wrap_schedule.moved == (
+        ((0, 0, 0, 0), (0, 0, 0, 0)),
+        ((0, 2, 0, 2), (0, 0, 2, 0)),
+    )
+    assert [
+        sum(wrap_schedule.moved[1][channel])
+        for channel in range(2)
+    ] == [4, 2]
+
     zero_tokens = _zero_token_case()
     zero_schedule = _build_schedule(zero_tokens)
     assert zero_schedule.enabled
@@ -526,6 +630,9 @@ def _assert_oracle_contract(num_random_seeds: int) -> tuple[PlanCase, ...]:
             zero_tokens,
             large_seed,
             wide,
+            c100,
+            partial,
+            wrap,
             *distribution_cases,
             *random_cases,
             boundary)
@@ -793,7 +900,9 @@ def main() -> None:
     print(
         f"PASS C080-B1 CPU expected structure: C061 33 copies/6 moves, "
         f"Pcap 3/2, zero tokens, named route-level one-hot/Zipf/log-normal, "
-        f"{arguments.random_seeds} random seeds, C1024/D32 including D32>K4")
+        f"partial gate/pure wrap, C100 224-by-4 rotation, "
+        f"{arguments.random_seeds} random seeds, "
+        f"C1024/D32 including D32>K4")
     print("PASS 4/4 legacy Hybrid identity goldens")
     if arguments.oracle_only:
         return

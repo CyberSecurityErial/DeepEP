@@ -4797,3 +4797,87 @@ not claim generic minimax
 dominance; this counterexample is a mandatory B-side distribution check rather
 than a reason to add an unproven waterfill scheduler.  No C++/CUDA/JIT/runtime
 code changed in D084.
+
+## 2026-07-22 — D085: materialize O077 without another channel pass
+
+The production JIT header now changes only
+`rail_balance_hybrid_prefix_impl`.  Each destination lane computes an exact
+pure-deficit `(full_channels, tail, span)` tuple, takes one warp-exclusive scan
+of span, and maps the physical channel's cyclic distance from that start to a
+moved count.  Partial-deficit and zero-incoming lanes retain the original low-
+channel greedy fill.  The existing first physical-channel loop still writes
+retained, moved and monotonic moved prefixes; the existing second loop still
+writes channel-major/destination-minor group prefixes.  No third channel pass,
+kernel argument, allocation, tensor, atomic, barrier, resolver, slot ABI,
+public API or JIT specialization was added.
+
+The first working CUDA translation used the generic CPU cyclic loop and added
+one full channel pass.  It fresh-JIT compiled and passed the then-current 74
+single-GPU exact cases from `/tmp/deepep-o077-c100.j7ZDJA` plus the eight-GPU
+B2 transaction using `/tmp/deepep-o077-b2.tkdxCj` and port 29977.  Review
+observed that `keep == 0`
+implies uniform spare capacity and therefore permits the exact closed form.
+The three-pass implementation was rejected before commit despite passing
+correctness; retaining it would add global plan traffic with no semantic
+benefit.
+
+A read-only closed-form differential used Python 3.11.15 and independent
+`random.Random(seed)` instances for seeds 0..9999.  In generation order it
+draws G=[1,8], D=[1,8], N=[1,32], C=[1,min(16,N+5)], 0..N tokens per owner,
+and for each token a uniformly drawn 0..D subset size followed by a sorted
+destination sample; the remainder seed is drawn in [0,G).  Across 10,000
+schedules and 202,010 egress/destination groups it covers 128,547 zero-
+incoming, 23,325 pure-deficit and 50,138 partial-deficit groups plus 1,913
+`C > N` schedules.  Recomputing `moved` with the CUDA full/tail formula passes
+elementwise against the committed CPU oracle for every group.  This run was
+console-only and has no persisted raw artifact; the complete generation
+contract is retained here for exact replay rather than overstating provenance.
+
+The strict B1 runner now contains three named O077 fixtures in addition to its
+existing cases: the G2 partial-deficit `[1,1]` fallback, a G2 pure-deficit
+cyclic wrap, and frozen G8/D9/N1024/C256 C100.  The latter asserts every egress
+has `proxy_required=896`, global `moved_copies=7168`, 224 channels with four
+records and 32 empty channels.  With 64 randomized cases, all fourteen output
+tensors pass exact CPU/GPU comparison in 76/76 cases from fresh JIT directory
+`/tmp/deepep-o077-closed.IW63fh`; route/seed/C1025/D33 rejection and a non-
+default stream also pass.
+
+Static cubin audit uses
+`/usr/local/cuda/bin/cuobjdump --dump-resource-usage kernel.cubin`.  The
+immediate three-pass predecessor prefix cubin SHA256 is
+`25ff69fb9e592f6e1f1c10ecc48c2802442e46cbf43117f0ef51b98e10951046`;
+the final B1 and B2 closed-form prefix cubins are byte-identical with SHA256
+`cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3`.
+For the exact demangled prefix implementation, registers increase from 62 to
+64 while stack, shared and local bytes remain zero and constant[0] remains
+636.  This is static resource evidence, not runtime performance evidence; the
+two-register increase is retained as a plan-latency risk for the B side.
+
+```bash
+env OMP_NUM_THREADS=1 EP_DISABLE_GIN=1 \
+  EP_JIT_CACHE_DIR=/tmp/deepep-o077-closed.IW63fh \
+  CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/test_rail_balance_hybrid_plan_cuda.py \
+  --device 0 --random-seeds 64
+```
+
+The final closed-form implementation was then retested rather than inheriting
+the intermediate result.  Fresh JIT directory
+`/tmp/deepep-o077-b2-closed.SeXghJ`, eight visible GPUs, OMP=1,
+`EP_DISABLE_GIN=1`, port 29978 and the 180/900-second test/watchdog contract pass
+the B2 variable/zero-N fourteen-tensor snapshots, reusable barrier, Gate1 route
+and configuration abort recovery, Gate2 capacity recovery, C1024/D32 and non-
+default stream.  These are correctness results collected without a profiler;
+no latency or throughput claim is made.  Source, return and vnode consumers of
+the changed prefixes are the next mandatory checkpoint.
+
+```bash
+env OMP_NUM_THREADS=1 EP_DISABLE_GIN=1 \
+  EP_JIT_CACHE_DIR=/tmp/deepep-o077-b2-closed.SeXghJ \
+  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 PYTHONPATH=. \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/test_rail_balance_hybrid_plan_lsa.py \
+  --num-processes 8 --timeout 180 --master-port 29978 \
+  --watchdog-seconds 900
+```

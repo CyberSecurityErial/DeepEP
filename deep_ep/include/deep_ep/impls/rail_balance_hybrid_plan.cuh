@@ -475,18 +475,33 @@ void rail_balance_hybrid_prefix_impl(
         num_max_tokens_per_rank / num_channels +
         (num_max_tokens_per_rank % num_channels != 0);
 
-    int owner_prefix = 0;
+    int keep = 0;
     int incoming_remaining = 0;
-    int moved_prefix = 0;
     if (active) {
         const auto matrix_offset = rail_balance::hybrid_plan_detail::gd_offset(
             egress, lane, num_destinations);
-        incoming_remaining = quota[matrix_offset] - keep_count[matrix_offset];
+        keep = keep_count[matrix_offset];
+        incoming_remaining = quota[matrix_offset] - keep;
         moved_channel_prefix[
             rail_balance::hybrid_plan_detail::moved_prefix_offset(
                 egress, lane, 0, num_channels, num_destinations)] = 0;
     }
 
+    // Rotate only pure-deficit groups. Their retained counts are all zero, so
+    // full/tail is an exact closed-form window. A partial-deficit group keeps
+    // the legacy channel-zero fill and contributes no cursor increment.
+    const bool rotate_window = active and incoming_remaining > 0 and keep == 0;
+    const int full_channels = rotate_window ?
+        incoming_remaining / channel_capacity : 0;
+    const int tail = rotate_window ?
+        incoming_remaining % channel_capacity : 0;
+    const int window_span = full_channels + (tail != 0);
+    const int exclusive_span = ptx::warp_exclusive_sum(window_span, lane);
+    const int window_start = rotate_window ?
+        exclusive_span % num_channels : 0;
+
+    int owner_prefix = 0;
+    int moved_prefix = 0;
     for (int channel = 0; channel < num_channels; ++channel) {
         if (active) {
             const auto tensor_offset = rail_balance::hybrid_plan_detail::gcd_offset(
@@ -494,14 +509,22 @@ void rail_balance_hybrid_prefix_impl(
             const int available = channel_count[tensor_offset];
             owner_channel_prefix[tensor_offset] = owner_prefix;
 
-            const auto matrix_offset = rail_balance::hybrid_plan_detail::gd_offset(
-                egress, lane, num_destinations);
-            const int remaining_keep = keep_count[matrix_offset] - owner_prefix;
+            const int remaining_keep = keep - owner_prefix;
             const int retained_count = remaining_keep <= 0 ? 0 :
                 (available < remaining_keep ? available : remaining_keep);
-            const int spare = channel_capacity - retained_count;
-            const int moved_count = spare < incoming_remaining ?
-                spare : incoming_remaining;
+            int moved_count;
+            if (rotate_window) {
+                int relative_channel = channel - window_start;
+                if (relative_channel < 0)
+                    relative_channel += num_channels;
+                moved_count = relative_channel < full_channels ?
+                    channel_capacity :
+                    (relative_channel == full_channels ? tail : 0);
+            } else {
+                const int spare = channel_capacity - retained_count;
+                moved_count = spare < incoming_remaining ?
+                    spare : incoming_remaining;
+            }
 
             retained[tensor_offset] = retained_count;
             moved[tensor_offset] = moved_count;

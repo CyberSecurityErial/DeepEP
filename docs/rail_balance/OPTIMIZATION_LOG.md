@@ -1704,13 +1704,22 @@ fallback and exact C100 distribution checks.  CPU oracle and validator change
 first; the GPU prefix materializer then mirrors them and must pass exact
 CPU/GPU parity before any performance run.
 
-Two costs are pre-registered rather than hidden.  The planner gains one channel
-pass.  More importantly, the current source resolver linearly scans physical
-target-channel prefixes; the C100 average resolved channel is expected to move
-from about 15.5 to about 111.5.  Therefore source, return and plan are all
-measured at H256 and H7168.  A return-only win is rejected if source/plan cost
-absorbs it.  Binary search, waterfill, TMA pipelining and a compact work queue
-are separate future hypotheses and must not be bundled into O077.
+Two costs are pre-registered rather than hidden.  The original cyclic GPU
+translation would have added one channel pass.  The pure-deficit gate makes a
+smaller materialization possible: `full=incoming/capacity`, `tail=incoming %
+capacity`, and a physical channel's cyclic distance from `start` determine its
+moved count in closed form.  The final GPU kernel therefore retains its two
+existing channel passes and adds one warp prefix scan plus integer mapping;
+this implementation refinement does not change the O077 scheduling variable.
+Static `cuobjdump --dump-resource-usage` reports REG 62 before versus REG 64
+after, with STACK/SHARED/LOCAL all still zero; this is a measured codegen cost
+to test, not a performance conclusion.
+More importantly, the current source resolver linearly scans physical target-
+channel prefixes; the C100 average resolved channel is expected to move from
+about 15.5 to about 111.5.  Therefore source, return and plan are all measured
+at H256 and H7168.  A return-only win is rejected if source/plan cost absorbs
+it.  Binary search, waterfill, TMA pipelining and a compact work queue are
+separate future hypotheses and must not be bundled into O077.
 
 The pure-deficit gate removes a real rotate-all regression but is not a global
 minimax scheduler.  A retained audit counterexample with G2/D5/C8/T5 produces
@@ -1743,10 +1752,12 @@ The falsification order is fixed:
    same Nsys window.  Otherwise revert the production complexity while keeping
    the failed experiment and artifacts in the logs.
 
-CPU status: the builder and strict validator implement the pure-deficit gate.
-Direct CPU schedule tests pass 14/14, including the audit counterexample,
-pure-deficit cyclic wrap and exact C100 distribution; vnode round-trip tests
-pass 7/7 with their original canonical partial-deficit ordering.  The missing-
-pytest, both stale-golden failures, and the rejected rotate-all prototype are
-retained in D084.  GPU materialization and all performance conclusions remain
-pending.
+Implementation status: the builder and strict validator implement the pure-
+deficit gate.  Direct CPU schedule tests pass 14/14 and vnode round-trip tests
+pass 7/7.  The final closed-form GPU materializer passes 76 exact single-GPU
+CPU/GPU plan cases and the fresh-JIT eight-GPU LSA plan transaction.  These
+include the audit partial-deficit counterexample, pure-deficit cyclic wrap,
+C1024/D32 and exact C100 224-by-4 distribution.  The missing-pytest, both stale-
+golden failures, rejected rotate-all CPU prototype and rejected extra-GPU-pass
+prototype are retained in D084/D085.  Source/return/vnode correctness and all
+performance conclusions remain pending.
