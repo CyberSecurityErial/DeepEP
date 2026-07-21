@@ -100,6 +100,62 @@ def _run_case(name: str) -> None:
     header = _FORCE_HEADER.read_text()
     runtime_header = _RUNTIME_HEADER.read_text()
     legacy_header = _LEGACY_HEADER.read_text()
+
+    # The post-Gate2 adapter is intentionally a straight ABI bind followed by
+    # launch.  Freeze both the kernel-argument order and the absence of a new
+    # fallible host phase in this committed section.
+    adapter_begin = runtime_header.index(
+        "static void launch_prepared_rail_balance_hybrid_dispatch(")
+    adapter_end = runtime_header.index(
+        "\n}\n\n// Compile the byte-immutable legacy kernel", adapter_begin,
+    ) + 2
+    adapter = runtime_header[adapter_begin:adapter_end]
+    adapter_fields = (
+        ".x = x",
+        ".sf = sf",
+        ".topk_idx = topk_idx",
+        ".topk_weights = topk_weights",
+        ".copied_topk_idx = copied_topk_idx",
+        ".cumulative_local_expert_recv_stats =",
+        ".psum_num_recv_tokens_per_scaleup_rank =",
+        ".psum_num_recv_tokens_per_expert =",
+        ".num_unaligned_recv_tokens_per_expert =",
+        ".dst_buffer_slot_idx = dst_buffer_slot_idx",
+        ".token_metadata_at_forward = token_metadata_at_forward",
+        ".num_tokens = num_tokens",
+        ".sf_token_stride = sf_token_stride",
+        ".sf_hidden_stride = sf_hidden_stride",
+        ".nccl_dev_comm = nccl_dev_comm",
+        ".nccl_window = nccl_window",
+        ".buffer = buffer",
+        ".workspace = workspace",
+        ".mapped_host_workspace = mapped_host_workspace",
+        ".rail_balance_arena = rail_balance_arena",
+        ".rail_balance_retained = rail_balance_retained",
+        ".rail_balance_moved = rail_balance_moved",
+        ".rail_balance_group_prefix = rail_balance_group_prefix",
+        ".rail_balance_proxy_required = rail_balance_proxy_required",
+        ".scaleout_rank_idx = scaleout_rank_idx",
+        ".scaleup_rank_idx = scaleup_rank_idx",
+        ".launch_args = prepared.launch_args",
+    )
+    adapter_positions = [adapter.index(field) for field in adapter_fields]
+    assert adapter_positions == sorted(adapter_positions)
+    assert (
+        "RailBalanceHybridDispatchRuntime::launch(\n"
+        "        prepared.runtime, args, stream);"
+    ) in adapter
+    for forbidden in (
+        "validate_rail_balance_hybrid_dispatch_spec(",
+        "make_rail_balance_hybrid_dispatch_args(",
+        "jit::compiler",
+        "torch::",
+        "cudaMemcpy",
+        "cudaStreamSynchronize",
+        "EP_HOST_ASSERT",
+    ):
+        assert forbidden not in adapter
+
     assert "constexpr int kNumForwardMetadataDims = 3 + kNumTopk * 2;" in header
     assert "metadata_ptr[2] = stored_proxy_slot;" in header
     assert "metadata_ptr[3 + lane_idx]" in header

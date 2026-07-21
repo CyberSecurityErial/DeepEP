@@ -391,7 +391,13 @@ make_rail_balance_hybrid_dispatch_args(
     };
 }
 
-static std::shared_ptr<jit::KernelRuntime>
+struct PreparedRailBalanceHybridDispatch {
+    std::shared_ptr<jit::KernelRuntime> runtime;
+    RailBalanceHybridDispatchSpec spec;
+    jit::LaunchArgs launch_args;
+};
+
+static PreparedRailBalanceHybridDispatch
 prepare_rail_balance_hybrid_dispatch(
     const RailBalanceHybridDispatchSpec& spec) {
     const auto args = make_rail_balance_hybrid_dispatch_args(spec);
@@ -404,8 +410,83 @@ prepare_rail_balance_hybrid_dispatch(
         spec.num_hidden_bytes, spec.num_max_tokens_per_rank,
         spec.num_experts, spec.num_topk, spec.expert_alignment,
         spec.num_qps, spec.num_timeout_cycles);
-    return jit::compiler->build(
-        key, RailBalanceHybridDispatchRuntime::generate(args));
+    return {
+        .runtime = jit::compiler->build(
+            key, RailBalanceHybridDispatchRuntime::generate(args)),
+        .spec = spec,
+        .launch_args = args.launch_args,
+    };
+}
+
+// Gate #2 is the last fallible host phase. This adapter therefore only binds
+// the already-owned pointers to the frozen force ABI and submits the already-
+// compiled specialization. In particular, keep validation, JIT, allocation,
+// D2H status reads, and stream synchronization out of this function.
+static void launch_prepared_rail_balance_hybrid_dispatch(
+    const PreparedRailBalanceHybridDispatch& prepared,
+    void* x,
+    sf_pack_t* sf,
+    topk_idx_t* topk_idx,
+    float* topk_weights,
+    topk_idx_t* copied_topk_idx,
+    int* cumulative_local_expert_recv_stats,
+    int* psum_num_recv_tokens_per_scaleup_rank,
+    int* psum_num_recv_tokens_per_expert,
+    int* num_unaligned_recv_tokens_per_expert,
+    int* dst_buffer_slot_idx,
+    int* token_metadata_at_forward,
+    const int& num_tokens,
+    const int& sf_token_stride,
+    const int& sf_hidden_stride,
+    const jit::NoRefPtr& nccl_dev_comm,
+    const ncclWindow_t& nccl_window,
+    void* buffer,
+    void* workspace,
+    void* mapped_host_workspace,
+    void* rail_balance_arena,
+    const int* rail_balance_retained,
+    const int* rail_balance_moved,
+    const int* rail_balance_group_prefix,
+    const int* rail_balance_proxy_required,
+    const int& scaleout_rank_idx,
+    const int& scaleup_rank_idx,
+    const at::cuda::CUDAStream& stream) {
+    const RailBalanceHybridDispatchRuntime::Args args = {
+        .spec = prepared.spec,
+        .x = x,
+        .sf = sf,
+        .topk_idx = topk_idx,
+        .topk_weights = topk_weights,
+        .copied_topk_idx = copied_topk_idx,
+        .cumulative_local_expert_recv_stats =
+            cumulative_local_expert_recv_stats,
+        .psum_num_recv_tokens_per_scaleup_rank =
+            psum_num_recv_tokens_per_scaleup_rank,
+        .psum_num_recv_tokens_per_expert =
+            psum_num_recv_tokens_per_expert,
+        .num_unaligned_recv_tokens_per_expert =
+            num_unaligned_recv_tokens_per_expert,
+        .dst_buffer_slot_idx = dst_buffer_slot_idx,
+        .token_metadata_at_forward = token_metadata_at_forward,
+        .num_tokens = num_tokens,
+        .sf_token_stride = sf_token_stride,
+        .sf_hidden_stride = sf_hidden_stride,
+        .nccl_dev_comm = nccl_dev_comm,
+        .nccl_window = nccl_window,
+        .buffer = buffer,
+        .workspace = workspace,
+        .mapped_host_workspace = mapped_host_workspace,
+        .rail_balance_arena = rail_balance_arena,
+        .rail_balance_retained = rail_balance_retained,
+        .rail_balance_moved = rail_balance_moved,
+        .rail_balance_group_prefix = rail_balance_group_prefix,
+        .rail_balance_proxy_required = rail_balance_proxy_required,
+        .scaleout_rank_idx = scaleout_rank_idx,
+        .scaleup_rank_idx = scaleup_rank_idx,
+        .launch_args = prepared.launch_args,
+    };
+    RailBalanceHybridDispatchRuntime::launch(
+        prepared.runtime, args, stream);
 }
 
 // Compile the byte-immutable legacy kernel through a probe-specific runtime.
@@ -511,8 +592,8 @@ static pybind11::dict rail_balance_hybrid_dispatch_codegen_test(
     };
     const auto args = make_rail_balance_hybrid_dispatch_args(spec);
     const auto code = RailBalanceHybridDispatchRuntime::generate(args);
-    const auto runtime = prepare_rail_balance_hybrid_dispatch(spec);
-    EP_HOST_ASSERT(runtime != nullptr);
+    const auto prepared = prepare_rail_balance_hybrid_dispatch(spec);
+    EP_HOST_ASSERT(prepared.runtime != nullptr);
     const RailBalanceHybridLegacyDispatchProbeRuntime::Args legacy_args = {
         .spec = spec,
     };
