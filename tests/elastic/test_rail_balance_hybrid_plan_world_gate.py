@@ -127,8 +127,11 @@ def _assert_cpu_contract() -> tuple[PlanCase, PlanCase, PlanCase]:
     end = buffer_header.index(
         "void rail_balance_hybrid_source_shuffle(", begin)
     finish_body = buffer_header[begin:end]
+    # H4b freezes the barrier LaunchArgs before Gate1; finish may only submit
+    # that prepared launch once and must not reconstruct arguments from live
+    # tensors after the cross-rank transaction begins.
     assert finish_body.count(
-        "launch_prepared_rail_balance_hybrid_local_barrier(") == 1
+        "submit_prepared_rail_balance_hybrid_local_barrier(") == 1
     assert "submit_prepared_rail_balance_hybrid_source_shuffle(" not in \
         finish_body
     assert "launch_prepared_rail_balance_hybrid_source_shuffle(" not in \

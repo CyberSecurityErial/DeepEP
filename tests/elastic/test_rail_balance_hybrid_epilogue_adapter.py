@@ -140,9 +140,15 @@ def main() -> None:
     )
     assert "CombineReduceEpilogueRuntime::launch(" not in checked_combine
 
-    # The local LSA barrier was audited rather than modified: its existing
-    # prepared launch is already an assertion-free Args + launch submit.
+    # H4b freezes LaunchArgs before Gate1.  The committed raw submit remains
+    # assertion-free, while the standalone checked wrapper may only construct
+    # the fixed launch geometry and delegate once.
     local_barrier_submit = _section(
+        local_barrier_source,
+        "submit_prepared_rail_balance_hybrid_local_barrier(",
+        "static void launch_prepared_rail_balance_hybrid_local_barrier(",
+    )
+    local_barrier_checked = _section(
         local_barrier_source,
         "launch_prepared_rail_balance_hybrid_local_barrier(",
         "struct PreparedRailBalanceHybridPlan",
@@ -160,6 +166,10 @@ def main() -> None:
         "status",
     ):
         assert forbidden not in local_barrier_submit, forbidden
+    assert local_barrier_checked.count(
+        "submit_prepared_rail_balance_hybrid_local_barrier(") == 1
+    assert "RailBalanceHybridLocalBarrierRuntime::launch(" not in \
+        local_barrier_checked
 
     print("PASS C080-H1b prepared epilogue/barrier submit adapters")
 
