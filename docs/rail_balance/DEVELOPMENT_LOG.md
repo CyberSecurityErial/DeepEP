@@ -2830,3 +2830,66 @@ and the distributed formula.
 Commit `c05ff0d` is pushed. Public force remains unavailable. H3 must settle
 the constructor pre-window consensus boundary and implement fixed CUDA tensor
 WORLD gates; H4 then connects the prepared raw stages and owning handle state.
+
+## 2026-07-21 — D046: prove one fixed CUDA WORLD consensus primitive
+
+H3a adds a private fixed-storage WORLD gate without connecting it to the
+constructor or operation path. The caller owns one reusable CUDA `int64[128]`
+and one pinned CPU mirror. Word zero carries a deterministic nonnegative error
+key, word one is reserved zero, and up to 63 common fields occupy exact pairs:
+
+```text
+word[2 + 2*i] = value
+word[3 + 2*i] = -value
+```
+
+One signed-int64 MAX all-reduce therefore produces `max(value)` and
+`-min(value)` without a hash or second collective. The decoder returns the
+first unequal field. A nonzero error key wins before manifest mismatch; its
+high 31 bits select priority and its low rank complement selects the lowest
+rank within that priority. The largest legal key is exactly INT64_MAX.
+
+The raw runner is intentionally short:
+
+```text
+pinned H2D -> one MAX all_reduce -> pinned D2H
+           -> synchronize caller current stream -> CPU decode
+```
+
+Storage validation and checked encoding are separate preparation functions.
+The runner has no tensor allocation, object/gather collective, rank-local
+shape assertion, JIT, or whole-device synchronization. Public API, constructor,
+off mode, capability bits, and dispatch/combine remain unchanged.
+
+Accepted evidence:
+
+```text
+PASS C080-H3 fixed WORLD gate CPU reference
+PASS true EP8 equal/mismatch/error-first and lowest-rank arbitration
+PASS variable local N omitted from common manifest
+PASS stable CUDA/pinned data_ptr over repeated rounds
+PASS non-default caller stream
+PASS exactly one int64[128] MAX all_reduce per round
+PASS gather/object-collective and cuda-device-sync tripwires
+PASS API 9/9 and legacy Hybrid identity 4/4
+PASS py_compile and git diff --check
+PASS independent audit plus 100 random/INT64_MAX properties: 0/0/0/0
+```
+
+Two design hazards were found before production connection:
+
+- pre-window mixed off/force detection and a promise that off participates in
+  no new constructor collective are logically incompatible because off and
+  force register different byte counts and `ncclCommWindowRegister` is itself
+  collective. Capability remains false. Final activation must either make all
+  modes pay one fixed pre-window gate or leave force unavailable; it must not
+  use window registration as a mismatch probe;
+- the old private Gloo signature includes `local_scaleout_rank` in WORLD-equal
+  data. That happens to work in the local fixture but is wrong on real nodes,
+  where source servers legitimately have different scaleout ranks. Production
+  manifests compare D/G/world and validate each local rank equation separately.
+  Local N and local scaleout/scaleup indices are never WORLD-equal fields.
+
+Commit `63379bb` is pushed. H3b next reuses these same stable tensors around the
+private C++ plan prepare/finish as Gate1/Gate2. H4 then consumes successful
+Gate2 state in one C++ source-shuffle to force-dispatch commit.

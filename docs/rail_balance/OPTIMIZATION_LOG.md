@@ -919,3 +919,17 @@ independent combined C++ helper, then requires the combined result to equal
 guards Python/C++ layout drift. No analogous call or field is allowed on off;
 the capability remains false while pre-window cross-rank configuration safety
 is unresolved.
+
+## Host-path decision O045 — one MAX recovers exact min and max
+
+The WORLD gate uses fixed pair encoding `(v, -v)` and a single signed-int64 MAX
+reduction. Compared with an all-gather it keeps storage constant at 1 KiB;
+compared with separate MIN/MAX it removes one collective; compared with a hash
+it has no collision argument. The fields are nonnegative int64 values, so
+INT64_MAX and its negation remain representable.
+
+This helper is not a transaction framework. It has no class, callback, event
+graph, dynamic tensor, public operator, or semantic manifest of its own. H4
+will supply the small force-v1 field tuple. Per-rank values such as N and local
+rail identity stay out of the equality set and are converted to the fixed
+error key only when local invariants fail.

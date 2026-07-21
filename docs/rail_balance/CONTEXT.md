@@ -452,3 +452,9 @@ Out of scope until evidence expands the project:
   `legacy_bytes`. Off invokes no force helper and owns no rail-balance field.
   Both capabilities remain false until H3/H4 close cross-rank consensus and
   the production transaction.
+- H3a now provides the private fixed CUDA WORLD primitive: caller-owned
+  `int64[128]` CUDA/pinned storage, exact `(v,-v)` min/max recovery through one
+  MAX reduction, deterministic error arbitration, and caller-stream-only
+  synchronization. Real EP8 fault/stream/reuse tests pass. It is deliberately
+  not yet wired into constructor or dispatch, so off and both capability bits
+  remain unchanged.

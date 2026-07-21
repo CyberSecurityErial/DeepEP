@@ -13,8 +13,9 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
 - C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
   force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
   resources except the expected eight-byte constant pointer argument.
-- Latest pushed checkpoint is `c05ff0d` (force-only registered tail sizing),
-  following `6a6dc02` and `d5a60a9` (raw submit closure), on
+- Latest pushed checkpoint is `63379bb` (private fixed CUDA WORLD gate),
+  following `c05ff0d` (force-only registered tail sizing) and the H1b raw
+  submit closure, on
   `fork/feat/rail-balance-prototype`.
 - Public force still fails closed and no result claims real Gin/RDMA behavior.
 - Resume from the working tree and the newest entries in `DEVELOPMENT_LOG.md`;
@@ -73,6 +74,10 @@ the exact file snapshots without inventing commit identity.
   runtime-argument identity, helper failure ordering, and independent audit
   pass. Runtime receives one `legacy+arena` window; off remains field/helper
   identical and public force remains false.
+- H3a fixed gate: one reusable 1 KiB CUDA/pinned pair, one MAX per round,
+  exact field mismatch plus deterministic error convergence, true EP8 and
+  non-default-stream evidence, and independent audit 0/0/0/0. It is not yet
+  connected to plan/dispatch.
 
 ## Mandatory retained boundary
 
@@ -93,11 +98,11 @@ No C070 timing is performance evidence.
 2. Verify branch and state with `git status --short --branch` and run
    `git diff --cached --check`.
 3. Do not redo C061/C070 unless the relevant code changes.
-4. Resume at H3 fixed-tensor WORLD consensus and then the production C080 host
-   transaction; do not return to vnode or the obsolete CPU-manifest/sidecar
-   path. Resolve the pre-window mixed-mode safety boundary explicitly, derive
-   C/topology in C++, prebuild every runtime, and launch shuffle→force dispatch
-   in one C++ commit call.
+4. Reuse H3a storage to connect private plan Gate1/Gate2, then implement the
+   production C080 dispatch transaction; do not return to vnode or the
+   obsolete CPU-manifest/sidecar path. Keep the pre-window mixed-mode boundary
+   explicit, derive C/topology in C++, and launch shuffle→force dispatch in one
+   C++ commit call.
 5. Keep public force unavailable until force combine is connected as one
    main-combine→return-unshuffle→local-barrier→legacy-epilogue commit and handle
    ownership/consumption is fail-closed.
