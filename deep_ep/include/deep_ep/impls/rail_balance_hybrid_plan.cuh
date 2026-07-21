@@ -155,22 +155,34 @@ __forceinline__ __device__ __host__ bool resolve_hybrid_copy(
     if (egress < 0 or egress >= num_rails or incoming_ordinal < 0)
         return false;
 
-    int target_channel = -1;
-    int group_local_ordinal = -1;
-    for (int channel = 0; channel < num_channels; ++channel) {
-        const auto begin_offset = hybrid_plan_detail::moved_prefix_offset(
-            egress, destination, channel,
-            num_channels, num_destinations);
-        const int begin = moved_channel_prefix[begin_offset];
-        const int end = moved_channel_prefix[begin_offset + 1];
-        if (begin <= incoming_ordinal and incoming_ordinal < end) {
-            target_channel = channel;
-            group_local_ordinal = incoming_ordinal - begin;
-            break;
+    const auto prefix_offset = hybrid_plan_detail::moved_prefix_offset(
+        egress, destination, 0, num_channels, num_destinations);
+    if (moved_channel_prefix[prefix_offset] != 0 or
+        incoming_ordinal >= moved_channel_prefix[
+            prefix_offset + num_channels])
+        return false;
+
+    // Find the first channel whose exclusive end exceeds the incoming
+    // ordinal. The plan producer emits a nondecreasing prefix, including
+    // repeated values for empty channels.
+    int lower_channel = 0;
+    int upper_channel = num_channels - 1;
+    while (lower_channel < upper_channel) {
+        const int middle_channel =
+            lower_channel + (upper_channel - lower_channel) / 2;
+        if (moved_channel_prefix[prefix_offset + middle_channel + 1] <=
+            incoming_ordinal) {
+            lower_channel = middle_channel + 1;
+        } else {
+            upper_channel = middle_channel;
         }
     }
-    if (target_channel < 0)
+    const int target_channel = lower_channel;
+    const int begin = moved_channel_prefix[prefix_offset + target_channel];
+    const int end = moved_channel_prefix[prefix_offset + target_channel + 1];
+    if (begin < 0 or begin > incoming_ordinal or incoming_ordinal >= end)
         return false;
+    const int group_local_ordinal = incoming_ordinal - begin;
 
     const auto target_offset = hybrid_plan_detail::gcd_offset(
         egress, target_channel, destination,
