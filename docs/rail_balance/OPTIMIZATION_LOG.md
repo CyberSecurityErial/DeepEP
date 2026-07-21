@@ -1554,3 +1554,53 @@ the raw file for audit but are excluded from steady-window SQL and stats.
 No kernel conclusion may be drawn from the one-sample smoke.  Formal H7168
 10+100 Nsys data must identify representative and tail invocations before any
 NCU capture or performance-path edit.
+
+## Measurement decision O073 — separate test arrival tails from the exposed return kernel
+
+The formal H7168 Nsys trace falsifies “return-unshuffle variation causes this
+trace's long tail.”  It does not attribute the older profiler-free millisecond
+events.  The production-shared return kernel is stable enough to profile:
+pooled p50/p95/max are 135.168/145.190/153.472 us and its exclusive-union p50
+is 93.871 us.  But its per-iteration maximum correlates only 0.138 with global
+stage span.  The test-only pre-kernel B1 arrival wait correlates 0.883, reaches
+235.040 us, and converges all ranks to sub-microsecond completion skew.  The
+large 4-byte D2H host duration is the downstream waiting sink for that stream,
+not four bytes of expensive transfer.
+
+Therefore:
+
+1. Do not NCU-profile B1 or the status D2H to explain tails; replay would alter
+   the cross-rank timing that they observe.
+2. Do not optimize the adapter's two seed copies or result snapshot; they are
+   absent from the production combine commit.
+3. Use NCU only to test a typical-kernel hypothesis on the exact slow-path
+   rank-6 invocation selected in D078.  Use strict whole-application replay,
+   not default kernel replay, because the kernel makes LSA peer stores.  Start
+   with the installed `basic` set, record replay/cache/clock warnings, and add
+   only evidence-selected sections.
+4. Compare device 6 with device 0 only if the first report cannot distinguish
+   work/path asymmetry from memory/TMA/LSA limitation.
+5. Permit one hot-path variable to change only after NCU identifies a source-
+   mapped limiter.  Retest correctness and profiler-free distributions; revert
+   complexity if the no-profiler result does not improve.
+
+This decision opens targeted NCU for the return kernel.  It does not authorize
+a barrier rewrite, CPU-affinity workaround, status-contract weakening, or
+production performance claim.
+
+## Measurement decision O074 — reject replay that duplicates peer side effects
+
+The target kernel is not a pure single-device function: one profiled rank reads
+its local proxy-return arena and writes another process's reduce buffer through
+LSA.  Default kernel replay and range replay have no proved cross-process peer-
+allocation restore contract here.  They can repeat remote stores while peers
+wait in B4, perturb barrier timing, or time out the transaction.
+
+Use `--replay-mode application`, `--app-replay-mode strict`, and
+`--app-replay-match grid`.  Filter device 6 plus exact NVTX steady-26 and one
+demangled kernel; keep `--launch-count 1 --kill 0 --set basic`.  Each pass must
+rebuild all distributed state.  Explicit `cache-control none` and
+`clock-control none` minimize single-rank control perturbation but prevent an
+unqualified cross-device clock comparison.  Application-replay mismatch,
+timeout, permission error, or cleanup failure is a retained falsification, not
+permission to relax matching or replay the peer-writing kernel.

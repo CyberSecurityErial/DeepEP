@@ -9,11 +9,11 @@ are separate diagnostic experiments.  Raw reports stay under the ignored
 
 ```text
 environment manifest: FROZEN
-large source fixture: FUNCTIONAL_PASS, UNPROFILED
-large return fixture: FUNCTIONAL_PASS, UNPROFILED
+large source fixture: FUNCTIONAL_PASS, NO_DIAGNOSTIC_PROFILE
+large return fixture: FUNCTIONAL_PASS, NSYS_ATTRIBUTED
 checked-adapter benchmark harness: AUDITED_PASS
 profiler-free baseline: SOURCE_AND_RETURN_COLLECTED, TAIL_STABILITY_NOT_ACCEPTED
-new Nsys attribution: COLLECTION_SMOKE_PASS, FORMAL_H7168_PENDING
+new Nsys attribution: FORMAL_H7168_PASS, EXACT_NCU_TARGET_SELECTED
 new NCU dossier: NOT_COLLECTED
 performance-path change: NONE
 ```
@@ -542,6 +542,177 @@ the SQLite SHA-256 is
 `ccd0572ca9ba259ef64b56df8b2cd99a844a415d26bf55aa7a237959f3b3be03`.
 It is a collection-topology smoke, not performance evidence or an NCU target.
 
+### Formal return-H7168 Nsys attribution
+
+The command above completed at clean commit
+`6339ee2976712a6891d0079a5ca29b2eee87df3f`.  The benchmark declared
+`nvtx_diagnostic`, set `baseline_collection_eligible=false`, passed its runtime
+and co-tenant gates, and left no worker or GPU process.  The three artifacts
+and their verified SHA-256 identities are:
+
+```text
+7de4785a92442c202b806984a74f7cccb5fcb713cf7e3a6c20c92504ab918d49  return-h7168-r1.json       1,105,605 bytes
+5907e3b2b5223cd4135e90b0dad93ecc2ebcf64691401b3dc6fb9debb0c2dc6f  return-h7168-r1.nsys-rep  60,559,410 bytes
+b4e5181d724d3e781841dfde320bf55b89618088fdb923504ebbed9ad1083b97  return-h7168-r1.sqlite    262,561,792 bytes
+```
+
+They live under `.cache/rail_balance/c100/nsys/formal/` with a verified
+`SHA256SUMS`.  The JSON's profiler-observed global stage median/p95/p99/max is
+383.927/434.811/508.700/562.995 us.  It is diagnostic timing, not a new
+profiler-free baseline.
+
+The only outer steady range is `[43391267493,44913774211]` ns, or
+1.522506718 s.  It contains 100 steady iterations on each of eight ranks,
+8,800 kernels, and 12,800 memcpy records.  The exact per-rank target range has
+the following invariant stream-26 sequence in all 800 cases:
+
+```text
+12,873,728-byte D2D proxy seed
+58,851,328-byte D2D reduce seed
+B1 local barrier
+rail_balance_hybrid_return_unshuffle_impl<7168,4>
+B4 local barrier
+58,851,328-byte D2D reduce snapshot
+4-byte D2H status
+```
+
+The first two D2D operations, B1, and the result snapshot belong to
+`ElasticBuffer::rail_balance_hybrid_return_unshuffle_test` at commit
+`6339ee2` (`csrc/elastic/buffer.hpp:1648`, with the committed sequence at
+lines 1731--1780).  They are not submitted by the production combine commit.
+The return-unshuffle submission is production-shared, and B4 models the
+production unshuffle-to-epilogue visibility barrier.  The 4-byte checked
+status read also exists in
+`ElasticBuffer::rail_balance_hybrid_combine_commit` (`buffer.hpp:1454`,
+sequence lines 1511--1550), but its host API duration is a stream-completion
+observation point rather than four bytes of additive copy work.
+
+The target-range attribution is:
+
+| Component | p50 | p95 | p99 | max | Interpretation |
+| --- | ---: | ---: | ---: | ---: | --- |
+| rank-local NVTX stage | 342.353 us | 388.073 us | 478.908 us | 544.151 us | synchronous diagnostic adapter envelope |
+| initial 12.87 MB D2D | 10.720 us | 11.488 us | - | 14.048 us | test seed copy |
+| initial 58.85 MB D2D | 30.048 us | 31.008 us | - | 31.520 us | test seed copy |
+| B1 | 30.608 us | 75.882 us | 149.934 us | 235.040 us | test-only arrival wait |
+| return-unshuffle | 135.168 us | 145.190 us | 149.025 us | 153.472 us | production-shared NCU candidate |
+| B4 | 14.688 us | 58.211 us | 62.155 us | 68.321 us | production-relevant visibility wait |
+| result 58.85 MB D2D | 28.832 us | 29.792 us | - | 30.208 us | test snapshot |
+| 4-byte D2H GPU copy | 2.432 us | 2.624 us | - | 3.488 us | checked status transfer |
+| 4-byte D2H host API | 235.220 us | 280.463 us | 349.211 us | 440.639 us | waits for preceding stream work |
+| following stream sync API | 3.000 us | 4.196 us | 4.699 us | 23.424 us | most waiting was already paid above |
+
+B1, rather than the return kernel, explains the formal trace's long tail.
+This does not retroactively identify every extreme profiler-free sample.
+Across 100
+global iterations, the maximum B1 duration correlates with the global NVTX
+span at 0.883, while the maximum return-kernel duration correlates at only
+0.138.  B1 arrival skew reaches 228.657 us, while completion skew never exceeds
+0.946 us: the barrier is absorbing late ranks rather than executing slowly.
+Iteration 85 is the largest example: rank 7's first GPU work arrives
+227.952 us late, another rank waits 235.040 us in B1, all return kernels remain
+within 90.208--145.344 us, and the global range reaches 558.044 us.  B1 and
+the D2H waiting sink therefore must not be NCU targets for tail diagnosis.
+One iteration also retains a post-GPU host/profiler return delay; because this
+capture deliberately disabled CPU sampling and context-switch collection,
+its scheduler/GIL cause remains missing evidence rather than a guessed root
+cause.  The older profiler-free reports contain separate events up to about
+2.02 ms.  This 0.56-ms diagnostic trace cannot attribute those historical
+events, so they remain explicit missing evidence.
+
+The return kernel is nevertheless materially exposed in the typical stage.
+Across each global eight-rank target envelope, the union in which at least one
+return kernel is active has a 144.726 us median.  The subset of that union in
+which no copy or barrier category is simultaneously active has a 93.871 us
+median.  The latter is 24.8% of the 378.525-us global NVTX-envelope median; it
+is a diagnostic non-overlap measure, not a production critical-path fraction.
+Device medians are not symmetric:
+
+```text
+device/rank:   0       1       2       3       4       5       6       7
+p50 us:      92.480 137.392 133.584 142.113 132.625 132.577 142.816 129.088
+```
+
+Rank 6 is the last target-kernel finisher in 57/100 iterations and rank 3 in
+31/100.  The first low-overhead NCU target is therefore fixed before capture:
+
+```text
+NVTX range: c100/return/stage/steady/26
+kernel: rail_balance_hybrid_return_unshuffle_impl<7168,4>
+device/rank: 6
+Nsys start/end: 43805472052/43805614804 ns
+Nsys duration: 142.752 us
+context/stream: 1/26
+grid/block: (256,1,1)/(32,1,1)
+registers/thread: 60
+dynamic shared memory: 14,400 bytes
+same-name device-local whole-report ordinal: 37, zero based
+```
+
+A later fast-path comparison may use device 0 steady iteration 17, 92.480 us,
+with the same launch configuration, but only after clock control or measured
+clock parity removes the observed cross-device clock confounder.  Correlation
+IDs are report-local and must not be used across the Nsys and NCU runs.
+Cross-run identity is the NVTX range, full demangled kernel, device/rank,
+launch configuration, workload shape, and invocation ordinal.  NCU may
+investigate typical kernel efficiency; it is not being used to explain the
+already-attributed formal-trace tail.
+
+### Frozen first-pass NCU safety contract
+
+Default kernel replay is rejected for this target.  The kernel TMA-loads a
+local proxy-return record and TMA-stores through an LSA peer pointer into
+another process's reduce buffer.  Replaying one rank's launch would repeat a
+cross-process side effect while the other seven ranks wait in B4, and this
+project has no evidence that NCU checkpoints/restores every peer allocation.
+Range replay would additionally capture cross-process barriers without a
+provable global restore boundary.
+
+The first pass therefore uses application replay.  Every metric pass relaunches
+the complete eight-rank benchmark and reconstructs the process group, arena,
+one-shot ticket, and barrier epoch.  Matching is `strict` so a changed kernel
+sequence fails instead of being silently dropped; `grid` matches name plus
+grid/block without requiring cross-process context and stream IDs to remain
+stable.  Only device 6, the exact steady-26 NVTX range, one demangled return
+kernel, and the installed `basic` set are eligible.  `--kill 0` is mandatory:
+killing rank 6 after collection would strand its peers in B4 or a WORLD gate.
+
+The pre-registered command core is:
+
+```bash
+/usr/local/cuda/bin/ncu \
+  --config-file off --target-processes all --devices 6 \
+  --replay-mode application \
+  --app-replay-mode strict --app-replay-match grid \
+  --nvtx --nvtx-include 'c100/return/stage/steady/26' \
+  --kernel-name-base demangled \
+  --kernel-name 'regex:.*rail_balance_hybrid_return_unshuffle_impl.*' \
+  --launch-count 1 --kill 0 --set basic \
+  --cache-control none --clock-control none \
+  --force-overwrite \
+  --output .cache/rail_balance/c100/ncu/formal/return-h7168-rank6-basic \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/bench_rail_balance_hybrid_lsa.py \
+  --stage return --case-name c100_volume_h7168 \
+  --warmup-iters 10 --steady-iters 27 --nvtx \
+  --json-out .cache/rail_balance/c100/ncu/formal/return-h7168-rank6-basic.json \
+  --master-port 30247 --timeout 180 --watchdog-seconds 1800
+```
+
+The surrounding environment remains the formal Nsys environment.  Cache and
+clock control are explicitly `none` to avoid perturbing only rank 6 while its
+peers wait; achieved clocks must be read from the report, and the NCU duration
+must not be compared with Nsys duration.  The unresolved question is whether
+NCU 2025.1.1 can strictly match this multiprocessing application replay.  A
+failure is retained as evidence and does not authorize fallback to kernel
+replay, relaxed matching, `full`, or killing the target.  The report is
+accepted only if the process exits cleanly, the benchmark passes every replay,
+no GPU/process remains, and exactly one device-6 grid-256/block-32 target with
+14,400-byte dynamic shared memory is present.  Replay pass count, profiler
+warnings, clock/cache state, child injection, metric permission/conflict,
+barrier timeout, process cleanup, artifact hash, commit, dirty state, and
+co-tenant state are mandatory audit fields.
+
 The exact installed-schema SQL used to prove the multi-rank window is retained
 here; formal analysis must first require exactly one outer range:
 
@@ -643,14 +814,16 @@ No old report may be relabelled as evidence for the new 7,168-record fixture.
    complete for repeatable typical latency.  p95/p99/max tail stability is
    deliberately not claimed; the retained tail events are inputs to Nsys,
    rather than a circular prerequisite that would forbid profiling them.
-3. Nsys exposed critical-path attribution for the new large fixture.
+3. Nsys exposed critical-path attribution for the new large fixture.  This is
+   complete for return-H7168 and selects the exact invocation above.
 4. An exact NCU invocation selected from that Nsys report.
 5. Sustained same-machine peer-copy/HBM reference if a bandwidth percentage is
    later needed; published peak alone is insufficient.
 6. Real D>1 Gin/RDMA/QP/NIC behavior and network-visible counters.
 7. Full-MoE or training-level target metric and compute/communication overlap.
 
-Item 2's profiler-free truth is present.  Until items 3--4 exist, standalone
+Item 2's profiler-free truth and item 3's Nsys attribution are present.  Until
+item 4 exists, standalone
 TMA waits, segment scans, QP choice, tail publication cadence, planner launch,
 and barriers are hypotheses only.  No performance-path code change is
 authorized by this manifest.  Unstable tails continue to limit confidence and

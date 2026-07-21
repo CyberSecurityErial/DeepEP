@@ -200,7 +200,8 @@ the exact file snapshots without inventing commit identity.
   Global medians span 2.37% and rank-local medians 2.12%, but accepted maxima
   reach 2021.557/2008.428 us.  A concurrent eight-GPU DeepEP dispatch demo
   makes r2 permanently rejected.  All four profiler-free source/return groups
-  are now collected; retained tail attribution is the remaining baseline task.
+  are now collected.  Their millisecond extremes remain unattributed, while
+  the later formal Nsys run below separately attributes its own shorter tail.
 - The clean `feaf03e` benchmark has a default-off, baseline-ineligible NVTX
   diagnostic mode.  Final-commit default-off and NVTX-on EP8 smokes pass after
   one separate co-tenant tester report was correctly rejected.
@@ -209,7 +210,16 @@ the exact file snapshots without inventing commit identity.
   `--wait=primary` fixes cleanup, but a child range still cannot start
   collection.  The accepted topology is full-process capture plus global-time
   filtering to `c100_nsys_window`.  A 0+1 report/SQLite pair proves all eight
-  devices are present; formal return-H7168 10+100 collection is next.
+  devices are present.
+- Formal return-H7168 10+100 Nsys attribution is complete at clean `6339ee2`.
+  The report proves its own long tail is test-only B1 arrival/host launch skew,
+  not return-kernel variation; older extreme samples remain separate evidence.
+  The production-shared return kernel still has a 93.871-us median diagnostic
+  union with no simultaneous copy/barrier, 24.8% of the 378.525-us global
+  NVTX-envelope median; this is not a production critical-path percentage.
+  The exact first NCU target is
+  rank/device 6, steady iteration 26, 142.752 us, grid 256, block 32, regs 60,
+  dynamic shared memory 14,400 bytes.  No hot-path edit has begun.
 
 ## Mandatory retained boundary
 
@@ -239,13 +249,17 @@ No C070 timing is performance evidence.
    Rail/Gin correctness passes. D1 evidence is never a D>1 Gin success claim.
 6. C090 is complete. Do not rerun its unchanged full suites or sanitizer
    kernels unless production device code changes.
-7. The GPU evidence-chain skill is installed and the user has already been
-   notified that Nsys started.  Run the pre-registered full-process
-   return-H7168 10+100 capture with `--wait=primary`; analyze all ranks through
-   the global steady timestamp window.  NCU may target only an exact exposed
-   invocation selected by that report, and hot-path optimization remains
-   blocked until the evidence exists.  C105 packages the fastest possible
-   real-cluster bring-up afterward.
+7. The GPU evidence-chain skill is installed and formal Nsys attribution is
+   complete.  Before running NCU, recheck idle GPUs and the installed NCU CLI,
+   notify the user, and capture only the exact rank-6 return invocation recorded
+   above with the `basic` set.  Use strict whole-application replay, name+grid
+   matching, device 6, `kill 0`, and explicit cache/clock control `none`; default
+   kernel/range replay is forbidden because the kernel writes peer-process
+   memory.  Record pass count, matching, warnings, achieved clocks, cleanup and
+   artifact hash.  Do not fall back to relaxed or peer-side replay if the first
+   capture fails.  A hot-path edit remains blocked until an accepted report
+   maps a limiter to source.  C105 packages the fastest possible real-cluster
+   bring-up afterward.
 
 Pinned runtime for accepted commands:
 

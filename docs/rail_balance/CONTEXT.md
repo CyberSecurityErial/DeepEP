@@ -873,3 +873,29 @@ Out of scope until evidence expands the project:
   multi-rank analysis must read `NVTX_EVENTS.start/end` and filter every CUDA
   process by the same timestamp window.  NCU and hot-path edits remain blocked
   until the formal H7168 trace establishes an exposed exact invocation.
+
+## C100 formal return-H7168 attribution context (2026-07-22)
+
+- The formal full-process trace is complete at clean `6339ee2`.  JSON, report,
+  SQLite and verified hashes live under
+  `.cache/rail_balance/c100/nsys/formal/`; diagnostic timing is never relabelled
+  as profiler-free truth.
+- All 800 target-stage ranges contain two adapter input D2D copies, test-only
+  B1, the production-shared return kernel, production-relevant B4, one adapter
+  snapshot D2D, and checked status D2H.  The longest tails are late-rank arrival
+  absorbed by B1, not return-kernel variation.
+- The return kernel still has material diagnostic non-overlap: pooled p50 is
+  135.168 us; the cross-device interval with a return kernel but no copy or
+  barrier has p50 93.871 us, 24.8% of the 378.525-us global NVTX-envelope
+  median.  This is not a production critical-path fraction.  Device medians
+  range from 92.480 us on rank 0 to 142.816 us on rank 6, but their observed
+  clocks are a confounder until explicitly controlled or measured equal.
+- Targeted NCU is now allowed only for rank/device 6,
+  `c100/return/stage/steady/26`, kernel
+  `rail_balance_hybrid_return_unshuffle_impl<7168,4>`, grid 256, block 32,
+  60 registers/thread, 14,400-byte dynamic shared memory, Nsys duration
+  142.752 us and same-name device-local ordinal 37.  B1/status are not NCU
+  targets.  Default kernel/range replay is unsafe for this peer-writing kernel;
+  use strict application replay, `basic`, device 6, `kill 0`, and stop rather
+  than relaxing the contract if matching fails.  No performance-path edit has
+  yet begun.  Older profiler-free millisecond events remain unattributed.

@@ -4566,3 +4566,68 @@ from `NVTX_EVENTS` and use the same global time interval for every process and
 device.  This smoke is diagnostic only, not a latency baseline or NCU target.
 The formal return-H7168 full trace is next; no device/JIT/Hybrid hot path has
 changed.
+
+## 2026-07-22 — D078: attribute formal return-H7168 and select one exact NCU invocation
+
+The pre-registered full-process Nsys command completed at clean commit
+`6339ee2` with `--wait=primary`, 10 warmups, 100 steady iterations, all eight
+ranks, and no co-tenant.  It exited zero, left no process, and produced a JSON,
+`.nsys-rep`, SQLite export, and verified manifest under
+`.cache/rail_balance/c100/nsys/formal/`.  The hashes are recorded in
+`C100_PERFORMANCE_EVIDENCE.md`.  The report is explicitly
+`nvtx_diagnostic`/baseline-ineligible.
+
+The single 1.522506718-second outer range contains all 800 exact target-stage
+ranges.  Every range has the same stream-26 chain: two input D2D copies, B1,
+return-unshuffle, B4, one snapshot D2D, and a 4-byte status D2H.  Source mapping
+proved that the two input copies, B1, and snapshot are standalone-adapter work;
+the return kernel and B4 correspond to the production combine sequence.  The
+status read is a synchronous checked-path observation point, not an additive
+4-byte payload bottleneck.
+
+Two independent read-only SQLite analyses agree.  The 800 return kernels have
+p50/p95/p99/max 135.168/145.190/149.025/153.472 us and an exclusive-union p50
+of 93.871 us.  The global tail instead follows B1 arrival wait: per-iteration
+maximum B1 correlates 0.883 with the global NVTX span, versus 0.138 for the
+maximum return kernel.  At the largest iteration, rank 7 reaches its first GPU
+work 227.952 us late, another rank waits 235.040 us in B1, and all return
+kernels remain inside their normal range.  The final 4-byte `cudaMemcpyAsync`
+host call has a 235.220 us median because it waits for all preceding stream
+work; the following explicit stream sync has only a 3.000 us median.  NCU of
+either waiting sink would be causally wrong.  This result explains this Nsys
+run's tail only; older profiler-free events up to about 2.02 ms remain
+unattributed because this capture reached 0.56 ms and disabled CPU sampling.
+
+The exact first NCU candidate is fixed as device/rank 6,
+`c100/return/stage/steady/26`,
+`rail_balance_hybrid_return_unshuffle_impl<7168,4>`, 142.752 us in Nsys,
+stream 26, grid 256, block 32, 60 registers/thread, 14,400-byte dynamic shared
+memory, and zero-based same-name device-local ordinal 37.  Device 0 steady 17
+at 92.480 us is the optional same-launch fast comparison.  Rank 6 finishes
+last in 57/100 target phases, so this selection has Nsys non-overlap and
+last-finisher evidence.  Default kernel replay is unsafe because the kernel
+performs cross-process LSA peer stores while other ranks wait in B4.  The next
+checkpoint must use strict application replay, device 6 only, `basic`,
+`cache-control none`, `clock-control none`, and `kill 0`; failure does not
+authorize kernel/range replay or relaxed matching.  No CUDA/JIT/runtime or
+hot-path code changed in this checkpoint.
+
+## 2026-07-22 — D079: freeze the multi-process NCU replay boundary
+
+NCU 2025.1.1's installed help offers kernel, application, range, and app-range
+replay.  Source review rejects the default kernel replay: return-unshuffle
+repeats TMA peer stores into allocations owned by other processes, while those
+peers can already be waiting in B4.  Range replay has the same unproved peer-
+state restoration problem plus barrier capture.  Killing after one match would
+strand the remaining ranks.
+
+The first pass is fixed to complete application replay with strict sequence
+matching and name+grid/block identity, one exact NVTX range on device 6, one
+target kernel, one `basic` report, and `kill 0`.  Each pass reconstructs the
+arena, ticket, barrier epoch, and process group.  Cache/clock control are set to
+`none` to avoid changing only the profiled rank; measured clocks remain an
+audit field, so device-0/device-6 comparison is not yet causal.  The exact
+command and acceptance/failure rules are in `C100_PERFORMANCE_EVIDENCE.md`.
+Multiprocessing application-replay matching itself remains an empirical gate:
+preserve a failure and stop rather than weakening replay safety.  This is a
+measurement-contract checkpoint only; no GPU command or hot-path edit occurred.
