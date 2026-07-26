@@ -223,9 +223,9 @@ def _run_case(name: str) -> None:
     assert proxy_snapshot < linked_list_overwrite < metadata_snapshot
 
     # Moved copies change the source-rank buffer that owns a token. The
-    # epilogue prefix must therefore be rebuilt from the per-channel tails
-    # published to the target GPU. Counters are still cleared after the
-    # opening Tag0 so slot allocation starts from zero for each epoch.
+    # epilogue prefix must therefore be rebuilt from sender-owned dense counts
+    # published into a target-local mailbox before Tag1. Counters are still
+    # cleared after Tag0 so slot allocation starts from zero for each epoch.
     counter_clear = header.index(
         "ptx::st_relaxed_sys(\n"
         "            workspace_layout.get_scaleup_atomic_sender_counter()"
@@ -234,10 +234,11 @@ def _run_case(name: str) -> None:
     assert counter_clear < role_begin
     first_arrival_barrier = header.index(
         "comm::kHybridDispatchTag1", role_begin)
-    peer_count_snapshot = header.index(
-        "workspace_layout.get_channel_scaleup_tail_ptr(",
-        first_arrival_barrier,
+    mailbox_publish = header.index(
+        "auto scaleup_count_mailbox = static_cast<int*>("
     )
+    peer_count_snapshot = header.index(
+        "scaleup_count_mailbox + lane_idx", first_arrival_barrier)
     tail_publish = header.index(
         "ptx::st_release_sys(\n"
         "                        gin.get_sym_ptr<ncclTeamTagLsa>(tail_ptr, j)"
@@ -259,8 +260,9 @@ def _run_case(name: str) -> None:
         first_arrival_barrier < peer_count_snapshot < prefix_write <
         epilogue_trigger
     )
-    assert "const int encoded_count = encoded_tail - encoded_base" in header
-    assert "actual_count += encoded_count / kNumScaleupRanks" in header
+    assert "const int final_count = atomicAdd(" in header
+    assert "ptx::st_release_sys(peer_mailbox, final_count)" in header
+    assert mailbox_publish < first_arrival_barrier < peer_count_snapshot
     assert "kRailBalanceHybridDispatchCountTag" not in header
 
     # After the opening Tag0 epoch boundary the release specialization trusts

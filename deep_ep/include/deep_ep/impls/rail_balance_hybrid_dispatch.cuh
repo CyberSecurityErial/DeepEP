@@ -881,6 +881,26 @@ rail_balance_hybrid_dispatch_impl(
         __syncwarp();
     }
 
+    // Forward warps allocate dense destination slots with local atomics. Once
+    // every warp has stopped incrementing them, publish one count per target
+    // into that target's completion-request scratch. The publishing thread is
+    // also the thread that sends Tag1 to the same target, so the release store
+    // is ordered before the NVLink barrier signal without a cross-thread
+    // hand-off of peer state.
+    cooperative_groups::this_grid().sync();
+    auto scaleup_count_mailbox = static_cast<int*>(
+        workspace_layout.get_scaleout_channel_gin_request_ptr(0, 0));
+    if (sm_idx == 0 and thread_idx < kNumScaleupRanks) {
+        const int final_count = atomicAdd(
+            workspace_layout.get_scaleup_atomic_sender_counter() +
+                thread_idx,
+            0);
+        auto peer_mailbox = gin.get_sym_ptr<ncclTeamTagLsa>(
+            scaleup_count_mailbox + scaleup_rank_idx,
+            thread_idx);
+        ptx::st_release_sys(peer_mailbox, final_count);
+    }
+
     // Scale-up barrier to ensure data arrival
     // As scale-out tokens have already been consumed by forwarders, no need to do scale-out barrier again
     comm::gpu_barrier<true, kNumScaleoutRanks, kNumScaleupRanks,
@@ -888,29 +908,14 @@ rail_balance_hybrid_dispatch_impl(
         gin, workspace_layout, scaleout_rank_idx, scaleup_rank_idx, sm_idx, thread_idx, /* do not scale-out */ false, true);
 
     // Notify counted tokens by their original owner rail, but source shuffle
-    // changes the rank-buffer owner for moved copies. Each forward channel
-    // publishes its final encoded tail to the target GPU before Tag1. Rebuild
-    // the rank prefix from those local tails instead of remotely snapshotting
-    // sender atomics, whose reset/publication can race across kernel epochs.
+    // changes the rank-buffer owner for moved copies. Rebuild the rank prefix
+    // from the sender-owned dense counts published into this target before
+    // Tag1 instead of taking a racy remote snapshot of sender atomics.
     if (sm_idx == 0 and warp_idx == 0) {
         int actual_count = 0;
-        if (lane_idx < kNumScaleupRanks) {
-            constexpr int kNumTokensInLinkedList =
-                kNumMaxTokensPerChannel * kNumScaleoutRanks + 1;
-            #pragma unroll
-            for (int channel_idx = 0; channel_idx < kNumChannels;
-                 ++ channel_idx) {
-                const int encoded_tail = ptx::ld_acquire_sys<int>(
-                    workspace_layout.get_channel_scaleup_tail_ptr(
-                        channel_idx, lane_idx));
-                const int encoded_base =
-                    channel_idx *
-                        (kNumTokensInLinkedList * kNumScaleupRanks) +
-                    lane_idx;
-                const int encoded_count = encoded_tail - encoded_base;
-                actual_count += encoded_count / kNumScaleupRanks;
-            }
-        }
+        if (lane_idx < kNumScaleupRanks)
+            actual_count = ptx::ld_acquire_sys<int>(
+                scaleup_count_mailbox + lane_idx);
         const int actual_prefix =
             ptx::warp_inclusive_sum(actual_count, lane_idx);
         if (lane_idx < kNumScaleupRanks)
