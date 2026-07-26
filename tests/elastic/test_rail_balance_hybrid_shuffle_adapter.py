@@ -135,7 +135,7 @@ def main() -> None:
     retained_body = kernel_source[retained_stage:moved_loop]
     assert "ptx::tma_store_fence();" in retained_body
     assert "ptx::tma_store_global_visibility_fence();" in retained_body
-    assert "get_linked_list_idx_ptr()[0] = proxy_slot" not in kernel_source
+    assert "get_linked_list_idx_ptr()[0] = proxy_slot" in kernel_source
     assert "get_linked_list_idx_ptr()[1] = invocation_key" not in kernel_source
     assert "get_linked_list_idx_ptr()[2]" not in kernel_source
 

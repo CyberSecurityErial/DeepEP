@@ -577,14 +577,14 @@ rail_balance_hybrid_dispatch_impl(
                 });
                 const auto staged_token =
                     arena_layout.get_proxy_rail_staging_layout(proxy_slot);
-                const auto src = static_cast<const int4*>(
+                const auto src = static_cast<const int*>(
                     proxy_token.get_base_ptr());
-                const auto dst = static_cast<int4*>(
+                const auto dst = static_cast<int*>(
                     staged_token.get_base_ptr());
                 #pragma unroll 1
-                for (int i = lane_idx; i < token_bytes / sizeof(int4);
+                for (int i = lane_idx; i < token_bytes / sizeof(int);
                      i += 32)
-                    dst[i] = __ldg(src + i);
+                    dst[i] = ptx::ld_acquire_sys(src + i);
                 __syncwarp();
                 __threadfence_system();
                 __syncwarp();

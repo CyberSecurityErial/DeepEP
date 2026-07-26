@@ -196,6 +196,9 @@ def _run_case(name: str) -> None:
     assert proxy_loop < remote_slot < proxy_acquire < proxy_put < final_tail
     assert "RB_PROXY_BAD" not in header
     assert "embedded_proxy" not in header
+    proxy_copy = header[proxy_acquire:proxy_put]
+    assert "ptx::ld_acquire_sys(src + i)" in proxy_copy
+    assert "__ldg(src + i)" not in proxy_copy
     assert "ncclGinOptFlagsAggregateRequests" not in header[
         proxy_put:final_tail
     ]

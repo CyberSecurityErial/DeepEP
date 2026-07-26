@@ -271,6 +271,13 @@ void rail_balance_hybrid_source_shuffle_impl(
             const int egress = ptx::exchange(resolution.egress, source_lane);
             const int proxy_slot =
                 ptx::exchange(resolution.proxy_slot, source_lane);
+            // The forwarder consumes this transit field before replacing all
+            // linked-list entries with their final receiver-side indices.
+            // It is needed to route the combine payload back through the
+            // inverse proxy mapping.
+            if (lane == 0)
+                staged_token.get_linked_list_idx_ptr()[0] = proxy_slot;
+            __syncwarp();
             ptx::tma_store_fence();
             __syncwarp();
 
