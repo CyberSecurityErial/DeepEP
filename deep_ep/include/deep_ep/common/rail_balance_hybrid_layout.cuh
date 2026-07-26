@@ -129,6 +129,9 @@ struct HybridArenaLayout {
                                    static_cast<int>(sizeof(nv_bfloat16)));
         EP_UNIFIED_ASSERT(num_topk >= 1 and num_topk <= 32);
         EP_UNIFIED_ASSERT(proxy_capacity > 0);
+        EP_UNIFIED_ASSERT(
+            proxy_capacity <=
+                kNumHybridMaxChannels * kNumHybridMaxDestinations);
 
         const auto dispatch_layout = layout::TokenLayout(
             hidden * sizeof(nv_bfloat16), 0, num_topk, true);
@@ -164,6 +167,14 @@ struct HybridArenaLayout {
 
     __forceinline__ __device__ __host__ int32_t* get_channel_count_ptr() const {
         return math::advance_ptr<int32_t>(base, channel_count_offset);
+    }
+
+    // Planning owns this region until Gate #2.  Committed dispatch then
+    // reuses its inactive contents as per-proxy generation-ready words.
+    __forceinline__ __device__ __host__ int32_t*
+    get_proxy_ready_ptr(const int proxy_slot) const {
+        EP_UNIFIED_ASSERT(proxy_slot >= 0 and proxy_slot < proxy_capacity);
+        return get_channel_count_ptr() + proxy_slot;
     }
 
     __forceinline__ __device__ __host__ layout::TokenLayout

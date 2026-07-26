@@ -390,6 +390,11 @@ public:
 
         const c10::cuda::CUDAGuard device_guard(topk_idx.device());
         const auto compute_stream = at::cuda::getCurrentCUDAStream(device_index);
+        const int invocation_key = ~invocation_id;
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            &arena_layout.get_control_ptr()->invocation_id,
+            &invocation_key, sizeof(invocation_key), cudaMemcpyHostToDevice,
+            comm_stream));
         const auto int_options = topk_idx.options().dtype(torch::kInt);
 
         // Allocate every Gate #2 output and build every private cubin before the
@@ -698,6 +703,11 @@ public:
         const c10::cuda::CUDAGuard device_guard(device_index);
         const auto compute_stream =
             at::cuda::getCurrentCUDAStream(device_index);
+        const int invocation_key = ~invocation_id;
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            &arena_layout.get_control_ptr()->invocation_id,
+            &invocation_key, sizeof(invocation_key), cudaMemcpyHostToDevice,
+            comm_stream));
         const auto int_options = topk_idx.options().dtype(torch::kInt);
 
         // Allocate every plan/handle tensor before the first symmetric arena

@@ -77,6 +77,10 @@ void rail_balance_hybrid_source_shuffle_impl(
 
     const auto gin = handle::NCCLGin(
         nccl_dev_comm, nccl_window, 0, NCCL_GIN_RESOURCE_SHARING_CTA);
+    const auto local_arena_layout = rail_balance::HybridArenaLayout(
+        kHidden, kNumTopk, proxy_capacity, arena);
+    const int invocation_key = ptx::ld_acquire_sys<int>(
+        &local_arena_layout.get_control_ptr()->invocation_id);
     extern __shared__ __align__(ptx::kNumTMAAlignBytes) int8_t smem[];
     const auto staged_token = layout::TokenLayout(
         kNumHiddenBytes, 0, kNumTopk, true, smem);
@@ -244,14 +248,13 @@ void rail_balance_hybrid_source_shuffle_impl(
             }
             ptx::tma_store_commit();
             ptx::tma_store_wait();
-            // Publish the completed async-proxy copy through a field already
-            // carried by every moved token.  The egress acquires this exact
-            // word before allowing GIN to consume the proxy slot.
+            // Publish the completed async-proxy copy with an epoch-specific
+            // ready key.  The plan's channel-count arena is dead after Gate #2
+            // and is large enough to provide one word per proxy slot.
             if (ptx::elect_one_sync())
                 ptx::st_release_sys(
-                    peer_layout.get_proxy_dispatch_layout(proxy_slot)
-                        .get_linked_list_idx_ptr(),
-                    proxy_slot);
+                    peer_layout.get_proxy_ready_ptr(proxy_slot),
+                    invocation_key);
             __syncwarp();
             moved_mask &= moved_mask - 1;
         }

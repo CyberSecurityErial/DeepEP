@@ -117,7 +117,7 @@ def main() -> None:
     # word per proxy copy.  Completed TMA peer writes must cross from the
     # async proxy into the generic-global domain before that barrier signals.
     wait = kernel_source.index("ptx::tma_store_wait();")
-    slot_release = kernel_source.index("ptx::st_release_sys(", wait)
+    slot_release = kernel_source.index("peer_layout.get_proxy_ready_ptr(", wait)
     visibility = kernel_source.index(
         "ptx::tma_store_global_visibility_fence();", slot_release
     )

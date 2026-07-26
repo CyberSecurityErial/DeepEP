@@ -538,8 +538,29 @@ rail_balance_hybrid_dispatch_impl(
                         rail_balance::kHybridProxyDispatchOffsetBytes +
                             static_cast<int64_t>(proxy_slot) *
                                 token_layout.get_num_bytes<false>()));
-                (void)ptx::ld_acquire_sys<int>(
-                    proxy_token.get_linked_list_idx_ptr());
+                const auto control =
+                    static_cast<rail_balance::HybridControl*>(
+                        rail_balance_arena);
+                const auto proxy_ready = math::advance_ptr<int32_t>(
+                    rail_balance_arena,
+                    rail_balance::kHybridChannelCountOffsetBytes) +
+                    proxy_slot;
+                const int invocation_key = ptx::ld_acquire_sys<int>(
+                    &control->invocation_id);
+                comm::timeout_while<kNumTimeoutCycles>([&](
+                        const bool& is_last_check) {
+                    const int ready = ptx::ld_acquire_sys<int>(
+                        proxy_ready);
+                    if (ready == invocation_key)
+                        return true;
+                    if (is_last_check)
+                        printf("DeepEP rail-balance proxy timeout, scale-out: %d, "
+                               "scale-up: %d, channel: %d, proxy: %d, "
+                               "ready: %d, invocation: %d\n",
+                               scaleout_rank_idx, scaleup_rank_idx, channel_idx,
+                               proxy_slot, ready, invocation_key);
+                    return false;
+                });
                 gin.put<ncclTeamTagRail>(
                     scaleout_recv_buffer.get_token_buffer(remote_slot)
                         .get_base_ptr(),
