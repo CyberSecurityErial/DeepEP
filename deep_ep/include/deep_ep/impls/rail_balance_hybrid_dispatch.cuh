@@ -897,16 +897,6 @@ rail_balance_hybrid_dispatch_impl(
             }
         }
 
-        int local_route_total = 0;
-        #pragma unroll
-        for (int i = 0; i < kNumScaleupRanksPerLane; ++ i)
-            local_route_total += stored_scaleup_send_counters[i];
-        const int route_total = ptx::reduce_add(local_route_total);
-        if (ptx::elect_one_sync())
-            printf("RB_FWD node=%d rail=%d channel=%d processed=%d routes=%d\n",
-                   scaleout_rank_idx, scaleup_rank_idx, channel_idx,
-                   num_tokens_processed, route_total);
-
         // Assign the source token index part of the metadata into `-1` as an ending mark
         if (not kReuseSlotIndices and ptx::elect_one_sync())
             token_metadata_at_forward[
@@ -990,15 +980,6 @@ rail_balance_hybrid_dispatch_impl(
 
     // Order the local prefix write before any SM triggers the epilogue.
     cooperative_groups::this_grid().sync();
-    if (sm_idx == 0 and warp_idx == 0 and
-        lane_idx < kNumScaleupRanks) {
-        const int published_prefix = ptx::ld_acquire_sys<int>(
-            psum_num_recv_tokens_per_scaleup_rank + lane_idx);
-        printf("RB_PREFIX node=%d target=%d source=%d prefix=%d\n",
-               scaleout_rank_idx, scaleup_rank_idx, lane_idx,
-               published_prefix);
-    }
-
     // Trigger the copy epilogue kernel
     cudaTriggerProgrammaticLaunchCompletion();
 }
