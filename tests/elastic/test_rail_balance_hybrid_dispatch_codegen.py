@@ -289,12 +289,14 @@ def _run_case(name: str) -> None:
     scaleout_end = header.index(
         "\n    } else {\n        const int forward_warp_idx", scaleout_begin)
     scaleout_body = header[scaleout_begin:scaleout_end]
-    # The correctness-first grouped put helper doorbells every payload and has
-    # one final site whose remote action publishes the finish marker after
-    # payload arrival. Local destination remains a TMA bypass.
-    assert scaleout_body.count("gin.put<ncclTeamTagRail>(") == 2
+    # The correctness-first grouped put helper doorbells every payload and
+    # publishes a per-slot epoch marker as its remote completion action. Local
+    # destination remains a TMA bypass.
+    assert scaleout_body.count("gin.put<ncclTeamTagRail>(") == 1
     assert "ncclGinOptFlagsAggregateRequests" not in scaleout_body
     assert scaleout_body.count("ncclGin_VASignalAdd(") == 1
+    assert "encoded_proxy - forward_ready_epoch_base" in header
+    assert "DeepEP rail payload timeout" in header
     assert "if (lane_idx == dst_scaleout_rank_idx)" in scaleout_body
     assert "flush_async<ncclTeamTagRail" not in scaleout_body
     assert "gin.wait(*completion_request);" not in scaleout_body
