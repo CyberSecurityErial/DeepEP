@@ -1499,3 +1499,37 @@ No O079 no-profiler, Nsys or NCU performance result has been accepted.  The
 GPU functionality run is explicitly not performance evidence because
 `nvidia-smi` reported visible GPU model `NVIDIA L20X` and GPU0 had a
 co-tenant non-megatron Python process using about 15 GiB.
+
+### O080 compute-interference diagnostic harness
+
+O080 extends only the C100 benchmark harness.  It adds:
+
+```text
+--interference-mode none|compute-only|concurrent
+```
+
+`none` preserves the existing source/return checked-adapter path and is the
+only mode that can be baseline-eligible.  Non-`none` modes require an H7168
+case and allocate one fixed BF16 GEMM per rank:
+
+```text
+[1024,7168] @ [7168,7168] -> [1024,7168]
+```
+
+`compute-only` times the GEMM window and records timed logical moved bytes as
+zero.  The moved-record byte scope remains available as
+`stage_logical_bytes_*` reference fields.  `concurrent` launches the GEMM on an
+independent CUDA stream before the checked adapter call and synchronizes the
+compute stream before the post-stage WORLD gate.  This is diagnostic until
+Nsys proves actual overlap.
+
+Smoke evidence so far: parser/py_compile pass; fan-out/fan-in/mesh/rot1/rot4
+benchmark entry accepts non-symmetric matrix cases; source compute-only,
+source concurrent, return concurrent, and default `none` source smokes pass
+with one steady iteration.  The generated schema-v4 compute-only JSON smoke
+has `logical_bytes_aggregate=0`, positive `stage_logical_bytes_aggregate`, and
+`baseline_collection_eligible=false`; per-rank raw records include
+`compute_stream_id` for future Nsys identity matching.
+
+No O080 performance conclusion is accepted for the same reason as O079: the
+run had a GPU0 co-tenant and the visible GPU model string was `NVIDIA L20X`.

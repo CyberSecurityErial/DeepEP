@@ -1016,3 +1016,26 @@ Out of scope until evidence expands the project:
   and are recorded as missing tool evidence.  Next work is O080 compute
   interference or a separate lint-tool setup/formatting slice, not another
   O079 fixture change.
+
+## C100 O080 compute-interference harness context (2026-07-26)
+
+- O080 adds only a default-off diagnostic mode to
+  `tests/elastic/bench_rail_balance_hybrid_lsa.py`; production kernels, JIT
+  ABI, buffer identity, capability bits and public API are unchanged.
+- CLI: `--interference-mode none|compute-only|concurrent`.  `none` preserves
+  the existing checked-adapter benchmark and remains the only baseline-
+  eligible mode.  Non-`none` modes require H7168 and directly reject H256.
+- The fixed compute workload is BF16
+  `[1024,7168] @ [7168,7168] -> [1024,7168]`, allocated once per rank before
+  cold iteration and reused across warmup/steady.
+- `compute-only` times only the GEMM window and reports timed logical moved
+  bytes as zero.  The moved-record byte scope remains in
+  `stage_logical_bytes_*` reference fields.  `concurrent` launches the GEMM on
+  an independent stream before the checked adapter call, then synchronizes the
+  compute stream before the post-stage WORLD gate.
+- Smokes passing: py_compile, parser H7168 accept/H256 reject,
+  non-symmetric matrix `_selected_case`, source compute-only, source
+  concurrent, return concurrent, default `none` source, and schema-v4 JSON
+  compute-only checks with per-rank `compute_stream_id`.  All GPU smokes are
+  path checks only; no performance conclusion is accepted until the target
+  machine is idle and Nsys proves actual overlap.

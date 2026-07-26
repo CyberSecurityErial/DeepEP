@@ -35,6 +35,13 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
   owner-to-egress matrix plus outgoing and incoming sums, and passes true
   8-GPU LSA source and return checks for all ten named matrix cases.  These
   are functionality gates only, not performance evidence.
+- O080 adds a default-off compute-interference diagnostic mode to the existing
+  C100 benchmark: `none|compute-only|concurrent`.  It uses a fixed H7168 BF16
+  GEMM on an independent stream, schema v4, baseline ineligibility for
+  diagnostic modes, and compute-only logical moved bytes equal to zero.  Source
+  compute-only, source concurrent, return concurrent, default `none` source,
+  parser, selected-case and schema smokes pass.  No O080 performance result is
+  accepted yet.
 - Both capability bits remain false and no result claims real Gin/RDMA
   behavior. The local activation evidence is complete, but the public methods
   deliberately remain unreachable through a normal force construction until a
@@ -293,9 +300,11 @@ No C070 timing is performance evidence.
    O079.  No O079 performance result is accepted because the run had a GPU0
    co-tenant and the visible GPU model string was `NVIDIA L20X`.
 11. After O079, pre-register O080's default-off, same-allocation H7168
-   stage-only/compute-only/concurrent GEMM experiment.  Performance work still
-   requires idle GPUs.  C105 packages the fastest real-cluster bring-up;
-   truthful D>1 Gin remains C080-H/C110.
+   stage-only/compute-only/concurrent GEMM experiment.  This is now
+   implemented as `--interference-mode` in the C100 benchmark and smoke-tested
+   functionally.  Performance work still requires idle target GPUs plus Nsys
+   overlap evidence.  C105 packages the fastest real-cluster bring-up; truthful
+   D>1 Gin remains C080-H/C110.
 
 Pinned runtime for accepted commands:
 

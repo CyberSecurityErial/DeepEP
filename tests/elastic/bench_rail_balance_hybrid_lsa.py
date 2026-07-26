@@ -41,7 +41,7 @@ import time
 import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Sequence, TypeVar
+from typing import Callable, NamedTuple, Sequence, TypeVar
 
 import torch
 import torch.distributed as dist
@@ -138,7 +138,16 @@ _JIT_KERNEL_PREFIXES = (
     "kernel.rail_balance_hybrid_source_shuffle.",
 )
 _WATCHDOG_CHILD_ENV = "EP_RAIL_BALANCE_BENCH_WATCHDOG_CHILD"
+_INTERFERENCE_MODES = ("none", "compute-only", "concurrent")
+_INTERFERENCE_COMPUTE_SHAPE = (1024, 7168, 7168)
 _TYPE = TypeVar("_TYPE")
+
+
+class ComputeInterferenceState(NamedTuple):
+    stream: torch.cuda.Stream
+    lhs: torch.Tensor
+    rhs: torch.Tensor
+    output: torch.Tensor
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -159,6 +168,15 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "enable steady-only diagnostic NVTX ranges; reports are never "
             "eligible as profiler-free baselines"),
+    )
+    parser.add_argument(
+        "--interference-mode",
+        choices=_INTERFERENCE_MODES,
+        default="none",
+        help=(
+            "default-off O080 diagnostic: none preserves the existing stage "
+            "benchmark; compute-only times only a fixed BF16 GEMM; concurrent "
+            "launches that GEMM on an independent stream before the stage API"),
     )
     parser.add_argument("--num-processes", type=int, default=_WORLD_SIZE,
                         help=argparse.SUPPRESS)
@@ -196,6 +214,9 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         if not isinstance(command, list) or not command or not all(
                 isinstance(item, str) for item in command):
             parser.error("invalid internal launch command")
+    if args.interference_mode != "none" and \
+            not str(args.case_name).endswith("_h7168"):
+        parser.error("--interference-mode requires an H7168 C100 case")
     return args
 
 
@@ -209,7 +230,8 @@ def _selected_case(case_name: str) -> ShuffleCase:
     schedule = _schedule(spec.plan)
     assert schedule.enabled and schedule.failure_reason is None
     assert schedule.moved_copies == spec.expected_moved_copies == 7_168
-    assert schedule.proxy_required == (896,) * _WORLD_SIZE
+    assert sum(schedule.proxy_required) == schedule.moved_copies
+    assert max(schedule.proxy_required) <= spec.plan.proxy_capacity_per_egress
     return spec
 
 
@@ -245,6 +267,60 @@ def _nvtx_wrapped(
             torch.cuda.nvtx.range_pop()
 
     return wrapped
+
+
+def _make_compute_interference_state(
+    rank: int,
+) -> ComputeInterferenceState:
+    rows, inner, columns = _INTERFERENCE_COMPUTE_SHAPE
+    device = torch.device("cuda", rank)
+    stream = torch.cuda.Stream(device=device)
+    lhs = torch.empty((rows, inner), dtype=torch.bfloat16, device=device)
+    rhs = torch.empty((inner, columns), dtype=torch.bfloat16, device=device)
+    output = torch.empty((rows, columns), dtype=torch.bfloat16, device=device)
+    lhs.fill_(1)
+    rhs.fill_(1)
+    return ComputeInterferenceState(stream, lhs, rhs, output)
+
+
+def _launch_compute_interference(
+    state: ComputeInterferenceState,
+    nvtx_label: str | None,
+) -> None:
+    def launch() -> None:
+        with torch.cuda.stream(state.stream):
+            torch.mm(state.lhs, state.rhs, out=state.output)
+
+    if nvtx_label is None:
+        launch()
+    else:
+        _nvtx_wrapped(nvtx_label, launch)()
+
+
+def _compute_only_stage(
+    state: ComputeInterferenceState,
+    nvtx: bool,
+) -> None:
+    _launch_compute_interference(
+        state,
+        "c100/compute_interference/compute_only" if nvtx else None,
+    )
+    state.stream.synchronize()
+
+
+def _concurrent_stage(
+    stage_function: Callable[[], _TYPE],
+    state: ComputeInterferenceState,
+    nvtx: bool,
+) -> _TYPE:
+    _launch_compute_interference(
+        state,
+        "c100/compute_interference/concurrent_launch" if nvtx else None,
+    )
+    try:
+        return stage_function()
+    finally:
+        state.stream.synchronize()
 
 
 def _world_gate(
@@ -347,7 +423,11 @@ def _run_iteration(
     category_index: int,
     logical_bytes_by_rank: Sequence[int],
     nvtx: bool,
+    interference_mode: str,
+    compute_state: ComputeInterferenceState | None,
 ) -> dict[str, object]:
+    assert interference_mode in _INTERFERENCE_MODES
+    assert (interference_mode == "none") == (compute_state is None)
     timings = {name: 0 for name in _ALL_PHASES}
     world_gate_ns: dict[str, int] = {}
     outputs: tuple[torch.Tensor, ...] | None = None
@@ -402,7 +482,7 @@ def _run_iteration(
             },
             control_group,
         )
-        if stage == "return":
+        if stage == "return" and interference_mode != "compute-only":
             prerequisite_function = lambda: _source_shuffle(
                 runtime, x, topk_weights, invocation_id, None)
             if nvtx:
@@ -423,29 +503,49 @@ def _run_iteration(
         world_gate_ns["pre_stage"] = time.perf_counter_ns() - gate_start
 
         if stage == "source":
-            stage_function = lambda: _source_shuffle(
+            adapter_function = lambda: _source_shuffle(
                 runtime, x, topk_weights, invocation_id, None)
             if nvtx:
-                stage_function = _nvtx_wrapped(
+                adapter_function = _nvtx_wrapped(
                     f"c100/{stage}/stage/{category}/{category_index}",
-                    stage_function,
+                    adapter_function,
                 )
-                stage_function = _nvtx_wrapped(
-                    f"c100/{stage}/stage", stage_function)
+                adapter_function = _nvtx_wrapped(
+                    f"c100/{stage}/stage", adapter_function)
+            if interference_mode == "compute-only":
+                assert compute_state is not None
+                stage_function = lambda: _compute_only_stage(
+                    compute_state, nvtx)
+            elif interference_mode == "concurrent":
+                assert compute_state is not None
+                stage_function = lambda: _concurrent_stage(
+                    adapter_function, compute_state, nvtx)
+            else:
+                stage_function = adapter_function
             (_, timings["stage"], error,
              stage_start_ns, stage_end_ns) = _timed_window(
                 stage_function)
         else:
             assert proxy_return is not None and reduce_seed is not None
-            stage_function = lambda: _return_stage(
+            adapter_function = lambda: _return_stage(
                 runtime, proxy_return, reduce_seed, invocation_id)
             if nvtx:
-                stage_function = _nvtx_wrapped(
+                adapter_function = _nvtx_wrapped(
                     f"c100/{stage}/stage/{category}/{category_index}",
-                    stage_function,
+                    adapter_function,
                 )
-                stage_function = _nvtx_wrapped(
-                    f"c100/{stage}/stage", stage_function)
+                adapter_function = _nvtx_wrapped(
+                    f"c100/{stage}/stage", adapter_function)
+            if interference_mode == "compute-only":
+                assert compute_state is not None
+                stage_function = lambda: _compute_only_stage(
+                    compute_state, nvtx)
+            elif interference_mode == "concurrent":
+                assert compute_state is not None
+                stage_function = lambda: _concurrent_stage(
+                    adapter_function, compute_state, nvtx)
+            else:
+                stage_function = adapter_function
             (stage_result, timings["stage"], error,
              stage_start_ns, stage_end_ns) = _timed_window(
                 stage_function)
@@ -454,7 +554,7 @@ def _run_iteration(
             {"error": error, "status": 0 if error is None else -1},
             control_group,
         )
-        if stage == "source":
+        if stage == "source" and interference_mode != "compute-only":
             visibility_function = lambda: runtime.barrier(  # type: ignore[attr-defined]
                 True, True, True)
             if nvtx:
@@ -511,11 +611,15 @@ def _run_iteration(
             f"{phase_failure}")
     assert set(timings) == set(_ALL_PHASES)
     assert outputs is not None
-    if stage == "return":
+    if stage == "return" and interference_mode != "compute-only":
         assert stage_result is not None and stage_result.is_cuda
 
     local = {
         "rank": rank,
+        "interference_mode": interference_mode,
+        "compute_stream_id": (
+            None if compute_state is None else int(compute_state.stream.cuda_stream)
+        ),
         "timings_ns": timings,
         "world_gate_ns": world_gate_ns,
         "stage_start_ns": stage_start_ns,
@@ -1050,6 +1154,8 @@ def _build_report(
         "incoming_moved_copies_per_egress":
             movement["incoming_moved_copies_per_egress"],
         "dtype": "bfloat16",
+        "interference_mode": args.interference_mode,
+        "interference_compute_shape": list(_INTERFERENCE_COMPUTE_SHAPE),
     }
     layout_manifest = {
         **dict(zip(_LAYOUT_LABELS, map(int, layout))),
@@ -1115,18 +1221,30 @@ def _build_report(
     baseline_collection_eligible = (
         git_clean and system_commands_ok and no_mps and
         not unexpected_app_pids and measurement_depth_ok and
-        persistent_report_requested and not args.nvtx
+        persistent_report_requested and not args.nvtx and
+        args.interference_mode == "none"
     )
-    logical_bytes_by_rank = list(
+    selected_logical_bytes_by_rank = list(
         movement["selected_logical_bytes_per_rank"])
-    assert logical_bytes == movement["selected_logical_bytes_aggregate"]
+    selected_logical_bytes_aggregate = int(
+        movement["selected_logical_bytes_aggregate"])
+    if args.interference_mode == "compute-only":
+        logical_bytes_by_rank = [0] * _WORLD_SIZE
+        assert logical_bytes == 0
+    else:
+        logical_bytes_by_rank = selected_logical_bytes_by_rank
+        assert logical_bytes == selected_logical_bytes_aggregate
     traffic_accounting: dict[str, object] = {
         "logical_numerator_scope": (
+            "no moved-record numerator; target window is the fixed BF16 GEMM"
+            if args.interference_mode == "compute-only" else
             "moved TokenLayout record bytes counted once, aggregated across "
             "all 8 ranks; not physical link or memory-controller traffic"),
         "stage_rank_scope": movement["selected_rank_scope"],
         "logical_bytes_per_rank": logical_bytes_by_rank,
         "logical_bytes_aggregate": logical_bytes,
+        "stage_logical_bytes_per_rank": selected_logical_bytes_by_rank,
+        "stage_logical_bytes_aggregate": selected_logical_bytes_aggregate,
         "owner_to_egress_moved_copies":
             movement["owner_to_egress_moved_copies"],
         "outgoing_moved_copies_per_rank":
@@ -1158,7 +1276,7 @@ def _build_report(
             "full reduce-seed and snapshot copies, status D2H, barrier "
             "traffic, and any physical peer/HBM transaction amplification")
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "run_id": (
             f"{created.strftime('%Y%m%dT%H%M%S.%fZ')}-"
             f"{args.stage}-{spec.plan.name}-p{os.getpid()}"),
@@ -1251,6 +1369,17 @@ def _build_report(
             "logical_bandwidth_scope": (
                 "aggregate logical checked-adapter rate across 8 ranks; not "
                 "raw-kernel throughput and not physical NVLink/HBM bandwidth"),
+            "interference_mode": args.interference_mode,
+            "interference_compute_shape": list(_INTERFERENCE_COMPUTE_SHAPE),
+            "interference_stream_identity": (
+                "per-rank compute_stream_id is stored in raw iteration records"
+                if args.interference_mode != "none" else "not applicable"),
+            "interference_scope": (
+                "disabled; target window is the checked adapter only"
+                if args.interference_mode == "none" else
+                "diagnostic O080 mode; target window is compute-only or "
+                "adapter plus independent-stream GEMM and is never baseline "
+                "eligible without separate Nsys overlap evidence"),
             "gpu_timeout_seconds": args.timeout,
             "control_timeout_seconds": (
                 args.timeout + _CONTROL_TIMEOUT_SLACK_SECONDS),
@@ -1280,7 +1409,7 @@ def _build_report(
                 "JSON, direct unwrapped execution, diagnostic NVTX disabled, "
                 "valid 8-GPU pre/post state without non-benign throttle, no "
                 "MPS, and no compute process outside the eight benchmark "
-                "workers"),
+                "workers, and interference_mode=none"),
             "cold_jit_identity_barrier": (
                 "two control-plane barriers and rank0 JIT hashing occur after "
                 "the cold transaction and outside every recorded sample"),
@@ -1385,6 +1514,10 @@ def _worker(local_rank: int, num_local_ranks: int,
         topk_idx = _local_topk(case, rank)
         x, topk_weights = _local_source_inputs(
             case, rank, spec.iteration, spec.hidden)
+        compute_state = (
+            None if args.interference_mode == "none" else
+            _make_compute_interference_state(rank)
+        )
         proxy_return = None
         reduce_seed = None
         if args.stage == "return":
@@ -1416,13 +1549,19 @@ def _worker(local_rank: int, num_local_ranks: int,
             logical_token_bytes=logical_token_bytes,
             stage=args.stage,
         )
-        logical_bytes_by_rank = tuple(
+        stage_logical_bytes_by_rank = tuple(
             int(value)
             for value in movement["selected_logical_bytes_per_rank"]
         )
-        logical_bytes = int(movement["selected_logical_bytes_aggregate"])
-        assert logical_bytes == \
+        stage_logical_bytes = int(movement["selected_logical_bytes_aggregate"])
+        assert stage_logical_bytes == \
             spec.expected_moved_copies * logical_token_bytes
+        if args.interference_mode == "compute-only":
+            logical_bytes_by_rank = (0,) * _WORLD_SIZE
+            logical_bytes = 0
+        else:
+            logical_bytes_by_rank = stage_logical_bytes_by_rank
+            logical_bytes = stage_logical_bytes
         buffer_init_rows = _gather_objects({
             "rank": rank,
             "buffer_init_ns": buffer_init_ns,
@@ -1475,6 +1614,8 @@ def _worker(local_rank: int, num_local_ranks: int,
                 category_index=category_index,
                 logical_bytes_by_rank=logical_bytes_by_rank,
                 nvtx=args.nvtx,
+                interference_mode=args.interference_mode,
+                compute_state=compute_state,
             ))
             if ordinal == 0:
                 _monitored_barrier(control_group, control_timeout)
@@ -1571,14 +1712,20 @@ def _worker(local_rank: int, num_local_ranks: int,
                 summary = report["steady_summary"]
                 stage_stats = summary["stage_truth_ns"]
                 bandwidth = summary["logical_bytes_per_second"]
+                bandwidth_text = (
+                    "aggregate logical median=n/a for compute-only, "
+                    if args.interference_mode == "compute-only" else
+                    "aggregate logical median="
+                    f"{bandwidth['median'] / 1e9:.3f} GB/s, "
+                )
                 print(
                     "PASS C100 checked-adapter benchmark: "
                     f"stage={args.stage}, case={args.case_name}, "
+                    f"interference_mode={args.interference_mode}, "
                     f"steady={args.steady_iters}, "
                     f"stage median={stage_stats['median'] / 1e3:.3f} us, "
                     f"p95={stage_stats['p95'] / 1e3:.3f} us, "
-                    "aggregate logical median="
-                    f"{bandwidth['median'] / 1e9:.3f} GB/s, "
+                    f"{bandwidth_text}"
                     "not physical NVLink/HBM bandwidth, "
                     "claim_scope=checked_adapter_only, "
                     "baseline_collection_eligible="
@@ -1626,6 +1773,7 @@ def _run_watchdog(
         "--master-port", str(args.master_port),
         "--watchdog-seconds", str(args.watchdog_seconds),
         "--num-processes", str(args.num_processes),
+        "--interference-mode", args.interference_mode,
         "--launch-command-json", json.dumps(list(launch_command)),
     ]
     if args.json_out is not None:

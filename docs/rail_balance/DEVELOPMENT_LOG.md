@@ -5672,3 +5672,118 @@ active shell or the pinned `/home/chen/.cache/deepep-sjlgpt` environment.
 This checkpoint therefore records that gap instead of fabricating lint/type
 results.  Full-repo `ruff format .` is intentionally not run in this slice
 because it would create broad mechanical churn unrelated to O079.
+
+## 2026-07-26 — D098: pre-register O080 compute-interference harness
+
+O080 starts after O079's function-only matrix closure.  It is a measurement-
+harness slice, not a production-kernel change.  The implementation target is
+the existing `tests/elastic/bench_rail_balance_hybrid_lsa.py`; do not create a
+second eight-rank lifecycle or duplicate the C100 buffer/runtime setup.
+
+The planned CLI is a default-off flag:
+
+```text
+--interference-mode none|compute-only|concurrent
+```
+
+`none` preserves the existing benchmark behavior and remains the only mode
+eligible for ordinary source/return checked-adapter baselines.  `compute-only`
+allocates the same H7168 BF16 GEMM tensors as `concurrent` but times only the
+GEMM window inside the same per-iteration control gates.  `concurrent` launches
+that GEMM on an independent CUDA stream, then calls the checked source or
+return adapter, and finally synchronizes the compute stream before the
+post-stage WORLD gate.  This order is required because the private
+source/return adapters synchronize their comm stream internally; launching the
+GEMM after the adapter call would be serialized by construction.
+
+The fixed compute shape is:
+
+```text
+torch.mm([1024, 7168] BF16, [7168, 7168] BF16, out=[1024, 7168] BF16)
+```
+
+All tensors are allocated once before the cold iteration.  Warmup and steady
+iterations reuse the same tensors/stream.  O080 must record the mode, GEMM
+shape, stream identity, and whether the report is baseline-eligible.  Any
+`interference_mode != none` report is diagnostic only until a separate Nsys
+capture proves actual overlap and a profiler-free no-co-tenant baseline exists.
+
+The current machine state is not acceptable for O080 performance acceptance:
+`nvidia-smi` reports visible GPUs as `NVIDIA L20X`, and GPU0 has a co-tenant
+non-megatron Python process.  O080 code can still be implemented and smoke-
+tested for functionality, but performance conclusions must remain missing
+evidence.
+
+Implementation completed in the benchmark only:
+
+- Added `--interference-mode none|compute-only|concurrent`.
+- Kept `none` as the default and the only baseline-eligible mode.
+- Required H7168 for non-`none` modes; H256 interference requests fail at
+  argument parsing instead of falling back.
+- Added one preallocated BF16 GEMM state per rank with shape
+  `[1024,7168] @ [7168,7168] -> [1024,7168]`.
+- Fixed the O079 benchmark entry gate so non-symmetric matrix cases no longer
+  require `proxy_required == (896,) * 8`; it now checks total moved records and
+  per-egress capacity.
+- Raised the benchmark report schema to v4.  `compute-only` reports timed
+  logical moved bytes as zero and keeps stage moved bytes in
+  `stage_logical_bytes_*` reference fields.  This fixes a smoke-run issue
+  where compute-only initially printed a misleading moved-record GB/s.
+
+Validated:
+
+```text
+PYTHONPATH=tests:tests/elastic:. /home/chen/.cache/deepep-sjlgpt/bin/python \
+  -m py_compile tests/elastic/bench_rail_balance_hybrid_lsa.py
+
+PYTHONPATH=tests:tests/elastic:. /home/chen/.cache/deepep-sjlgpt/bin/python \
+  - <<'PY'
+  # _parse_args accepts none/compute-only/concurrent for H7168 and rejects H256.
+  PY
+
+PYTHONPATH=tests:tests/elastic:. /home/chen/.cache/deepep-sjlgpt/bin/python \
+  - <<'PY'
+  # _selected_case accepts fanout/fanin/mesh/rot1/rot4 matrix entries.
+  PY
+
+PYTHONPATH=tests:tests/elastic:. EP_DISABLE_GIN=1 \
+  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/bench_rail_balance_hybrid_lsa.py \
+  --stage source --case-name c100_matrix_rot4_h7168 \
+  --interference-mode compute-only --warmup-iters 0 --steady-iters 1 \
+  --watchdog-seconds 900 --timeout 180
+
+PYTHONPATH=tests:tests/elastic:. EP_DISABLE_GIN=1 \
+  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/bench_rail_balance_hybrid_lsa.py \
+  --stage source --case-name c100_matrix_rot4_h7168 \
+  --interference-mode concurrent --warmup-iters 0 --steady-iters 1 \
+  --watchdog-seconds 900 --timeout 180
+
+PYTHONPATH=tests:tests/elastic:. EP_DISABLE_GIN=1 \
+  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/bench_rail_balance_hybrid_lsa.py \
+  --stage return --case-name c100_matrix_rot4_h7168 \
+  --interference-mode concurrent --warmup-iters 0 --steady-iters 1 \
+  --watchdog-seconds 900 --timeout 180
+
+PYTHONPATH=tests:tests/elastic:. EP_DISABLE_GIN=1 \
+  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/bench_rail_balance_hybrid_lsa.py \
+  --stage source --case-name c100_matrix_fanout_h256 \
+  --warmup-iters 0 --steady-iters 1 \
+  --watchdog-seconds 900 --timeout 180
+```
+
+All passed.  A JSON smoke report was also generated under ignored
+`.cache/rail_balance/c100/o080/` and checked for schema v4,
+`interference_mode=compute-only`, timed logical bytes equal to zero, positive
+stage reference bytes, per-rank `rank_raw[*].compute_stream_id`, and
+`baseline_collection_eligible=false`.  After adding compute-launch NVTX labels
+and stream IDs, `py_compile`, `git diff --check`, the schema/stream JSON check
+and a source concurrent smoke were rerun and passed.  These smoke numbers are
+not performance evidence for the co-tenant/hardware reasons above.

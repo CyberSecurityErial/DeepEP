@@ -1975,3 +1975,56 @@ GPU0 co-tenant and the visible GPU model string was `NVIDIA L20X`, so the data
 cannot satisfy the no-profiler contract.  Ruff and pyrefly are missing in the
 current environment; their absence is a tooling gap, not a pass.  Full-repo
 formatting is deferred to a separate mechanical commit if it is needed.
+
+## Measurement preparation O080 — compute interference harness
+
+Status: **CODE_SMOKE_PASS / PERFORMANCE_PENDING**.
+
+Hypothesis: source-shuffle or return-unshuffle may look acceptable in
+isolation but lose usefulness if it competes with MoE GEMM for HBM/NVLink/L2
+or SM issue resources.  O080 measures that interaction without changing
+production kernels.
+
+Single variable: add a default-off diagnostic mode to the existing C100
+benchmark.  The production CUDA kernels, plan, source, return, buffer layout,
+JIT specialization, capability bits and public API remain unchanged.
+
+Modes:
+
+- `none`: existing checked-adapter measurement; baseline-eligible only under
+  the existing no-profiler and no-co-tenant rules.
+- `compute-only`: same lifecycle and preallocated tensors, but the target
+  window is only one BF16 GEMM.
+- `concurrent`: launch the BF16 GEMM on an independent CUDA stream, then call
+  the checked adapter, then synchronize the compute stream.
+
+Fixed GEMM:
+
+```text
+[1024,7168] BF16 @ [7168,7168] BF16 -> [1024,7168] BF16
+```
+
+Predicted observations if there is harmful interference:
+
+1. The concurrent window exceeds `max(stage-only, compute-only)` by a material
+   margin after start-skew checks.
+2. Nsys shows actual temporal overlap rather than launch serialization.
+3. If NCU is later justified by exposed critical-path evidence, the affected
+   kernel dossier must show a concrete resource limiter; no inference from
+   utilization alone is accepted.
+
+Reject the experiment as performance evidence if GPUs are shared, clocks are
+unstable, the visible hardware does not match the target environment, or Nsys
+cannot prove overlap.  In those cases the code may remain as a diagnostic
+harness only if it is default-off and does not perturb `none`.
+
+Implementation result: the benchmark now has `--interference-mode`, fixed
+H7168 GEMM allocation, schema v4, baseline ineligibility for diagnostic modes,
+and compute-only logical bytes set to zero.  Source compute-only, source
+concurrent, return concurrent, and default `none` source matrix smokes pass
+with one steady iteration.  These are path/sanity checks only.  The first
+compute-only smoke exposed a misleading logical-bandwidth print based on moved
+stage bytes; that was fixed before acceptance by adding separate
+`stage_logical_bytes_*` reference fields and printing `n/a` for compute-only.
+Per-rank raw records include `compute_stream_id` so a later Nsys run can match
+the diagnostic GEMM stream explicitly.
