@@ -682,7 +682,15 @@ rail_balance_hybrid_dispatch_impl(
                 // Read top-k indices
                 EP_STATIC_ASSERT(kNumTopk <= 32, "Too many top-k selections");
                 int stored_dst_scaleup_rank_idx = -1;
-                auto dst_expert_idx = lane_idx < kNumTopk ? tma_buffer.get_topk_idx_ptr()[lane_idx] : -1;
+                auto dst_expert_idx = lane_idx < kNumTopk ?
+                    tma_buffer.get_topk_idx_ptr()[lane_idx] : -1;
+                // Gate #1 rejected duplicate expert ids. Recheck the token at
+                // the first remote-consumer boundary so corruption in proxy
+                // publication or Rail transport is attributed before the LSA
+                // forward copy can contaminate another rank's scale-up slot.
+                EP_DEVICE_ASSERT(
+                    ptx::deduplicate(dst_expert_idx, lane_idx) or
+                    dst_expert_idx == -1);
                 dst_expert_idx -= scaleout_rank_idx * kNumExpertsPerScaleout;
                 stored_dst_scaleup_rank_idx = 0 <= dst_expert_idx and dst_expert_idx < kNumExpertsPerScaleout ?
                     dst_expert_idx / kNumExpertsPerRank : -1;
