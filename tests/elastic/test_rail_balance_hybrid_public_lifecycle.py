@@ -204,7 +204,7 @@ def _ticket_state(ticket: object) -> str:
 
 _DISPATCH_COMMON_FIELDS = (
     2, 1, 2, 2, 256, 2, 8, 8, 8,
-    4, 1, 1, 1, 1024, 4, 100, 2 << 20, 2 << 20, 7,
+    4, 1, 1, 1, 1024, 4, 100, 2 << 20, 2 << 20, 7, 0, 0,
 )
 
 
@@ -260,6 +260,7 @@ class _FakeRuntime:
         self._x = args[0]  # type: ignore[assignment]
         self._topk_idx = args[1]  # type: ignore[assignment]
         self._topk_weights = args[2]  # type: ignore[assignment]
+        assert args[-2:] == (0, 0)
         # Exact H4b manifest width: status then immutable public geometry/ABI.
         return 0, *_DISPATCH_COMMON_FIELDS
 
@@ -358,6 +359,8 @@ def _make_buffer(*, force: bool) -> tuple[ElasticBuffer, _FakeRuntime, _GateCont
     if force:
         buffer._rail_balance_mode = "force"
         buffer._rail_balance_proxy_slots_per_rank = 8
+        buffer._rail_balance_policy = 0
+        buffer._rail_balance_threshold_percent = 0
         buffer._rail_balance_arena_offset = 2 << 20
         buffer._rail_balance_arena_bytes = 2 << 20
         buffer._rail_balance_owner_token = object()

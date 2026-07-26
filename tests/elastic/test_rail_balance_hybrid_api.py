@@ -28,7 +28,7 @@ def _expect_error(error_type, expected_message, function):
 
 
 def _run_force_constructor(legacy_helper=None, layout_helper=None,
-                           force_size_helper=None):
+                           force_size_helper=None, **rail_balance_kwargs):
     calls = {'order': []}
 
     class FakeGroup:
@@ -126,7 +126,8 @@ def _run_force_constructor(legacy_helper=None, layout_helper=None,
                 hidden=1024,
                 num_topk=4,
                 rail_balance='force',
-                rail_balance_proxy_slots_per_rank=32)
+                rail_balance_proxy_slots_per_rank=32,
+                **rail_balance_kwargs)
         except Exception as caught:
             error = caught
     finally:
@@ -150,9 +151,13 @@ def _run_force_constructor(legacy_helper=None, layout_helper=None,
 
 def test_config_parser_is_strict_and_deterministic():
     parse = elastic_module._parse_rail_balance_config
-    assert parse('off', 0) == ('off', 0)
-    assert parse('force', 1) == ('force', 1)
-    assert parse('force', (1 << 31) - 1) == ('force', (1 << 31) - 1)
+    assert parse('off', 0) == ('off', 0, 0, 0)
+    assert parse('force', 1) == ('force', 1, 0, 0)
+    assert parse('force', 1, 'active', 20) == ('force', 1, 1, 20)
+    assert parse('force', 1, 'adaptive', 3100) == \
+        ('force', 1, 2, 3100)
+    assert parse('force', (1 << 31) - 1) == \
+        ('force', (1 << 31) - 1, 0, 0)
 
     invalid = (
         (None, 0,
@@ -179,6 +184,29 @@ def test_config_parser_is_strict_and_deterministic():
         _expect_error(
             ValueError, _INVALID_PREFIX + detail,
             lambda mode=mode, capacity=capacity: parse(mode, capacity))
+
+    policy_invalid = (
+        ('force', 1, None, 0,
+         "rail_balance_policy must be exactly one of "
+         "('all', 'active', 'adaptive'), got None"),
+        ('force', 1, 'ACTIVE', 0,
+         "rail_balance_policy must be exactly one of "
+         "('all', 'active', 'adaptive'), got 'ACTIVE'"),
+        ('force', 1, 'all', True,
+         'rail_balance_threshold_percent must be an integer in [0, 3100]'),
+        ('force', 1, 'all', 3101,
+         'rail_balance_threshold_percent must be an integer in [0, 3100]'),
+        ('off', 0, 'active', 0,
+         "rail_balance_policy must be 'all' when rail_balance='off'"),
+        ('off', 0, 'all', 1,
+         "rail_balance_threshold_percent must be 0 when rail_balance='off'"),
+    )
+    for mode, capacity, policy, threshold, detail in policy_invalid:
+        _expect_error(
+            ValueError, _INVALID_PREFIX + detail,
+            lambda mode=mode, capacity=capacity, policy=policy,
+            threshold=threshold: parse(
+                mode, capacity, policy, threshold))
 
 
 def test_force_constructor_matrix_fails_with_stable_reasons():
@@ -246,15 +274,16 @@ def test_new_constructor_arguments_are_keyword_only_suffixes():
         'num_allocated_qps', 'num_cpu_timeout_secs', 'num_gpu_timeout_secs',
         'explicitly_destroy',
     )
-    assert tuple(parameter.name for parameter in parameters[:-2]) == old_names
+    assert tuple(parameter.name for parameter in parameters[:-4]) == old_names
     assert all(parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-               for parameter in parameters[:-2])
-    assert tuple(parameter.name for parameter in parameters[-2:]) == (
-        'rail_balance', 'rail_balance_proxy_slots_per_rank')
+               for parameter in parameters[:-4])
+    assert tuple(parameter.name for parameter in parameters[-4:]) == (
+        'rail_balance', 'rail_balance_proxy_slots_per_rank',
+        'rail_balance_policy', 'rail_balance_threshold_percent')
     assert all(parameter.kind is inspect.Parameter.KEYWORD_ONLY
-               for parameter in parameters[-2:])
-    assert parameters[-2].default == 'off'
-    assert parameters[-1].default == 0
+               for parameter in parameters[-4:])
+    assert tuple(parameter.default for parameter in parameters[-4:]) == (
+        'off', 0, 'all', 0)
 
 
 def test_default_ep_handle_fields_are_unchanged():
@@ -460,6 +489,8 @@ def test_force_path_owns_checked_tail_arena_and_runtime_total():
     } == {
         '_rail_balance_mode',
         '_rail_balance_proxy_slots_per_rank',
+        '_rail_balance_policy',
+        '_rail_balance_threshold_percent',
         '_rail_balance_arena_offset',
         '_rail_balance_arena_bytes',
         '_rail_balance_world_gate_device_words',
@@ -471,6 +502,8 @@ def test_force_path_owns_checked_tail_arena_and_runtime_total():
     }
     assert buffer._rail_balance_mode == 'force'
     assert buffer._rail_balance_proxy_slots_per_rank == 32
+    assert buffer._rail_balance_policy == 0
+    assert buffer._rail_balance_threshold_percent == 0
     assert buffer._rail_balance_arena_offset == _LEGACY_BYTES
     assert buffer._rail_balance_arena_bytes == _ARENA_BYTES
     assert buffer._rail_balance_next_invocation_id == 1
@@ -480,6 +513,13 @@ def test_force_path_owns_checked_tail_arena_and_runtime_total():
         calls['constructor_gate'][0]
     assert buffer._rail_balance_world_gate_host_words is \
         calls['constructor_gate'][1]
+
+    calls, buffer, error = _run_force_constructor(
+        rail_balance_policy='adaptive',
+        rail_balance_threshold_percent=20)
+    assert error is None, error
+    assert buffer._rail_balance_policy == 2
+    assert buffer._rail_balance_threshold_percent == 20
 
 
 def test_force_size_mismatch_fails_before_runtime_construction():

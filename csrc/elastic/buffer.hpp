@@ -300,7 +300,9 @@ public:
         const int& proxy_capacity_per_egress,
         const int64_t& arena_offset,
         const int& invocation_id,
-        const pybind11::object& remainder_seed) {
+        const pybind11::object& remainder_seed,
+        const pybind11::object& policy,
+        const pybind11::object& threshold_percent) {
         // Everything below is noncollective. Fail before touching the arena if
         // another private force transaction still owns it.
         EP_HOST_ASSERT(not destroyed);
@@ -354,6 +356,9 @@ public:
 
         const int64_t remainder_seed_i64 = remainder_seed.cast<int64_t>();
         EP_HOST_ASSERT(remainder_seed_i64 >= 0);
+        const int policy_value = parse_rail_balance_hybrid_policy(policy);
+        const int threshold_percent_value =
+            parse_rail_balance_hybrid_threshold_percent(threshold_percent);
         const int normalized_remainder_seed = static_cast<int>(
             remainder_seed_i64 % num_rails);
 
@@ -484,6 +489,8 @@ public:
                 .num_max_tokens_per_rank = num_max_tokens_per_rank,
                 .proxy_capacity_per_egress = proxy_capacity_per_egress,
                 .normalized_remainder_seed = normalized_remainder_seed,
+                .policy = policy_value,
+                .threshold_percent = threshold_percent_value,
                 .arena_offset = arena_offset,
                 .active_count_values = active_count_values,
                 .active_count_bytes = active_count_bytes,
@@ -517,7 +524,9 @@ public:
         const int& proxy_capacity_per_egress,
         const int64_t& arena_offset,
         const int& invocation_id,
-        const pybind11::object& remainder_seed) {
+        const pybind11::object& remainder_seed,
+        const pybind11::object& policy,
+        const pybind11::object& threshold_percent) {
         // This is the production-shaped, noncollective half of force dispatch.
         // It deliberately accepts no topology, local-rank, hidden, top-k, or
         // channel argument: all of those values are derived and frozen here.
@@ -653,6 +662,9 @@ public:
 
         const int64_t remainder_seed_i64 = remainder_seed.cast<int64_t>();
         EP_HOST_ASSERT(remainder_seed_i64 >= 0);
+        const int policy_value = parse_rail_balance_hybrid_policy(policy);
+        const int threshold_percent_value =
+            parse_rail_balance_hybrid_threshold_percent(threshold_percent);
         const int normalized_remainder_seed = static_cast<int>(
             remainder_seed_i64 % num_rails);
 
@@ -962,6 +974,8 @@ public:
                 .num_max_tokens_per_rank = num_max_tokens_per_rank,
                 .proxy_capacity_per_egress = proxy_capacity_per_egress,
                 .normalized_remainder_seed = normalized_remainder_seed,
+                .policy = policy_value,
+                .threshold_percent = threshold_percent_value,
                 .arena_offset = arena_offset,
                 .active_count_values = active_count_values,
                 .active_count_bytes = active_count_bytes,
@@ -1014,6 +1028,8 @@ public:
             arena_offset,
             arena_layout.arena_bytes,
             rail_balance::get_num_hybrid_forward_metadata_dims(num_topk),
+            policy_value,
+            threshold_percent_value,
         };
     }
 
@@ -1059,7 +1075,8 @@ public:
             pending.raw.num_segments,
             pending.num_rails, pending.num_channels,
             pending.num_destinations,
-            pending.normalized_remainder_seed, comm_stream);
+            pending.normalized_remainder_seed,
+            pending.policy, pending.threshold_percent, comm_stream);
         launch_prepared_rail_balance_hybrid_prefix(
             pending.prepared,
             pending.raw.channel_count,
@@ -1919,7 +1936,9 @@ public:
         const int& proxy_capacity,
         const int& generation,
         const int& invocation_id,
-        const pybind11::object& remainder_seed) {
+        const pybind11::object& remainder_seed,
+        const pybind11::object& policy,
+        const pybind11::object& threshold_percent) {
         constexpr int kWorldRanks = 8;
         constexpr int64_t kArenaGuardBytes = 4096;
 
@@ -1957,6 +1976,9 @@ public:
         EP_HOST_ASSERT(remainder_seed_i64 >= 0);
         const int normalized_remainder_seed = static_cast<int>(
             remainder_seed_i64 % num_source_ranks);
+        const int policy_value = parse_rail_balance_hybrid_policy(policy);
+        const int threshold_percent_value =
+            parse_rail_balance_hybrid_threshold_percent(threshold_percent);
 
         const int rank_idx = nccl_context->rank_idx;
         const bool is_source = rank_idx < num_source_ranks;
@@ -2242,7 +2264,8 @@ public:
             plan.segments.data_ptr<int>(),
             plan.num_segments.data_ptr<int>(),
             num_source_ranks, num_channels, num_destinations,
-            normalized_remainder_seed, comm_stream);
+            normalized_remainder_seed,
+            policy_value, threshold_percent_value, comm_stream);
         launch_prepared_rail_balance_hybrid_prefix(
             prepared_plan,
             plan.channel_count.data_ptr<int>(), plan.quota.data_ptr<int>(),
@@ -5301,7 +5324,10 @@ static void register_apis(pybind11::module_& m) {
             pybind11::arg("proxy_capacity_per_egress"),
             pybind11::arg("arena_offset"),
             pybind11::arg("invocation_id"),
-            pybind11::arg("remainder_seed") = pybind11::int_(0))
+            pybind11::arg("remainder_seed") = pybind11::int_(0),
+            pybind11::arg("policy") =
+                static_cast<int>(rail_balance::HybridPolicy::All),
+            pybind11::arg("threshold_percent") = 0)
         .def(
             "_rail_balance_hybrid_plan_prepare",
             &ElasticBuffer::rail_balance_hybrid_plan_prepare,
@@ -5315,7 +5341,10 @@ static void register_apis(pybind11::module_& m) {
             pybind11::arg("proxy_capacity_per_egress"),
             pybind11::arg("arena_offset"),
             pybind11::arg("invocation_id"),
-            pybind11::arg("remainder_seed") = pybind11::int_(0))
+            pybind11::arg("remainder_seed") = pybind11::int_(0),
+            pybind11::arg("policy") =
+                static_cast<int>(rail_balance::HybridPolicy::All),
+            pybind11::arg("threshold_percent") = 0)
         .def(
             "_rail_balance_hybrid_plan_finish",
             &ElasticBuffer::rail_balance_hybrid_plan_finish,
@@ -5382,7 +5411,10 @@ static void register_apis(pybind11::module_& m) {
             pybind11::arg("proxy_capacity"),
             pybind11::arg("generation"),
             pybind11::arg("invocation_id"),
-            pybind11::arg("remainder_seed") = pybind11::int_(0))
+            pybind11::arg("remainder_seed") = pybind11::int_(0),
+            pybind11::arg("policy") =
+                static_cast<int>(rail_balance::HybridPolicy::All),
+            pybind11::arg("threshold_percent") = 0)
         .def(
             "_rail_balance_hybrid_vnode_finish",
             &ElasticBuffer::rail_balance_hybrid_vnode_finish,

@@ -16,15 +16,18 @@ from deep_ep.buffers import elastic as elastic_module
 
 
 _WORDS = 128
-_MANIFEST_WIDTH = 26
+_MANIFEST_WIDTH = 28
 _MODE_FIELD = 5
 _WORLD_FIELD = 6
 _M_FIELD = 7
 _H_FIELD = 8
 _K_FIELD = 9
 _PCAP_FIELD = 10
-_LAYOUT_LEN_FIELD = 15
-_LAYOUT_BEGIN = 16
+_POLICY_FIELD = 15
+_THRESHOLD_FIELD = 16
+_LAYOUT_LEN_FIELD = 17
+_LAYOUT_BEGIN = 18
+_POLICY_IDS = {'all': 0, 'active': 1, 'adaptive': 2}
 
 _SIZING_WIDTH = 20
 _SIZING_MODE_FIELD = 5
@@ -153,15 +156,19 @@ def _decode_local_manifest(words: _FakeTensor, width=_MANIFEST_WIDTH):
 
 def _configuration(mode: str, *, m=131, h=1280, k=7, pcap=37,
                    sl=3, qps=0, cpu_timeout=300, gpu_timeout=100,
-                   prefer_overlap=True, explicitly_destroy=False):
+                   prefer_overlap=True, explicitly_destroy=False,
+                   policy='all', threshold=0):
     if mode == 'off':
         pcap = 0
+        policy = 'all'
+        threshold = 0
     return dict(
         mode=mode, m=m, h=h, k=k, pcap=pcap,
         sl=sl, qps=qps,
         cpu_timeout=cpu_timeout, gpu_timeout=gpu_timeout,
         prefer_overlap=prefer_overlap,
-        explicitly_destroy=explicitly_destroy)
+        explicitly_destroy=explicitly_destroy,
+        policy=policy, threshold=threshold)
 
 
 def _assert_manifest_semantics(fields, config, world_size):
@@ -181,12 +188,14 @@ def _assert_manifest_semantics(fields, config, world_size):
         assert fields[_K_FIELD] == config['k']
         assert fields[_PCAP_FIELD] == config['pcap']
         assert fields[11:15] == [0, 0, 1, 1]
+        assert fields[_POLICY_FIELD] == _POLICY_IDS[config['policy']]
+        assert fields[_THRESHOLD_FIELD] == config['threshold']
         assert fields[_LAYOUT_LEN_FIELD] == len(expected_layout)
         assert tuple(fields[_LAYOUT_BEGIN:_MANIFEST_WIDTH]) == expected_layout
     else:
         # Off contributes only mode/world protocol identity.  It must not call
         # a force sizing/layout helper merely to populate the temporary gate.
-        assert fields[_M_FIELD:_LAYOUT_LEN_FIELD + 1] == [0] * 9
+        assert fields[_M_FIELD:_LAYOUT_LEN_FIELD + 1] == [0] * 11
         assert fields[_LAYOUT_LEN_FIELD] == 0
         assert fields[_LAYOUT_BEGIN:_MANIFEST_WIDTH] == [0] * len(_LAYOUT)
 
@@ -202,10 +211,12 @@ def _peer_manifest(local_fields, peer_config):
         fields[_K_FIELD] = peer_config['k']
         fields[_PCAP_FIELD] = peer_config['pcap']
         fields[11:15] = [0, 0, 1, 1]
+        fields[_POLICY_FIELD] = _POLICY_IDS[peer_config['policy']]
+        fields[_THRESHOLD_FIELD] = peer_config['threshold']
         fields[_LAYOUT_LEN_FIELD] = len(peer_layout)
         fields[_LAYOUT_BEGIN:_MANIFEST_WIDTH] = peer_layout
     else:
-        fields[_M_FIELD:_LAYOUT_LEN_FIELD + 1] = [0] * 9
+        fields[_M_FIELD:_LAYOUT_LEN_FIELD + 1] = [0] * 11
         fields[_LAYOUT_LEN_FIELD] = 0
         fields[_LAYOUT_BEGIN:_MANIFEST_WIDTH] = [0] * len(_LAYOUT)
     # Protocol identity and WORLD size must be identical for this fake pair.
@@ -521,7 +532,9 @@ def _run_constructor(config, *, rank=0, peer_config=None,
                 num_gpu_timeout_secs=config['gpu_timeout'],
                 explicitly_destroy=config['explicitly_destroy'],
                 rail_balance=config['mode'],
-                rail_balance_proxy_slots_per_rank=config['pcap'])
+                rail_balance_proxy_slots_per_rank=config['pcap'],
+                rail_balance_policy=config['policy'],
+                rail_balance_threshold_percent=config['threshold'])
         except Exception as caught:
             error = caught
     finally:
@@ -616,6 +629,8 @@ def test_unanimous_force_retains_the_exact_gate_storage_and_idle_owner():
     expected_fields = {
         '_rail_balance_mode',
         '_rail_balance_proxy_slots_per_rank',
+        '_rail_balance_policy',
+        '_rail_balance_threshold_percent',
         '_rail_balance_arena_offset',
         '_rail_balance_arena_bytes',
         '_rail_balance_world_gate_device_words',
@@ -692,6 +707,8 @@ def test_force_geometry_mismatches_are_consistent_and_pre_window():
         ('h', _H_FIELD, base['h'] + 256),
         ('k', _K_FIELD, base['k'] + 1),
         ('pcap', _PCAP_FIELD, base['pcap'] + 2),
+        ('policy', _POLICY_FIELD, 'active'),
+        ('threshold', _THRESHOLD_FIELD, 20),
     )
     for name, field_index, peer_value in cases:
         peer = dict(base)

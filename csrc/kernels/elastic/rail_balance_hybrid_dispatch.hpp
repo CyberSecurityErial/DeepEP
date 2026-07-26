@@ -109,6 +109,8 @@ public:
         int num_channels;
         int num_destinations;
         int remainder_seed;
+        int policy;
+        int threshold_percent;
         jit::LaunchArgs launch_args;
     };
 
@@ -120,7 +122,7 @@ using namespace deep_ep::elastic;
 
 static void __instantiate_kernel() {
     auto ptr = reinterpret_cast<void*>(
-        &rail_balance_hybrid_plan_impl<0>);
+        &rail_balance_hybrid_plan_v2_impl<0>);
 }
 )";
     }
@@ -133,7 +135,8 @@ static void __instantiate_kernel() {
             args.channel_count, args.count, args.quota,
             args.keep_count, args.segments, args.num_segments,
             args.num_rails, args.num_channels,
-            args.num_destinations, args.remainder_seed));
+            args.num_destinations, args.remainder_seed,
+            args.policy, args.threshold_percent));
     }
 };
 
@@ -956,7 +959,7 @@ struct RailBalanceHybridDispatchBundle {
 using RailBalanceHybridDispatchPrepareResult = std::tuple<
     int, int, int, int, int, int, int, int, int, int,
     int, int, int, int, int, int,
-    int64_t, int64_t, int64_t, int>;
+    int64_t, int64_t, int64_t, int, int, int>;
 
 // One private prepare may be live per ElasticBuffer. PlanReady remains live
 // across the caller's Gate #2 and is released only by the explicit abort for
@@ -979,6 +982,8 @@ struct RailBalanceHybridPlanPending {
     int num_max_tokens_per_rank;
     int proxy_capacity_per_egress;
     int normalized_remainder_seed;
+    int policy;
+    int threshold_percent;
     int64_t arena_offset;
     int64_t active_count_values;
     size_t active_count_bytes;
@@ -1035,6 +1040,8 @@ static PreparedRailBalanceHybridPlan prepare_rail_balance_hybrid_plan(
         .num_channels = 0,
         .num_destinations = 0,
         .remainder_seed = 0,
+        .policy = 0,
+        .threshold_percent = 0,
         .launch_args = jit::LaunchArgs(1, 32),
     };
     const RailBalanceHybridPrefixRuntime::Args prefix_args = {
@@ -1061,7 +1068,7 @@ static PreparedRailBalanceHybridPlan prepare_rail_balance_hybrid_plan(
             "rail_balance_hybrid_count_v1",
             RailBalanceHybridCountRuntime::generate(count_args)),
         .plan = jit::compiler->build(
-            "rail_balance_hybrid_plan_v1",
+            "rail_balance_hybrid_plan_v2",
             RailBalanceHybridPlanRuntime::generate(plan_args)),
         .prefix = jit::compiler->build(
             "rail_balance_hybrid_prefix_v1",
@@ -1114,6 +1121,8 @@ static void launch_prepared_rail_balance_hybrid_plan(
     const int& num_channels,
     const int& num_destinations,
     const int& remainder_seed,
+    const int& policy,
+    const int& threshold_percent,
     const at::cuda::CUDAStream& stream) {
     const RailBalanceHybridPlanRuntime::Args args = {
         .channel_count = channel_count,
@@ -1126,6 +1135,8 @@ static void launch_prepared_rail_balance_hybrid_plan(
         .num_channels = num_channels,
         .num_destinations = num_destinations,
         .remainder_seed = remainder_seed,
+        .policy = policy,
+        .threshold_percent = threshold_percent,
         .launch_args = prepared.plan_launch_args,
     };
     RailBalanceHybridPlanRuntime::launch(prepared.plan, args, stream);
@@ -1172,6 +1183,26 @@ static void launch_prepared_rail_balance_hybrid_prefix(
     RailBalanceHybridPrefixRuntime::launch(prepared.prefix, args, stream);
 }
 
+static int parse_rail_balance_hybrid_policy(
+    const pybind11::object& value) {
+    EP_HOST_ASSERT(PyLong_CheckExact(value.ptr()));
+    const auto parsed = value.cast<int64_t>();
+    EP_HOST_ASSERT(parsed >= 0 and parsed <= INT_MAX);
+    const int policy = static_cast<int>(parsed);
+    EP_HOST_ASSERT(rail_balance::is_valid_hybrid_policy(policy));
+    return policy;
+}
+
+static int parse_rail_balance_hybrid_threshold_percent(
+    const pybind11::object& value) {
+    EP_HOST_ASSERT(PyLong_CheckExact(value.ptr()));
+    const auto parsed = value.cast<int64_t>();
+    EP_HOST_ASSERT(parsed >= 0 and
+                   parsed <=
+                       rail_balance::kMaxHybridPolicyThresholdPercent);
+    return static_cast<int>(parsed);
+}
+
 static RailBalanceHybridPlanTensors build_rail_balance_hybrid_plan(
     const torch::Tensor& topk_idx,
     const int& num_channels,
@@ -1180,7 +1211,9 @@ static RailBalanceHybridPlanTensors build_rail_balance_hybrid_plan(
     const int& num_scaleout_ranks,
     const int& local_scaleout_rank,
     const int& proxy_capacity_per_egress,
-    const pybind11::object& remainder_seed) {
+    const pybind11::object& remainder_seed,
+    const pybind11::object& policy,
+    const pybind11::object& threshold_percent) {
     // This private B1 entry point is deliberately strict before it allocates,
     // compiles, or launches anything.  Its stacked [G,N,K] input is only a
     // single-GPU oracle fixture. The same count runtime accepts G=1 with a
@@ -1223,6 +1256,9 @@ static RailBalanceHybridPlanTensors build_rail_balance_hybrid_plan(
     // normalizes them to the local rail ring.
     const int64_t remainder_seed_i64 = remainder_seed.cast<int64_t>();
     EP_HOST_ASSERT(remainder_seed_i64 >= 0);
+    const int policy_value = parse_rail_balance_hybrid_policy(policy);
+    const int threshold_percent_value =
+        parse_rail_balance_hybrid_threshold_percent(threshold_percent);
 
     c10::cuda::CUDAGuard device_guard(topk_idx.device());
     const int device_index = topk_idx.get_device();
@@ -1300,7 +1336,8 @@ static RailBalanceHybridPlanTensors build_rail_balance_hybrid_plan(
         quota.data_ptr<int>(), keep_count.data_ptr<int>(),
         segments.data_ptr<int>(), num_segments.data_ptr<int>(),
         num_rails, num_channels, num_destinations,
-        normalized_remainder_seed, stream);
+        normalized_remainder_seed,
+        policy_value, threshold_percent_value, stream);
     launch_prepared_rail_balance_hybrid_prefix(
         prepared, channel_count.data_ptr<int>(), quota.data_ptr<int>(),
         keep_count.data_ptr<int>(), owner_channel_prefix.data_ptr<int>(),
@@ -1330,7 +1367,10 @@ static void register_rail_balance_hybrid_plan_apis(pybind11::module_& m) {
         pybind11::arg("num_scaleout_ranks"),
         pybind11::arg("local_scaleout_rank"),
         pybind11::arg("proxy_capacity_per_egress"),
-        pybind11::arg("remainder_seed") = pybind11::int_(0));
+        pybind11::arg("remainder_seed") = pybind11::int_(0),
+        pybind11::arg("policy") =
+            static_cast<int>(rail_balance::HybridPolicy::All),
+        pybind11::arg("threshold_percent") = 0);
     m.def(
         "_rail_balance_hybrid_dispatch_codegen_test",
         &rail_balance_hybrid_dispatch_codegen_test,

@@ -284,6 +284,8 @@ def _assert_owning_bundle_contract() -> None:
         "arena_offset",
         "arena_layout.arena_bytes",
         "rail_balance::get_num_hybrid_forward_metadata_dims(num_topk)",
+        "policy",
+        "threshold_percent",
     ))
     for rank_local in (
         "num_tokens",

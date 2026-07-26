@@ -23,6 +23,11 @@ from ..utils.comm import get_nccl_comm_handle
 
 
 _RAIL_BALANCE_MODES = ('off', 'force')
+_RAIL_BALANCE_POLICIES = ('all', 'active', 'adaptive')
+_RAIL_BALANCE_POLICY_IDS = {
+    policy: index for index, policy in enumerate(_RAIL_BALANCE_POLICIES)
+}
+_RAIL_BALANCE_MAX_THRESHOLD_PERCENT = 3100
 _RAIL_BALANCE_MAX_PROXY_SLOTS = (1 << 31) - 1
 _RAIL_BALANCE_FORCE_HOST_AVAILABLE = False
 _RAIL_BALANCE_WORLD_GATE_WORDS = 128
@@ -33,7 +38,7 @@ _RAIL_BALANCE_BUFFER_ALIGNMENT = 2 * 1024 * 1024
 _RAIL_BALANCE_WORLD_GATE_RANK_MASK = (1 << 32) - 1
 _RAIL_BALANCE_WORLD_GATE_MAX_ERROR_PRIORITY = (1 << 31) - 1
 _RAIL_BALANCE_PROTOCOL_MAGIC = int.from_bytes(b'RBH6', byteorder='little')
-_RAIL_BALANCE_PROTOCOL_VERSION = 1
+_RAIL_BALANCE_PROTOCOL_VERSION = 2
 _RAIL_BALANCE_OPERATION_CONSTRUCTOR = 1
 _RAIL_BALANCE_OPERATION_DISPATCH = 2
 _RAIL_BALANCE_OPERATION_COMBINE = 3
@@ -41,7 +46,7 @@ _RAIL_BALANCE_PHASE_PREPARE = 1
 _RAIL_BALANCE_PHASE_SIZING = 2
 _RAIL_BALANCE_PHASE_PLAN = 2
 _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS = 10
-_RAIL_BALANCE_CONSTRUCTOR_MANIFEST_WIDTH = 16 + _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS
+_RAIL_BALANCE_CONSTRUCTOR_MANIFEST_WIDTH = 18 + _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS
 _RAIL_BALANCE_CONSTRUCTOR_SIZING_MANIFEST_WIDTH = 20
 _RAIL_BALANCE_CONSTRUCTOR_PARSE_ERROR = 10
 _RAIL_BALANCE_CONSTRUCTOR_VALIDATION_ERROR = 11
@@ -53,7 +58,7 @@ _RAIL_BALANCE_CONSTRUCTOR_SIZING_ERROR = 17
 _RAIL_BALANCE_CONSTRUCTOR_RUNTIME_CONFIG_ERROR = 18
 _RAIL_BALANCE_CONSTRUCTOR_SIZING_MANIFEST_ERROR = 19
 _RAIL_BALANCE_CONSTRUCTOR_SIZING_ENCODE_ERROR = 20
-_RAIL_BALANCE_DISPATCH_COMMON_FIELDS = 19
+_RAIL_BALANCE_DISPATCH_COMMON_FIELDS = 21
 _RAIL_BALANCE_DISPATCH_MANIFEST_WIDTH = 7 + \
     _RAIL_BALANCE_DISPATCH_COMMON_FIELDS
 _RAIL_BALANCE_COMBINE_MANIFEST_WIDTH = 7
@@ -75,7 +80,11 @@ def _rail_balance_error(code: str, detail: str) -> str:
     return f'[DeepEP rail_balance:{code}] {detail}'
 
 
-def _parse_rail_balance_config(mode: str, proxy_slots_per_rank: int) -> Tuple[str, int]:
+def _parse_rail_balance_config(
+        mode: str,
+        proxy_slots_per_rank: int,
+        policy: str = 'all',
+        threshold_percent: int = 0) -> Tuple[str, int, int, int]:
     """Validate the constructor-fixed rail-balance mode without touching CUDA or collectives."""
     if type(mode) is not str or mode not in _RAIL_BALANCE_MODES:
         raise ValueError(_rail_balance_error(
@@ -87,6 +96,17 @@ def _parse_rail_balance_config(mode: str, proxy_slots_per_rank: int) -> Tuple[st
             'InvalidConfiguration',
             'rail_balance_proxy_slots_per_rank must be an integer in '
             f'[0, {_RAIL_BALANCE_MAX_PROXY_SLOTS}]'))
+    if type(policy) is not str or policy not in _RAIL_BALANCE_POLICIES:
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            'rail_balance_policy must be exactly one of '
+            f'{_RAIL_BALANCE_POLICIES}, got {policy!r}'))
+    if type(threshold_percent) is not int or not (
+            0 <= threshold_percent <= _RAIL_BALANCE_MAX_THRESHOLD_PERCENT):
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            'rail_balance_threshold_percent must be an integer in '
+            f'[0, {_RAIL_BALANCE_MAX_THRESHOLD_PERCENT}]'))
     if mode == 'off' and proxy_slots_per_rank != 0:
         raise ValueError(_rail_balance_error(
             'InvalidConfiguration',
@@ -95,7 +115,17 @@ def _parse_rail_balance_config(mode: str, proxy_slots_per_rank: int) -> Tuple[st
         raise ValueError(_rail_balance_error(
             'InvalidConfiguration',
             "rail_balance_proxy_slots_per_rank must be positive when rail_balance='force'"))
-    return mode, proxy_slots_per_rank
+    if mode == 'off' and policy != 'all':
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            "rail_balance_policy must be 'all' when rail_balance='off'"))
+    if mode == 'off' and threshold_percent != 0:
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            'rail_balance_threshold_percent must be 0 when '
+            "rail_balance='off'"))
+    return (mode, proxy_slots_per_rank,
+            _RAIL_BALANCE_POLICY_IDS[policy], threshold_percent)
 
 
 def _validate_rail_balance_force_constructor(
@@ -303,10 +333,18 @@ def _make_rail_balance_constructor_manifest(
         deterministic: bool = False,
         allow_hybrid_mode: bool = False,
         allow_multiple_reduction: bool = False,
-        arena_layout: Sequence[int] = ()) -> Tuple[int, ...]:
+        arena_layout: Sequence[int] = (),
+        policy: int = 0,
+        threshold_percent: int = 0) -> Tuple[int, ...]:
     """Encode only fields that must agree before the symmetric window exists."""
     if type(mode) is not str or mode not in _RAIL_BALANCE_MODES:
         raise ValueError('rail-balance constructor manifest mode is invalid')
+    if type(policy) is not int or policy not in \
+            _RAIL_BALANCE_POLICY_IDS.values():
+        raise ValueError('rail-balance constructor policy ABI is invalid')
+    if type(threshold_percent) is not int or not (
+            0 <= threshold_percent <= _RAIL_BALANCE_MAX_THRESHOLD_PERCENT):
+        raise ValueError('rail-balance constructor threshold is invalid')
     is_force = mode == 'force'
     if is_force:
         if len(arena_layout) != _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS or not all(
@@ -321,11 +359,13 @@ def _make_rail_balance_constructor_manifest(
             int(deterministic),
             int(allow_hybrid_mode),
             int(allow_multiple_reduction),
+            policy,
+            threshold_percent,
             len(arena_layout),
         )
         layout_fields = tuple(arena_layout)
     else:
-        force_fields = (0,) * 9
+        force_fields = (0,) * 11
         layout_fields = (0,) * _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS
 
     fields = (
@@ -689,7 +729,9 @@ class ElasticBuffer:
                  explicitly_destroy: bool = False,
                  *,
                  rail_balance: str = 'off',
-                 rail_balance_proxy_slots_per_rank: int = 0):
+                 rail_balance_proxy_slots_per_rank: int = 0,
+                 rail_balance_policy: str = 'all',
+                 rail_balance_threshold_percent: int = 0):
         """
         Initialize the elastic communication buffer.
 
@@ -718,17 +760,29 @@ class ElasticBuffer:
                 mode guards are added.
             rail_balance_proxy_slots_per_rank: moved-copy capacity reserved on each egress rank.
                 Must be zero for ``'off'`` and positive for ``'force'``.
+            rail_balance_policy: planner policy: ``'all'`` balances across every
+                local rail, ``'active'`` keeps the original nonempty rail set,
+                and ``'adaptive'`` expands that set only when each added rail
+                clears ``rail_balance_threshold_percent``.
+            rail_balance_threshold_percent: strict minimum predicted tail
+                improvement, as an integer percentage. Zero disables the gate
+                and preserves the original exact ``'all'`` plan.
         """
         rail_balance_arena_layout = None
+        rail_balance_policy_id = 0
         constructor_gate_device_words = None
         constructor_gate_host_words = None
         if not _RAIL_BALANCE_FORCE_HOST_AVAILABLE:
             # Development/partial-install fail-close path. Once the public host
             # protocol is enabled, every mode instead joins the universal gate
             # below so a valid off rank cannot diverge from a valid force rank.
-            rail_balance, rail_balance_proxy_slots_per_rank = \
+            (rail_balance, rail_balance_proxy_slots_per_rank,
+             rail_balance_policy_id,
+             rail_balance_threshold_percent) = \
                 _parse_rail_balance_config(
-                    rail_balance, rail_balance_proxy_slots_per_rank)
+                    rail_balance, rail_balance_proxy_slots_per_rank,
+                    rail_balance_policy,
+                    rail_balance_threshold_percent)
             if rail_balance == 'force':
                 _validate_rail_balance_force_constructor(
                     num_bytes, num_cpu_bytes,
@@ -748,12 +802,18 @@ class ElasticBuffer:
             constructor_error_priority = 0
             constructor_manifest = None
             try:
-                rail_balance, rail_balance_proxy_slots_per_rank = \
+                (rail_balance, rail_balance_proxy_slots_per_rank,
+                 rail_balance_policy_id,
+                 rail_balance_threshold_percent) = \
                     _parse_rail_balance_config(
-                        rail_balance, rail_balance_proxy_slots_per_rank)
+                        rail_balance, rail_balance_proxy_slots_per_rank,
+                        rail_balance_policy,
+                        rail_balance_threshold_percent)
             except BaseException:
                 rail_balance = 'off'
                 rail_balance_proxy_slots_per_rank = 0
+                rail_balance_policy_id = 0
+                rail_balance_threshold_percent = 0
                 constructor_error_priority = \
                     _RAIL_BALANCE_CONSTRUCTOR_PARSE_ERROR
 
@@ -793,7 +853,10 @@ class ElasticBuffer:
                             rail_balance_proxy_slots_per_rank,
                             use_fp8_dispatch, deterministic,
                             allow_hybrid_mode, allow_multiple_reduction,
-                            rail_balance_arena_layout or ())
+                            rail_balance_arena_layout or (),
+                            policy=rail_balance_policy_id,
+                            threshold_percent=
+                                rail_balance_threshold_percent)
                 except BaseException:
                     constructor_manifest = None
                     constructor_error_priority = \
@@ -1021,6 +1084,9 @@ class ElasticBuffer:
         if rail_balance == 'force':
             self._rail_balance_mode = rail_balance
             self._rail_balance_proxy_slots_per_rank = rail_balance_proxy_slots_per_rank
+            self._rail_balance_policy = rail_balance_policy_id
+            self._rail_balance_threshold_percent = \
+                rail_balance_threshold_percent
             self._rail_balance_arena_offset = legacy_num_bytes
             self._rail_balance_arena_bytes = rail_balance_arena_bytes
             self._rail_balance_world_gate_device_words = \
@@ -1715,7 +1781,9 @@ class ElasticBuffer:
                         resolved_num_sms, resolved_num_qps,
                         self._rail_balance_proxy_slots_per_rank,
                         self._rail_balance_arena_offset,
-                        invocation_id, 0)
+                        invocation_id, 0,
+                        self._rail_balance_policy,
+                        self._rail_balance_threshold_percent)
                 if type(prepare_result) is not tuple or \
                         len(prepare_result) != 1 + \
                         _RAIL_BALANCE_DISPATCH_COMMON_FIELDS or \

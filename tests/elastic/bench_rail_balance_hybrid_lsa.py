@@ -132,7 +132,7 @@ _JIT_KERNEL_PREFIXES = (
     "kernel.combine_reduce_epilogue.",
     "kernel.rail_balance_hybrid_count_v1.",
     "kernel.rail_balance_hybrid_local_barrier_g8_",
-    "kernel.rail_balance_hybrid_plan_v1.",
+    "kernel.rail_balance_hybrid_plan_v2.",
     "kernel.rail_balance_hybrid_prefix_v1.",
     "kernel.rail_balance_hybrid_return_unshuffle.",
     "kernel.rail_balance_hybrid_source_shuffle.",

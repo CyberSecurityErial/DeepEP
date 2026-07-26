@@ -299,7 +299,7 @@ void rail_balance_hybrid_count_impl(
 // contains no guessed NCCL interface.
 template <int kInstantiation = 0>
 __global__ __launch_bounds__(32, 1)
-void rail_balance_hybrid_plan_impl(
+void rail_balance_hybrid_plan_v2_impl(
         const int* channel_count,
         int* count,
         int* quota,
@@ -309,7 +309,9 @@ void rail_balance_hybrid_plan_impl(
         const int num_rails,
         const int num_channels,
         const int num_destinations,
-        const int remainder_seed) {
+        const int remainder_seed,
+        const int policy,
+        const int threshold_percent) {
     const int destination = static_cast<int>(blockIdx.x);
     if (destination >= num_destinations or threadIdx.x != 0 or
         channel_count == nullptr or count == nullptr or quota == nullptr or
@@ -318,11 +320,17 @@ void rail_balance_hybrid_plan_impl(
         num_channels < 1 or
         num_channels > rail_balance::kNumHybridMaxChannels or
         num_destinations < 1 or
-        num_destinations > rail_balance::kNumHybridMaxDestinations) {
+        num_destinations > rail_balance::kNumHybridMaxDestinations or
+        not rail_balance::is_valid_hybrid_policy(policy) or
+        threshold_percent < 0 or
+        threshold_percent >
+            rail_balance::kMaxHybridPolicyThresholdPercent) {
         return;
     }
 
     int64_t total = 0;
+    int max_count = 0;
+    uint32_t active_mask = 0;
     for (int owner = 0; owner < num_rails; ++owner) {
         int owner_count = 0;
         for (int channel = 0; channel < num_channels; ++channel) {
@@ -334,37 +342,96 @@ void rail_balance_hybrid_plan_impl(
         count[rail_balance::hybrid_plan_detail::gd_offset(
             owner, destination, num_destinations)] = owner_count;
         total += owner_count;
+        max_count = owner_count > max_count ? owner_count : max_count;
+        if (owner_count > 0)
+            active_mask |= uint32_t{1} << owner;
     }
 
-    const int base = static_cast<int>(total / num_rails);
-    const int remainder = static_cast<int>(total % num_rails);
     int normalized_seed = remainder_seed % num_rails;
     if (normalized_seed < 0)
         normalized_seed += num_rails;
     const int start = (normalized_seed + destination % num_rails) % num_rails;
+    const uint32_t all_mask = num_rails == 32 ?
+        uint32_t{0xffffffff} : (uint32_t{1} << num_rails) - 1;
+    uint32_t selected_mask = policy ==
+            static_cast<int>(rail_balance::HybridPolicy::All) ?
+        all_mask : active_mask;
+    int selected_count = __popc(selected_mask);
 
-    for (int owner = 0; owner < num_rails; ++owner) {
-        quota[rail_balance::hybrid_plan_detail::gd_offset(
-            owner, destination, num_destinations)] = base;
-    }
-
-    int assigned = 0;
-    for (int offset = 0; offset < num_rails and assigned < remainder; ++offset) {
-        const int owner = (start + offset) % num_rails;
-        const auto matrix_offset = rail_balance::hybrid_plan_detail::gd_offset(
-            owner, destination, num_destinations);
-        if (count[matrix_offset] > base) {
-            quota[matrix_offset] = base + 1;
-            ++assigned;
+    if (policy == static_cast<int>(rail_balance::HybridPolicy::Adaptive) and
+        total > 0) {
+        while (selected_count < num_rails) {
+            const int64_t current_tail =
+                (total + selected_count - 1) / selected_count;
+            const int64_t next_tail =
+                (total + selected_count) / (selected_count + 1);
+            if (current_tail * 100 <=
+                next_tail * (100 + threshold_percent))
+                break;
+            for (int offset = 0; offset < num_rails; ++offset) {
+                const int rail = (start + offset) % num_rails;
+                const uint32_t bit = uint32_t{1} << rail;
+                if ((selected_mask & bit) == 0) {
+                    selected_mask |= bit;
+                    ++selected_count;
+                    break;
+                }
+            }
         }
     }
-    for (int offset = 0; offset < num_rails and assigned < remainder; ++offset) {
-        const int owner = (start + offset) % num_rails;
-        const auto matrix_offset = rail_balance::hybrid_plan_detail::gd_offset(
-            owner, destination, num_destinations);
-        if (count[matrix_offset] <= base) {
-            quota[matrix_offset] = base + 1;
-            ++assigned;
+
+    const int64_t target_tail = selected_count > 0 ?
+        (total + selected_count - 1) / selected_count : 0;
+    const bool should_balance = total > 0 and
+        (threshold_percent == 0 or
+         static_cast<int64_t>(max_count) * 100 >
+             target_tail * (100 + threshold_percent));
+
+    if (not should_balance) {
+        for (int owner = 0; owner < num_rails; ++owner) {
+            const auto matrix_offset =
+                rail_balance::hybrid_plan_detail::gd_offset(
+                    owner, destination, num_destinations);
+            quota[matrix_offset] = count[matrix_offset];
+        }
+    } else {
+        const int base = static_cast<int>(total / selected_count);
+        const int remainder = static_cast<int>(total % selected_count);
+
+        for (int owner = 0; owner < num_rails; ++owner) {
+            const bool selected =
+                (selected_mask & (uint32_t{1} << owner)) != 0;
+            quota[rail_balance::hybrid_plan_detail::gd_offset(
+                owner, destination, num_destinations)] =
+                    selected ? base : 0;
+        }
+
+        int assigned = 0;
+        for (int offset = 0;
+             offset < num_rails and assigned < remainder; ++offset) {
+            const int owner = (start + offset) % num_rails;
+            const uint32_t bit = uint32_t{1} << owner;
+            const auto matrix_offset =
+                rail_balance::hybrid_plan_detail::gd_offset(
+                    owner, destination, num_destinations);
+            if ((selected_mask & bit) != 0 and
+                count[matrix_offset] > base) {
+                quota[matrix_offset] = base + 1;
+                ++assigned;
+            }
+        }
+        for (int offset = 0;
+             offset < num_rails and assigned < remainder; ++offset) {
+            const int owner = (start + offset) % num_rails;
+            const uint32_t bit = uint32_t{1} << owner;
+            const auto matrix_offset =
+                rail_balance::hybrid_plan_detail::gd_offset(
+                    owner, destination, num_destinations);
+            if ((selected_mask & bit) != 0 and
+                count[matrix_offset] <= base) {
+                quota[matrix_offset] = base + 1;
+                ++assigned;
+            }
         }
     }
 

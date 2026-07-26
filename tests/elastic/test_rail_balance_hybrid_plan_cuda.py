@@ -13,6 +13,8 @@ later per-rank LSA count exchange.  Its frozen private ABI is::
         local_scaleout_rank,
         proxy_capacity_per_egress,
         remainder_seed=0,
+        policy=0,                    # all=0, active=1, adaptive=2
+        threshold_percent=0,
     )
 
 The return value has fourteen CUDA-contiguous int32 tensors in this order::
@@ -56,6 +58,7 @@ from rail_balance_hybrid_reference import (
 
 
 _ABI_NAME = "_build_rail_balance_hybrid_plan"
+_POLICY_IDS = {"all": 0, "active": 1, "adaptive": 2}
 _OUTPUT_LABELS = (
     "channel_count",
     "count",
@@ -160,6 +163,8 @@ class PlanCase:
     proxy_capacity_per_egress: int
     remainder_seed: int = 0
     num_topk_override: int | None = None
+    policy: str = "all"
+    threshold_percent: int = 0
 
     @property
     def num_rails(self) -> int:
@@ -260,6 +265,54 @@ def _fixed_route_distribution_cases() -> tuple[PlanCase, ...]:
     return tuple(cases)
 
 
+def _policy_cases() -> tuple[PlanCase, ...]:
+    """Route-level GPU parity for the planner-only policy selector."""
+
+    remote_counts = (0, 0, 0, 8, 0, 4, 0, 2)
+    routes = tuple(
+        ((1,),) * count + ((0,),) * (8 - count)
+        for count in remote_counts
+    )
+    topk_idx, num_experts = _encode_destination_routes(
+        routes,
+        num_destinations=2,
+        experts_per_destination=8,
+    )
+    base = PlanCase(
+        name="policy_3_5_7",
+        topk_idx=topk_idx,
+        num_channels=4,
+        num_max_tokens_per_rank=8,
+        num_experts=num_experts,
+        num_scaleout_ranks=2,
+        local_scaleout_rank=0,
+        proxy_capacity_per_egress=64,
+        remainder_seed=2,
+    )
+    return (
+        replace(base, name="policy_all_0"),
+        replace(base, name="policy_active_0", policy="active"),
+        replace(
+            base,
+            name="policy_active_59",
+            policy="active",
+            threshold_percent=59,
+        ),
+        replace(
+            base,
+            name="policy_active_60_bypass",
+            policy="active",
+            threshold_percent=60,
+        ),
+        replace(
+            base,
+            name="policy_adaptive_20",
+            policy="adaptive",
+            threshold_percent=20,
+        ),
+    )
+
+
 def _build_schedule(case: PlanCase) -> HybridRailSchedule:
     return build_hybrid_rail_schedule(
         case.topk_idx,
@@ -271,6 +324,8 @@ def _build_schedule(case: PlanCase) -> HybridRailSchedule:
         num_max_tokens_per_rank=case.num_max_tokens_per_rank,
         proxy_capacity_per_egress=case.proxy_capacity_per_egress,
         remainder_seed=case.remainder_seed,
+        policy=case.policy,
+        threshold_percent=case.threshold_percent,
     )
 
 
@@ -620,6 +675,18 @@ def _assert_oracle_contract(num_random_seeds: int) -> tuple[PlanCase, ...]:
         assert schedule.moved_copies == expected_moved
         assert schedule.proxy_required == expected_proxy
 
+    policy_cases = _policy_cases()
+    policy_schedules = tuple(_build_schedule(case) for case in policy_cases)
+    assert policy_schedules[1].quota[0][1] == 0
+    assert {
+        rail for rail, row in enumerate(policy_schedules[1].quota)
+        if row[1] > 0
+    } == {3, 5, 7}
+    assert policy_schedules[2].moved_copies > 0
+    assert policy_schedules[3].quota == policy_schedules[3].count
+    assert policy_schedules[3].moved_copies == 0
+    assert policy_schedules[4].quota != policy_schedules[0].quota
+
     random_cases = tuple(_random_cases(num_random_seeds))
     assert all(_build_schedule(case).enabled for case in random_cases)
     assert sum(
@@ -634,6 +701,7 @@ def _assert_oracle_contract(num_random_seeds: int) -> tuple[PlanCase, ...]:
             partial,
             wrap,
             *distribution_cases,
+            *policy_cases,
             *random_cases,
             boundary)
 
@@ -695,6 +763,8 @@ def _call_binding(case: PlanCase, device: torch.device) -> tuple[object, ...]:
         case.local_scaleout_rank,
         case.proxy_capacity_per_egress,
         case.remainder_seed,
+        _POLICY_IDS[case.policy],
+        case.threshold_percent,
     )
     assert isinstance(result, tuple), (
         f"{case.name}: ABI must return tuple, got {type(result).__name__}")
@@ -804,6 +874,55 @@ def _test_seed_rejections(device: torch.device) -> None:
             message,
             lambda seed=seed: _call_binding(
                 replace(valid, name=label, remainder_seed=seed), device),
+        )
+
+
+def _test_policy_rejections(device: torch.device) -> None:
+    class IntSubclass(int):
+        pass
+
+    valid = _c061_case(proxy_capacity=3)
+    topk_idx = torch.tensor(
+        valid.topk_idx, dtype=_C.topk_idx_t, device=device).contiguous()
+
+    def call(policy: int, threshold_percent: int):
+        return _get_binding()(
+            topk_idx,
+            valid.num_channels,
+            valid.num_max_tokens_per_rank,
+            valid.num_experts,
+            valid.num_scaleout_ranks,
+            valid.local_scaleout_rank,
+            valid.proxy_capacity_per_egress,
+            valid.remainder_seed,
+            policy,
+            threshold_percent,
+        )
+
+    for label, policy, threshold, message in (
+        ("bool policy", True, 0, "PyLong_CheckExact"),
+        ("int-subclass policy", IntSubclass(0), 0, "PyLong_CheckExact"),
+        ("negative policy", -1, 0, "parsed >= 0"),
+        ("unknown policy", 3, 0, "is_valid_hybrid_policy"),
+        ("bool threshold", 0, True, "PyLong_CheckExact"),
+        (
+            "int-subclass threshold",
+            0,
+            IntSubclass(0),
+            "PyLong_CheckExact",
+        ),
+        ("negative threshold", 0, -1, "parsed >= 0"),
+        (
+            "oversized threshold",
+            0,
+            3101,
+            "kMaxHybridPolicyThresholdPercent",
+        ),
+    ):
+        _assert_host_rejects(
+            label,
+            message,
+            lambda policy=policy, threshold=threshold: call(policy, threshold),
         )
 
 
@@ -918,13 +1037,14 @@ def main() -> None:
     assert failure[-1].tolist() == [1]
     _test_route_rejections(device)
     _test_seed_rejections(device)
+    _test_policy_rejections(device)
     _test_non_default_stream(cases[0], device)
     for case in cases[2:]:
         _run_cuda_case(case, device)
     _test_host_limits(device)
     print(
         f"PASS C080-B1 CUDA strict plan: {len(cases)} exact cases on "
-        f"{device}, route/seed/C1025/D33 rejection, non-default stream")
+        f"{device}, route/seed/policy/C1025/D33 rejection, non-default stream")
 
 
 if __name__ == "__main__":

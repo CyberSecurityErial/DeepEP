@@ -13,6 +13,21 @@ namespace deep_ep::elastic::rail_balance {
 static constexpr int kNumHybridMaxChannels = deep_ep::kNumMaxChannels;
 static constexpr int kNumHybridMaxDestinations = 32;
 static constexpr int64_t kNumHybridBufferAlignmentBytes = 2 * 1024 * 1024;
+static constexpr int kMaxHybridPolicyThresholdPercent = 3100;
+
+// Planner-only policy ABI. Dispatch, shuffle, and combine consume only the
+// resulting quota/segments and therefore stay policy-free.
+enum class HybridPolicy : int {
+    All = 0,
+    Active = 1,
+    Adaptive = 2,
+};
+
+__forceinline__ __device__ __host__ constexpr bool
+is_valid_hybrid_policy(const int policy) {
+    return policy >= static_cast<int>(HybridPolicy::All) and
+           policy <= static_cast<int>(HybridPolicy::Adaptive);
+}
 
 // Force-forward metadata adds one proxy slot to the legacy two-field header.
 // Keep its ABI here so host allocation and both persistent kernels cannot
