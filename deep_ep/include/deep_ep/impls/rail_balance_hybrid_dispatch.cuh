@@ -868,6 +868,10 @@ rail_balance_hybrid_dispatch_impl(
                         transform_linked_list_idx(stored_scaleup_send_counters[i]));
                 }
             }
+            // The NVLink barrier signal is issued by SM 0 after the grid
+            // rendezvous, not by the lanes that publish these peer tails.
+            // Complete each lane's store before handing off to that signaler.
+            ptx::fence_acq_rel_sys();
         }
         __syncwarp();
 
