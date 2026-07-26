@@ -944,6 +944,9 @@ rail_balance_hybrid_dispatch_impl(
             workspace_layout.get_scaleup_atomic_sender_counter() +
                 thread_idx,
             0);
+        printf("RB_COUNT node=%d source=%d target=%d count=%d\n",
+               scaleout_rank_idx, scaleup_rank_idx, thread_idx,
+               final_count);
         auto peer_mailbox = gin.get_sym_ptr<ncclTeamTagLsa>(
             scaleup_count_mailbox + scaleup_rank_idx,
             thread_idx);
