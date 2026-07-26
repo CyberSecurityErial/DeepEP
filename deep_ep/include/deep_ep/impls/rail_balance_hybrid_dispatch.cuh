@@ -515,8 +515,7 @@ rail_balance_hybrid_dispatch_impl(
                         scaleout_recv_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(),
                         scaleout_send_buffer.get_token_buffer(token_idx).get_base_ptr(),
                         tma_buffer.get_num_bytes<false>(),
-                        stored_dst_scaleout_rank_idx,
-                        ncclGinOptFlagsAggregateRequests);
+                        stored_dst_scaleout_rank_idx);
             }
             __syncwarp();
         }
