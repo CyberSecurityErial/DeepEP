@@ -610,7 +610,7 @@ rail_balance_hybrid_dispatch_impl(
                     }
                 }
                 const auto staged_token =
-                    scaleout_send_buffer.get_token_buffer(remote_slot);
+                    scaleout_send_buffer.get_token_buffer(proxy_slot);
                 const auto src = static_cast<const int4*>(
                     proxy_token.get_base_ptr());
                 const auto dst = static_cast<int4*>(
