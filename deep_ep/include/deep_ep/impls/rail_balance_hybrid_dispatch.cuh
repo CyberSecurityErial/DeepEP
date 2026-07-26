@@ -796,6 +796,16 @@ rail_balance_hybrid_dispatch_impl(
         __syncwarp();
     }
 
+    // Device-scope atomic increments are not directly publishable to an LSA
+    // peer.  After every forward warp has finished, have one local block
+    // republish the final counters with system release semantics.
+    cooperative_groups::this_grid().sync();
+    if (sm_idx == 0 and thread_idx < kNumScaleupRanks) {
+        const auto counter =
+            workspace_layout.get_scaleup_atomic_sender_counter() + thread_idx;
+        ptx::st_release_sys(counter, *counter);
+    }
+
     // Scale-up barrier to ensure data arrival
     // As scale-out tokens have already been consumed by forwarders, no need to do scale-out barrier again
     comm::gpu_barrier<true, kNumScaleoutRanks, kNumScaleupRanks,

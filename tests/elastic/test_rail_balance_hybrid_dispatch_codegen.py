@@ -204,7 +204,9 @@ def _run_case(name: str) -> None:
     # epilogue prefix must therefore be rebuilt from the post-forward sender
     # counters, and a second local barrier must protect those counters from an
     # early peer reset.
-    first_arrival_barrier = header.index("comm::kHybridDispatchTag1")
+    counter_publish = header.index("ptx::st_release_sys(counter, *counter)")
+    first_arrival_barrier = header.index(
+        "comm::kHybridDispatchTag1", counter_publish)
     peer_count_snapshot = header.index(
         "workspace_layout.get_scaleup_atomic_sender_counter() +",
         first_arrival_barrier,
@@ -222,7 +224,7 @@ def _run_case(name: str) -> None:
         epilogue_trigger,
     )
     assert (
-        first_arrival_barrier < peer_count_snapshot < prefix_write <
+        counter_publish < first_arrival_barrier < peer_count_snapshot < prefix_write <
         count_barrier < epilogue_trigger < counter_reset
     )
 
