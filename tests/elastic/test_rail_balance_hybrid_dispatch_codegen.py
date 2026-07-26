@@ -187,17 +187,18 @@ def _run_case(name: str) -> None:
         "arena_layout.get_retained_rail_staging_layout(",
         retained_threshold)
     remote_slot = header.index("const int remote_slot =", proxy_loop)
-    proxy_put = header.index("gin.put<ncclTeamTagRail>(", proxy_loop)
+    grouped_put_helper = header.index("const auto issue_grouped_put =")
+    final_action = header.index("ncclGin_VASignalAdd(", grouped_put_helper)
+    proxy_put = header.index("issue_grouped_put(", proxy_loop)
     proxy_acquire = header.index(
         "const int ready = ptx::ld_acquire_sys<int>(", proxy_loop
     )
-    final_tail = header.index("const auto signaled_tail =", proxy_put)
-    completion_wait = header.index("gin.wait(*completion_request);", proxy_put)
+    final_tail = header.index("const auto signaled_tail =", grouped_put_helper)
     final_flush = header.index("gin.flush<ncclCoopWarp>();", proxy_put)
     assert retained_threshold < retained_staging < proxy_begin < proxy_loop
     assert (
-        proxy_loop < remote_slot < proxy_acquire < proxy_put <
-        completion_wait < final_flush < final_tail
+        grouped_put_helper < final_action < final_tail < proxy_loop <
+        remote_slot < proxy_acquire < proxy_put < final_flush
     )
     assert "RB_PROXY_BAD" not in header
     assert "embedded_proxy" not in header
@@ -208,7 +209,7 @@ def _run_case(name: str) -> None:
     assert "ptx::tma_store_global_visibility_fence();" in proxy_copy
     assert "__threadfence_system();" not in proxy_copy
     assert "ncclGinOptFlagsAggregateRequests" in header[
-        proxy_put:final_tail
+        grouped_put_helper:final_tail
     ]
     assert "retained_count + proxy_slot - proxy_begin" in header[
         remote_slot:proxy_put]
