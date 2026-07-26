@@ -125,8 +125,10 @@ def test_proxy_capacity_is_per_egress_and_each_arena_has_pcap_slots():
     hidden, num_topk = 7168, 8
     one = _device_layout(hidden, num_topk, 1)
     thirty_two = _device_layout(hidden, num_topk, 32)
-    assert thirty_two[6] - one[6] == 31 * one[5]
-    assert thirty_two[8] - one[8] == 31 * (one[5] + one[7])
+    ready_growth = thirty_two[4] - one[4]
+    assert thirty_two[6] - one[6] == ready_growth + 31 * one[5]
+    assert thirty_two[8] - one[8] == (
+        ready_growth + 31 * (one[5] + one[7]))
     assert thirty_two == _reference_layout(hidden, num_topk, 32)
 
 
