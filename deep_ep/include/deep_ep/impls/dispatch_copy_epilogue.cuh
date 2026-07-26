@@ -71,7 +71,17 @@ dispatch_copy_epilogue_impl(void* buffer, void* workspace,
         // Calculate token index in the buffer
         while (i >= current_rank_end) {
             current_rank_idx += 1;
-            EP_DEVICE_ASSERT(current_rank_idx < kNumScaleupRanks);
+            if (current_rank_idx >= kNumScaleupRanks) {
+                if (ptx::elect_one_sync()) {
+                    #pragma unroll
+                    for (int rank = 0; rank < kNumScaleupRanks; ++ rank)
+                        printf("EP_BOUND node=%d target=%d i=%d num=%d rank=%d prefix=%d\n",
+                               scaleout_rank_idx, scaleup_rank_idx, i,
+                               num_recv_tokens, rank,
+                               psum_num_recv_tokens_per_scaleup_rank[rank]);
+                }
+                return;
+            }
             const auto stored_lane_idx = current_rank_idx % 32;
             if (stored_lane_idx == 0 and current_rank_idx + lane_idx < kNumScaleupRanks)
                 stored_psum_num_recv_tokens = psum_num_recv_tokens_per_scaleup_rank[current_rank_idx + lane_idx];
