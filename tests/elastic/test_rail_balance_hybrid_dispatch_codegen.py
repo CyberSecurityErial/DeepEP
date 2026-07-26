@@ -288,14 +288,15 @@ def _run_case(name: str) -> None:
     scaleout_end = header.index(
         "\n    } else {\n        const int forward_warp_idx", scaleout_begin)
     scaleout_body = header[scaleout_begin:scaleout_end]
-    # Exactly two payload put sites exist: retained owner traffic and grouped
-    # proxy traffic. Local destination remains a TMA bypass.
+    # The grouped put helper has one aggregate site and one final site whose
+    # remote action publishes the finish marker after payload arrival. Local
+    # destination remains a TMA bypass.
     assert scaleout_body.count("gin.put<ncclTeamTagRail>(") == 2
-    assert scaleout_body.count("ncclGinOptFlagsAggregateRequests") == 2
+    assert scaleout_body.count("ncclGinOptFlagsAggregateRequests") == 1
+    assert scaleout_body.count("ncclGin_VASignalAdd(") == 1
     assert "if (lane_idx == dst_scaleout_rank_idx)" in scaleout_body
-    assert scaleout_body.count(
-        "gin.flush_async<ncclTeamTagRail, ncclCoopThread>") == 1
-    assert scaleout_body.count("gin.wait(*completion_request);") == 1
+    assert "flush_async<ncclTeamTagRail" not in scaleout_body
+    assert "gin.wait(*completion_request);" not in scaleout_body
     assert scaleout_body.count("gin.flush<ncclCoopWarp>();") == 1
     assert "stored_old_slot_idx < retained_count" in scaleout_body
     assert "for (int proxy_slot = proxy_begin;" in scaleout_body
