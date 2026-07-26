@@ -524,6 +524,7 @@ rail_balance_hybrid_dispatch_impl(
         // Consume the descriptor-free moved groups owned by this egress.  The
         // source slot p and destination slot are implied by static prefixes;
         // no data-path atomic, ready word, or per-copy descriptor is needed.
+        bool issued_moved_put = false;
         if (lane_idx < kNumScaleoutRanks and
             lane_idx != scaleout_rank_idx) {
             const auto plan_offset =
@@ -568,7 +569,19 @@ rail_balance_hybrid_dispatch_impl(
                         .get_base_ptr(),
                     proxy_token.get_base_ptr(),
                     token_layout.get_num_bytes<false>(), lane_idx);
+                issued_moved_put = true;
             }
+        }
+        __syncwarp();
+
+        // A remote atomic release does not order preceding GIN puts on every
+        // Rail QP.  Complete the moved-copy stream explicitly before publishing
+        // the final tail consumed by the remote forwarding warp.
+        if (issued_moved_put) {
+            ncclGinRequest_t moved_put_request;
+            gin.flush_async<ncclTeamTagRail, ncclCoopThread>(
+                lane_idx, &moved_put_request);
+            gin.wait(moved_put_request);
         }
         __syncwarp();
 
