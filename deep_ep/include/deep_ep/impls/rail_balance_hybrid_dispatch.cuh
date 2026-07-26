@@ -577,7 +577,7 @@ rail_balance_hybrid_dispatch_impl(
         // published.  The receiver treats that tail as permission to load
         // every retained and moved slot, so complete this channel's QP writes
         // before issuing the release signal below.
-        gin.flush(ncclCoopWarp());
+        gin.flush<ncclCoopWarp>();
         __syncwarp();
 
         // Tag0 begins a fresh dispatch epoch and the legacy forwarder clears

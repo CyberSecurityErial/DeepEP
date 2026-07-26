@@ -189,7 +189,7 @@ def _run_case(name: str) -> None:
         "const int ready = ptx::ld_acquire_sys<int>(", proxy_loop
     )
     final_tail = header.index("const auto signaled_tail =", proxy_put)
-    proxy_flush = header.index("gin.flush(ncclCoopWarp())", proxy_put)
+    proxy_flush = header.index("gin.flush<ncclCoopWarp>()", proxy_put)
     assert retained_threshold < proxy_begin < proxy_loop
     assert (
         proxy_loop < remote_slot < proxy_acquire < proxy_put < proxy_flush <
