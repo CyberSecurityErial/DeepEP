@@ -567,18 +567,9 @@ rail_balance_hybrid_dispatch_impl(
                     scaleout_recv_buffer.get_token_buffer(remote_slot)
                         .get_base_ptr(),
                     proxy_token.get_base_ptr(),
-                    token_layout.get_num_bytes<false>(), lane_idx,
-                    ncclGinOptFlagsAggregateRequests);
+                    token_layout.get_num_bytes<false>(), lane_idx);
             }
         }
-        __syncwarp();
-
-        // AggregateRequests may still be queued when the final dense tail is
-        // published.  The receiver treats that tail as permission to load
-        // every retained and moved slot, so complete this channel's QP writes
-        // before issuing the release signal below.
-        gin.flush();
-        gin.flush<ncclCoopWarp>();
         __syncwarp();
 
         // Tag0 begins a fresh dispatch epoch and the legacy forwarder clears

@@ -189,15 +189,11 @@ def _run_case(name: str) -> None:
         "const int ready = ptx::ld_acquire_sys<int>(", proxy_loop
     )
     final_tail = header.index("const auto signaled_tail =", proxy_put)
-    proxy_flush = header.index("gin.flush()", proxy_put)
-    proxy_warp_flush = header.index(
-        "gin.flush<ncclCoopWarp>()", proxy_flush
-    )
     assert retained_threshold < proxy_begin < proxy_loop
-    assert (
-        proxy_loop < remote_slot < proxy_acquire < proxy_put < proxy_flush <
-        proxy_warp_flush < final_tail
-    )
+    assert proxy_loop < remote_slot < proxy_acquire < proxy_put < final_tail
+    assert "ncclGinOptFlagsAggregateRequests" not in header[
+        proxy_put:final_tail
+    ]
     assert "retained_count + proxy_slot - proxy_begin" in header[
         remote_slot:proxy_put]
 
