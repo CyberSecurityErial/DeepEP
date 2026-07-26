@@ -388,7 +388,6 @@ rail_balance_hybrid_dispatch_impl(
         EP_STATIC_ASSERT(kNumScaleoutRanks <= 32,
                          "Invalid number of scale-out ranks");
         int stored_owner_tail = 0;
-        int stored_num_retained_puts = 0;
 
         // Preload next token
         const auto preload_next_token = [&](const int& token_idx) {
@@ -506,6 +505,10 @@ rail_balance_hybrid_dispatch_impl(
             }
             ptx::tma_store_commit();
             ptx::tma_store_wait();
+            if (retained_remote_mask != 0) {
+                ptx::tma_store_global_visibility_fence();
+                __threadfence_system();
+            }
             __syncwarp();
 
             // Preload the next token (overlapping with the IBGDA issues)
@@ -518,26 +521,9 @@ rail_balance_hybrid_dispatch_impl(
                         scaleout_send_buffer.get_token_buffer(token_idx).get_base_ptr(),
                         tma_buffer.get_num_bytes<false>(),
                         stored_dst_scaleout_rank_idx);
-                ++stored_num_retained_puts;
             }
             __syncwarp();
         }
-
-        // Retained puts are aggregated by the lane that owns their destination.
-        // A flush issued by the elected lane does not drain another lane's
-        // thread-cooperative aggregation queue, so every remote-destination
-        // lane must complete its own queue before proxy puts and the final tail
-        // can make those receive slots visible to the forwarder.
-        if (stored_num_retained_puts > 0) {
-            const auto retained_put_request =
-                static_cast<ncclGinRequest_t*>(
-                    workspace_layout.get_scaleout_channel_gin_request_ptr(
-                        channel_idx, lane_idx));
-            gin.flush_async<ncclTeamTagRail, ncclCoopThread>(
-                lane_idx, retained_put_request);
-            gin.wait(*retained_put_request);
-        }
-        __syncwarp();
 
         // Consume the descriptor-free moved groups owned by this egress. NIC
         // reads use a dedicated egress-local staging region rather than the
