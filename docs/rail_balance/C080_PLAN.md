@@ -1,6 +1,6 @@
 # C080 Hybrid Rail-Balance Integration Plan
 
-Status: PLAN_FROZEN / IMPLEMENTATION_IN_PROGRESS
+Status: PLAN_FROZEN / LOCAL_IMPLEMENTATION_COMPLETE / MULTINODE_PENDING
 
 This is the correctness-first plan for connecting the proved C030-C070
 components to DeepEP Hybrid dispatch/combine.  It is intentionally narrow.
@@ -855,9 +855,15 @@ C105 packages:
 - explicit local/codegen/real-runtime evidence labels.
 
 Current state: the validation-only JSON bundle generator covers the canonical
-balanced/two-hot/one-hot/capacity route cases and the stable CPU-oracle traffic
-fields.  Build/JIT warmup, live off/force A/B, real-route ingestion, runtime
-wait/error counters, and any evidence-label upgrade remain pending.
+balanced/two-hot/one-hot/capacity route cases and stable CPU-oracle traffic
+fields.  `run_rail_balance_hybrid_multinode.py` now adds the truthful live
+D>1 off/force runner: it verifies identical Git/extension/environment identity,
+executes public dispatch/combine against the official DeepEP references, checks
+off/force equality, validates the capacity plan-gate rejection twice, restores
+the temporary validation capability, and writes one collective JSON result.
+The runner deliberately leaves QP/NIC/wait fields unavailable.  A real-cluster
+execution, one-command build/JIT warmup, real-route ingestion, hardware
+counters, and any physical-runtime evidence-label upgrade remain pending.
 
 ## 13. Explicitly deferred
 

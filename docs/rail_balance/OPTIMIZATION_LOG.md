@@ -2043,3 +2043,20 @@ label remains `REAL_HYBRID_RUNTIME_UNTESTED`.
 The capacity case is deliberately fail-closed.  It is useful because it proves
 the network package will carry an expected capacity rejection case, but it does
 not exercise a live multi-node barrier or Gin path yet.
+
+## Scope decision O082 — live C105 runner is correctness packaging, not an optimization
+
+The new D>1 runner changes no production kernel or runtime path.  Its purpose is
+to make the first Rail/Gin correctness experiment reproducible and falsifiable,
+not to improve or measure speed.
+
+Off and force channel geometry are not forced equal: the off handle is observed
+as its own baseline, constructor capacity uses the channel-invariant C=1 oracle,
+and successful force evidence records the force handle's actual channel count.
+This avoids accidentally changing the operator merely to simplify a test.
+
+The output intentionally records null QP utilization, NIC bytes, and wait
+cycles because the current implementation exposes no trustworthy runtime
+counters.  No profiler was run and no local timing was collected in this
+checkpoint.  Performance work starts only after a live correctness result and
+a separately defined no-profiler/nsys/ncu evidence chain.

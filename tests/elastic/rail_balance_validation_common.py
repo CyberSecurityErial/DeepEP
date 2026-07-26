@@ -13,6 +13,7 @@ EVIDENCE_LABEL = "REAL_HYBRID_RUNTIME_UNTESTED"
 _MAX_FORCE_V1_DIM = 32
 _MAX_FORCE_V1_EXPERTS = 2048
 _MAX_FORCE_V1_EXPERTS_PER_RANK = 256
+_MAX_FORCE_V1_CHANNELS = 1024
 _MAX_INT32 = (1 << 31) - 1
 _PAYLOAD_DTYPE_BYTES = {"bf16": 2}
 
@@ -293,6 +294,8 @@ def _require_modes(modes: Sequence[str]) -> Tuple[str, ...]:
 
 def _payload_bytes_per_token(hidden: int, payload_dtype: str) -> int:
     _require_exact_int("hidden", hidden, 1, _MAX_INT32)
+    if hidden % 256 != 0:
+        raise ValueError("hidden must be a positive multiple of 256")
     if type(payload_dtype) is not str or payload_dtype not in _PAYLOAD_DTYPE_BYTES:
         raise ValueError("payload_dtype must be exactly 'bf16'")
     bytes_per_element = _PAYLOAD_DTYPE_BYTES[payload_dtype]
@@ -395,7 +398,7 @@ def build_validation_bundle(
         num_topk=num_topk,
         num_experts=num_experts,
     )
-    _require_exact_int("num_channels", num_channels, 1, _MAX_INT32)
+    _require_exact_int("num_channels", num_channels, 1, _MAX_FORCE_V1_CHANNELS)
     if num_tokens_per_rank == 0:
         raise ValueError("C105 validation bundles require nonzero token capacity")
     bytes_per_token = _payload_bytes_per_token(hidden, payload_dtype)

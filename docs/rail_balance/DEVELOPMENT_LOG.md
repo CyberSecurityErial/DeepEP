@@ -5836,3 +5836,116 @@ Still missing for C105: the actual public multi-node off/force execution
 harness, temporary validation-only force capability enablement with restoration,
 real runtime error/counter capture, and one-command build/JIT warmup.  Those
 must not be inferred from this CPU bundle.
+
+## 2026-07-26 — D102: truthful D>1 public Hybrid validation runner
+
+C105 now contains `tests/elastic/run_rail_balance_hybrid_multinode.py`.  The
+launch contract follows DeepEP rather than generic torchrun semantics:
+`WORLD_SIZE` is the number of nodes, `RANK` is the node index, and one launcher
+process per node spawns `--num-processes` local GPU ranks.  The CLI rejects D1
+and rejects any nonzero `EP_DISABLE_GIN` value.
+
+Before constructing the off buffer, every rank all-gathers and verifies a
+manifest containing the clean Git commit, loaded extension path and SHA256,
+Torch/CUDA/NCCL versions, GPU identity, topology, case/shape/capacity settings,
+and selected EP/NCCL environment variables.  A Gloo control group propagates
+host-side validation failures.  The outer watchdog owns the worker process
+group and terminates it if an NCCL/Gin operation cannot return; the control
+group cannot by itself preflight failures that occur inside a device collective.
+
+The live path uses the public `ElasticBuffer.dispatch()` and `combine()` APIs.
+It first runs the unmodified off path, temporarily enables the already-isolated
+force specialization for validation, then explicitly restores both production
+capability bits before emitting evidence.  Deterministic BF16 payloads and
+globally unique exactly-representable FP32 weights are checked against
+`deep_ep.utils.refs.dispatch`, `combine`, `generate_pre_combine_data`, and
+`ordered_accumulate`.  Successful cases additionally require bitwise off/force
+output equality.  The capacity case requires two collective plan-gate failures
+with priority 36, exactly one consumed invocation each, no ticket leak, and a
+nonterminal buffer.
+
+The result labels are intentionally narrow:
+
+```text
+REAL_HYBRID_D_GT_1_CORRECTNESS_VALIDATED_COUNTERS_UNAVAILABLE
+REAL_HYBRID_D_GT_1_FAIL_CLOSED_VALIDATED
+```
+
+`wait_cycles`, QP utilization, and NIC bytes remain null.  Even a successful
+run therefore proves numerical/protocol behavior, not hardware-counter or
+performance claims.
+
+The shared validation contract was corrected to match force-v1 production:
+hidden must be a positive multiple of 256 and channel count is limited to
+1..1024.  Proxy demand is tested invariant across C=1/2/8, allowing constructor
+capacity to be computed with the C=1 CPU oracle and successful evidence to use
+the actual force handle channel count.  The suite is now 22/22.
+
+Retained failed or corrected attempts:
+
+- Physical-domain evidence was initially read after buffer destruction; it is
+  now captured while the off buffer is live.
+- The first success label implied runtime counters existed; the accepted label
+  explicitly states they are unavailable.
+- All-one top-k weights could not expose lane permutation; weights are now
+  unique exact FP32 integers with a `2^24` domain guard.
+- The first draft treated the off path's channel count as force truth.  Capacity
+  is now derived with channel-invariant C=1 and force evidence uses the actual
+  force handle geometry.
+- The first pyrefly command used the system import path and reported missing
+  project modules.  The accepted command pins the project interpreter and both
+  repository search roots.
+- The first post-change bundle assertion guessed a nonexistent top-level
+  `cases` key, and its shell command omitted `set -e`, so a trailing print hid
+  the assertion's exit status.  That attempt is rejected.  The rerun uses the
+  actual `schema_version`/`bundles` schema, strict shell exit semantics, and
+  checks all four cases, the unique capacity failure, and untested labels.
+- Final independent audit found that missing `RANK`/`MASTER_ADDR`/`MASTER_PORT`
+  could otherwise fall into `init_dist` defaults and hang until the watchdog.
+  The accepted CLI requires all rendezvous fields, validates rank and port,
+  rejects loopback masters for D>1, and tests the fail-closed matrix.
+- The same audit found capability assertions and assignments outside `_phase`.
+  Initial disabled state, validation enablement, and exact restoration are now
+  separately all-gathered phases, so a rank-local failure cannot send healthy
+  ranks into the next NCCL/Gin operation.
+- The timeout cleanup initially stopped after the spawn leader exited on
+  SIGTERM, potentially leaving CUDA grandchildren alive.  Cleanup now always
+  sends a best-effort SIGKILL to the dedicated original process group after the
+  grace wait; a unit test covers the leader-exits-first case.
+
+Local validation, which does not claim live D>1 execution:
+
+```text
+ruff check --fix tests/elastic/run_rail_balance_hybrid_multinode.py \
+  tests/elastic/rail_balance_validation_common.py \
+  tests/elastic/test_rail_balance_validation_contract.py --ignore SIM117
+ruff check tests/elastic/run_rail_balance_hybrid_multinode.py \
+  tests/elastic/rail_balance_validation_common.py \
+  tests/elastic/test_rail_balance_validation_contract.py --ignore SIM117 PASS
+ruff format tests/elastic/run_rail_balance_hybrid_multinode.py PASS
+pyrefly check --python-interpreter-path /home/chen/.cache/deepep-sjlgpt/bin/python \
+  --search-path $PWD --search-path $PWD/tests/elastic \
+  tests/elastic/run_rail_balance_hybrid_multinode.py \
+  tests/elastic/rail_balance_validation_common.py \
+  tests/elastic/test_rail_balance_validation_contract.py       PASS
+python -m py_compile tests/elastic/run_rail_balance_hybrid_multinode.py \
+  tests/elastic/rail_balance_validation_common.py \
+  tests/elastic/test_rail_balance_validation_contract.py       PASS
+python tests/elastic/test_rail_balance_validation_contract.py 22/22 PASS
+python tests/elastic/run_rail_balance_validation_bundle.py --case all ... \
+  plus strict schema/case/capacity/label assertions             PASS
+WORLD_SIZE=1 python tests/elastic/run_rail_balance_hybrid_multinode.py ... \
+  rejects before launch and writes no evidence file            PASS
+WORLD_SIZE=2 EP_DISABLE_GIN=1 python \
+  tests/elastic/run_rail_balance_hybrid_multinode.py ... \
+  rejects before launch and writes no evidence file            PASS
+git diff --check                                               PASS
+```
+
+No production Python, CUDA, JIT root, buffer layout, capability default, or
+hot-path code changed in D102.  The actual D>1 run requires a clean committed
+tree plus matching built extension and remains C080-H/C105 cluster work.  The
+final independent runner audit reports Blocker0/High0 after explicitly closing
+the rendezvous, collective-capability-transition, and process-group-cleanup
+findings.  A separate simplicity audit reports Blocker0/High0 and confirms that
+no production hot path or duplicate production scheduling source was added.

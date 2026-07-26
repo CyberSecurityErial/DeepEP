@@ -1039,3 +1039,25 @@ Out of scope until evidence expands the project:
   compute-only checks with per-rank `compute_stream_id`.  All GPU smokes are
   path checks only; no performance conclusion is accepted until the target
   machine is idle and Nsys proves actual overlap.
+
+## C105 real-cluster runner context (2026-07-26)
+
+- `tests/elastic/run_rail_balance_hybrid_multinode.py` is now the truthful D>1
+  public off/force correctness entry point.  It is launched once per node;
+  DeepEP `WORLD_SIZE`/`RANK` mean node count/node index, and the runner spawns
+  local GPU ranks itself.
+- It requires a clean identical Git tree and matching loaded extension SHA256,
+  performs official-reference dispatch/combine checks, exact off/force A/B,
+  and a two-invocation capacity fail-close case.  A process-group watchdog is
+  the final liveness boundary for faults inside NCCL/Gin.
+- Temporary force capability enablement exists only inside the validation
+  worker and is explicitly restored before evidence is written.  Production
+  capability bits remain false and production code is unchanged.
+- Local contract/static evidence is 22/22 plus Ruff, Pyrefly, py_compile and D1
+  rejection.  The runner cannot be truthfully executed on this single-node
+  environment.  QP/NIC/wait counters and performance remain unavailable, not
+  inferred.
+- Tests may retain the control/error-handling structure needed to expose
+  distributed failures.  Concision and branch minimization remain strict for
+  production CUDA/Hybrid hot paths, not an arbitrary line-count target for the
+  validation harness.

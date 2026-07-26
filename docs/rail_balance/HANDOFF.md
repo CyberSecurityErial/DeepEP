@@ -42,6 +42,13 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
   compute-only, source concurrent, return concurrent, default `none` source,
   parser, selected-case and schema smokes pass.  No O080 performance result is
   accepted yet.
+- C105 now includes `tests/elastic/run_rail_balance_hybrid_multinode.py`, a
+  truthful D>1 public Hybrid off/force runner.  It cross-checks Git, extension,
+  topology and launch configuration across ranks; compares dispatch/combine
+  with the official references; validates two consecutive capacity rejections;
+  restores the validation-only force capability; and writes one stable JSON
+  result.  The local contract is 22/22.  The runner has not executed here
+  because this environment has no truthful D>1 Rail/Gin topology.
 - Both capability bits remain false and no result claims real Gin/RDMA
   behavior. The local activation evidence is complete, but the public methods
   deliberately remain unreachable through a normal force construction until a
@@ -305,13 +312,16 @@ No C070 timing is performance evidence.
    functionally.  Performance work still requires idle target GPUs plus Nsys
    overlap evidence.  C105 packages the fastest real-cluster bring-up; truthful
    D>1 Gin remains C080-H/C110.
-12. C105 now has a validation-only bundle generator:
-   `tests/elastic/run_rail_balance_validation_bundle.py`.  It emits
-   balanced/two-hot/one-hot/capacity JSON bundles from the Hybrid CPU oracle,
-   including expected payload-only Gin puts/bytes and fixed
-   `REAL_HYBRID_RUNTIME_UNTESTED` labels.  Resume C105 by adding the real
-   multi-node off/force execution harness and temporary validation-only
-   capability enablement; do not mark runtime fields passed from bundle data.
+12. C105 has both the validation-only CPU bundle generator and the real
+   multi-node runner.  Launch
+   `tests/elastic/run_rail_balance_hybrid_multinode.py` once per node with the
+   same reachable `MASTER_ADDR`, `MASTER_PORT`, `WORLD_SIZE=<node-count>`, and
+   node-local `RANK=<node-index>`; the script itself spawns the local GPU
+   processes.  Run the balanced, two-hot, one-hot and capacity cases from one
+   clean commit and matching extension.  Do not set `EP_DISABLE_GIN`.  The next
+   packaging slice is one-command build/JIT warmup and optional real-route
+   ingestion; runtime counters remain a cluster-side evidence gap rather than
+   a locally inferred value.
 
 Pinned runtime for accepted commands:
 

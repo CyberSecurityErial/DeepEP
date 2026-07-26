@@ -2,11 +2,18 @@
 
 import copy
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 import unittest
+from unittest import mock
+
+import torch
+
+import run_rail_balance_hybrid_multinode as multinode_runner
 
 from rail_balance_validation_common import (
     CANONICAL_CASES,
@@ -497,6 +504,26 @@ class ValidationBundleTest(unittest.TestCase):
         self.assertFalse(force["runtime"]["completed"])
         self.assertEqual(force["evidence_label"], "REAL_HYBRID_RUNTIME_UNTESTED")
 
+    def test_proxy_demand_is_independent_of_channel_striping(self):
+        proxy_required = []
+        for num_channels in (1, 2, 8):
+            bundle = build_validation_bundle(
+                run_id=f"channel-{num_channels}",
+                case="one_hot",
+                modes=("force",),
+                num_scaleout_ranks=3,
+                num_scaleup_ranks=4,
+                num_tokens_per_rank=8,
+                num_topk=4,
+                num_experts=48,
+                hidden=256,
+                num_channels=num_channels,
+                proxy_slots_per_rank=64,
+            )
+            proxy_required.append(bundle["records"]["force"]["plan"]["proxy_required"])
+        self.assertEqual(proxy_required[0], proxy_required[1])
+        self.assertEqual(proxy_required[0], proxy_required[2])
+
     def test_bundle_metadata_is_strict(self):
         defaults = {
             "run_id": "bundle",
@@ -517,8 +544,11 @@ class ValidationBundleTest(unittest.TestCase):
             {"modes": ("auto",)},
             {"hidden": 0},
             {"hidden": True},
+            {"hidden": 255},
+            {"hidden": 257},
             {"payload_dtype": "fp8"},
             {"num_channels": 0},
+            {"num_channels": 1025},
             {"num_tokens_per_rank": 0},
             {"case": "capacity", "proxy_slots_per_rank": 64},
         )
@@ -528,6 +558,92 @@ class ValidationBundleTest(unittest.TestCase):
                 args.update(override)
                 with self.assertRaises(ValueError):
                     build_validation_bundle(**args)
+
+    def test_multinode_runner_preserves_the_truthful_runtime_boundary(self):
+        source = Path(__file__).with_name(
+            "run_rail_balance_hybrid_multinode.py"
+        ).read_text()
+        self.assertIn('num_scaleout_ranks > 1', source)
+        self.assertIn('"off/force A/B"', source)
+        self.assertIn('"dispatch-plan rejected rank 0"', source)
+        self.assertIn('_C._rail_balance_force_available = original_capability', source)
+        self.assertNotIn('os.environ["EP_DISABLE_GIN"]', source)
+
+    def test_multinode_launch_environment_fails_closed(self):
+        valid = {
+            "WORLD_SIZE": "2",
+            "RANK": "1",
+            "MASTER_ADDR": "10.0.0.1",
+            "MASTER_PORT": "29500",
+        }
+        with mock.patch.dict(os.environ, valid, clear=True):
+            multinode_runner._validate_launch_environment()
+        invalid = (
+            {},
+            {**valid, "WORLD_SIZE": "1"},
+            {**valid, "RANK": "2"},
+            {**valid, "MASTER_ADDR": "127.0.0.1"},
+            {**valid, "MASTER_PORT": "0"},
+            {**valid, "EP_DISABLE_GIN": "1"},
+        )
+        for environment in invalid:
+            with self.subTest(environment=environment):
+                with mock.patch.dict(os.environ, environment, clear=True):
+                    with self.assertRaises(ValueError):
+                        multinode_runner._validate_launch_environment()
+
+    def test_watchdog_kills_group_even_when_spawn_leader_exits(self):
+        process = mock.Mock(pid=12345)
+        process.wait.return_value = 1
+        with mock.patch.object(os, "killpg") as killpg:
+            multinode_runner._terminate_process_group(process)
+        self.assertEqual(
+            killpg.call_args_list,
+            [mock.call(12345, signal.SIGTERM), mock.call(12345, signal.SIGKILL)],
+        )
+        self.assertEqual(process.wait.call_count, 2)
+
+    def test_multinode_runner_uses_unique_exact_weights(self):
+        routes = [
+            [[0, 1], [2, 3]],
+            [[4, 5], [6, 7]],
+        ]
+        x, topk_idx, topk_weights = multinode_runner._make_input(
+            rank=1,
+            routes=routes,
+            num_tokens=2,
+            hidden=256,
+            device=torch.device("cpu"),
+            topk_dtype=torch.int64,
+        )
+        self.assertEqual(tuple(x.shape), (2, 256))
+        self.assertTrue(torch.equal(topk_idx, torch.tensor(routes[1])))
+        self.assertTrue(torch.equal(
+            topk_weights,
+            torch.tensor([[5.0, 6.0], [7.0, 8.0]]),
+        ))
+        self.assertEqual(torch.unique(topk_weights).numel(), 4)
+
+    def test_runtime_record_does_not_claim_unavailable_counters(self):
+        record = new_result_record(
+            run_id="runtime-record",
+            case="one_hot",
+            mode="force",
+            topology={"world_size": 8},
+            config={"hidden": 256},
+        )
+        multinode_runner._mark_completed(record, {
+            "global_digest": "abc",
+            "rank_digests": ["a", "b"],
+        })
+        self.assertEqual(
+            record["evidence_label"],
+            "REAL_HYBRID_D_GT_1_CORRECTNESS_VALIDATED_COUNTERS_UNAVAILABLE",
+        )
+        self.assertTrue(record["runtime"]["completed"])
+        self.assertIsNone(record["runtime"]["wait_cycles"])
+        self.assertIsNone(record["runtime"]["qp_utilization"])
+        self.assertIsNone(record["runtime"]["nic_bytes"])
 
     def test_cli_emits_stable_json_bundle(self):
         script = Path(__file__).with_name("run_rail_balance_validation_bundle.py")
