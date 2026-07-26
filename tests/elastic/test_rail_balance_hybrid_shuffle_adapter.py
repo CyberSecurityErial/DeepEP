@@ -131,12 +131,13 @@ def main() -> None:
     retained_stage = kernel_source.index(
         "get_retained_rail_staging_layout(", retained_mask)
     moved_loop = kernel_source.index("while (moved_mask != 0)", retained_stage)
-    moved_generation = kernel_source.index(
-        "get_linked_list_idx_ptr()[1] = invocation_key", moved_loop)
-    assert retained_mask < retained_stage < moved_loop < moved_generation
+    assert retained_mask < retained_stage < moved_loop
     retained_body = kernel_source[retained_stage:moved_loop]
     assert "ptx::tma_store_fence();" in retained_body
     assert "ptx::tma_store_global_visibility_fence();" in retained_body
+    assert "get_linked_list_idx_ptr()[0] = proxy_slot" not in kernel_source
+    assert "get_linked_list_idx_ptr()[1] = invocation_key" not in kernel_source
+    assert "get_linked_list_idx_ptr()[2]" not in kernel_source
 
     print("PASS C080-H1b prepared source-shuffle raw submit")
 

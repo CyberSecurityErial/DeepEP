@@ -194,6 +194,8 @@ def _run_case(name: str) -> None:
     final_tail = header.index("const auto signaled_tail =", proxy_put)
     assert retained_threshold < retained_staging < proxy_begin < proxy_loop
     assert proxy_loop < remote_slot < proxy_acquire < proxy_put < final_tail
+    assert "RB_PROXY_BAD" not in header
+    assert "embedded_proxy" not in header
     assert "ncclGinOptFlagsAggregateRequests" not in header[
         proxy_put:final_tail
     ]

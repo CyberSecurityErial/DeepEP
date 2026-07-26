@@ -271,21 +271,6 @@ void rail_balance_hybrid_source_shuffle_impl(
             const int egress = ptx::exchange(resolution.egress, source_lane);
             const int proxy_slot =
                 ptx::exchange(resolution.proxy_slot, source_lane);
-            const int remote_slot =
-                ptx::exchange(resolution.remote_slot, source_lane);
-
-            if (lane == 0)
-                staged_token.get_linked_list_idx_ptr()[0] = proxy_slot;
-            if constexpr (kNumTopk > 1) {
-                if (lane == 1)
-                    staged_token.get_linked_list_idx_ptr()[1] = invocation_key;
-            }
-            if constexpr (kNumTopk > 2) {
-                if (lane == 2)
-                    staged_token.get_linked_list_idx_ptr()[2] =
-                        remote_slot;
-            }
-            __syncwarp();
             ptx::tma_store_fence();
             __syncwarp();
 
