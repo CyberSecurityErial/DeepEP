@@ -224,9 +224,9 @@ def _run_case(name: str) -> None:
     assert proxy_snapshot < linked_list_overwrite < metadata_snapshot
 
     # Moved copies change the source-rank buffer that owns a token. The
-    # epilogue prefix must therefore be rebuilt from sender-owned dense counts
-    # frozen through Tag1. Counters are cleared after the next Tag0 so slot
-    # allocation starts from zero without racing the preceding peer snapshot.
+    # epilogue prefix must therefore be rebuilt from channel counts published
+    # after their linked-list tails. The target waits for every channel credit
+    # before consuming the reduced count.
     counter_clear = header.index(
         "ptx::st_relaxed_sys(\n"
         "            workspace_layout.get_scaleup_atomic_sender_counter()"
@@ -239,8 +239,8 @@ def _run_case(name: str) -> None:
         "ptx::st_relaxed_sys(scaleup_count_mailbox + thread_idx, int64_t(0))")
     mailbox_publish = header.index(
         "ptx::red_add_rel_sys(\n"
-        "            peer_mailbox,\n"
-        "            math::pack2<int, int64_t>(1, final_count));",
+        "                        peer_mailbox,\n"
+        "                        math::pack2<int, int64_t>(",
         role_begin,
     )
     mailbox_snapshot = header.index(
@@ -254,8 +254,8 @@ def _run_case(name: str) -> None:
     tail_completion = header.index(
         "ptx::fence_acq_rel_sys();", tail_publish)
     assert (
-        mailbox_reset < role_begin < tail_publish < tail_completion <
-        mailbox_publish < first_arrival_barrier < mailbox_snapshot
+        mailbox_reset < role_begin < tail_publish < mailbox_publish <
+        tail_completion < first_arrival_barrier < mailbox_snapshot
     )
     prefix_write = header.index(
         "ptx::st_release_sys(\n"
@@ -268,9 +268,8 @@ def _run_case(name: str) -> None:
         first_arrival_barrier < mailbox_snapshot < prefix_write <
         epilogue_trigger
     )
-    assert "const int final_count = atomicAdd(" in header
     assert "DeepEP rail count timeout" in header
-    assert "static_cast<uint32_t>(published_count) == 1u" in header
+    assert "static_cast<uint64_t>(kNumChannels)" in header
     assert "kRailBalanceHybridDispatchCountTag" not in header
 
     # After the opening Tag0 epoch boundary the release specialization trusts

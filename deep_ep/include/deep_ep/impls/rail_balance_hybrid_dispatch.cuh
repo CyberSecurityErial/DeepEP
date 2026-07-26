@@ -923,6 +923,15 @@ rail_balance_hybrid_dispatch_impl(
                     ptx::st_release_sys(
                         gin.get_sym_ptr<ncclTeamTagLsa>(tail_ptr, j),
                         transform_linked_list_idx(stored_scaleup_send_counters[i]));
+                    auto peer_mailbox = gin.get_sym_ptr<ncclTeamTagLsa>(
+                        scaleup_count_mailbox + scaleup_rank_idx, j);
+                    // The release reduction is ordered after this channel's
+                    // tail store. The target waits for all channel credits,
+                    // so Tag1 cannot expose an incomplete combine list.
+                    ptx::red_add_rel_sys(
+                        peer_mailbox,
+                        math::pack2<int, int64_t>(
+                            stored_scaleup_send_counters[i], 1));
                 }
             }
             // The NVLink barrier signal is issued by SM 0 after the grid
@@ -938,23 +947,8 @@ rail_balance_hybrid_dispatch_impl(
         __syncwarp();
     }
 
-    // Wait until forward warps have finalized every local destination count.
+    // Wait until every warp has issued its channel completion credit.
     cooperative_groups::this_grid().sync();
-    if (sm_idx == 0 and thread_idx < kNumScaleupRanks) {
-        const int final_count = atomicAdd(
-            workspace_layout.get_scaleup_atomic_sender_counter() +
-                thread_idx,
-            0);
-        auto peer_mailbox = gin.get_sym_ptr<ncclTeamTagLsa>(
-            scaleup_count_mailbox + scaleup_rank_idx,
-            thread_idx);
-        // Use the same release reduction path as the proven NVLink barrier;
-        // ordinary peer stores are not guaranteed to reach the target before
-        // the subsequent barrier signal on this platform.
-        ptx::red_add_rel_sys(
-            peer_mailbox,
-            math::pack2<int, int64_t>(1, final_count));
-    }
 
     // Scale-up barrier to ensure data arrival
     // As scale-out tokens have already been consumed by forwarders, no need to do scale-out barrier again
@@ -973,7 +967,8 @@ rail_balance_hybrid_dispatch_impl(
             [&](const bool& is_last_check) {
                 published_count = ptx::ld_acquire_sys<int64_t>(
                     scaleup_count_mailbox + lane_idx);
-                if (static_cast<uint32_t>(published_count) == 1u)
+                if ((static_cast<uint64_t>(published_count) >> 32ull) ==
+                    static_cast<uint64_t>(kNumChannels))
                     return true;
                 if (is_last_check)
                     printf("DeepEP rail count timeout, scale-out: %d, "
@@ -984,7 +979,7 @@ rail_balance_hybrid_dispatch_impl(
             });
         if (lane_idx < kNumScaleupRanks)
             actual_count = static_cast<int>(
-                static_cast<uint64_t>(published_count) >> 32ull);
+                static_cast<uint32_t>(published_count));
         const int actual_prefix =
             ptx::warp_inclusive_sum(actual_count, lane_idx);
         if (lane_idx < kNumScaleupRanks)
