@@ -238,6 +238,11 @@ def _run_case(name: str) -> None:
         "workspace_layout.get_channel_scaleup_tail_ptr(",
         first_arrival_barrier,
     )
+    tail_publish = header.index(
+        "ptx::st_release_sys(\n"
+        "                        gin.get_sym_ptr<ncclTeamTagLsa>(tail_ptr, j)"
+    )
+    assert tail_publish < first_arrival_barrier < peer_count_snapshot
     prefix_write = header.index(
         "ptx::st_release_sys(\n"
         "                psum_num_recv_tokens_per_scaleup_rank + lane_idx",
