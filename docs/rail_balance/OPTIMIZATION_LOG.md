@@ -2079,3 +2079,23 @@ unshuffle are prepared only by the live force buffer.  Therefore the real
 cluster sequence is fixed: run `balanced` first with final parameters, then run
 the skew and capacity cases.  No build time, compile time, register count, or
 cache hit is interpreted as an end-to-end speedup.
+
+## Scope decision O084 — remove duplicated ABI facts before performance edits
+
+The force arena prefix and forward-metadata layout were repeated across host,
+dispatch, and combine.  This was a correctness and auditability risk, not a
+measured bottleneck.  Commit `8e8df41` centralizes them as compile-time facts;
+the generated representative kernels retain their prior register, stack, and
+zero-spill resources.
+
+No timing claim is made.  The remaining hot-path candidates are deliberately
+separate experiments:
+
+1. cache per-geometry prepared kernels and fixed plan storage;
+2. fuse moved-token staging into the owner pass so hidden data is read once and
+   proxy Gin requests can begin earlier;
+3. merge or hoist dynamic gates without weakening collective fail-close.
+
+These changes can alter overlap, lifetime, and failure semantics.  Each must
+start from an unprofiled baseline and an Nsys critical path; NCU is used only
+for a kernel already shown to contribute exposed time.

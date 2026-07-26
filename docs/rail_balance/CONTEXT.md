@@ -1081,3 +1081,18 @@ Out of scope until evidence expands the project:
   `real_gin_runtime=false` and `full_force_runtime_cache=false`.  The exact
   count/plan/prefix/barrier/shuffle/dispatch/epilogue/combine/unshuffle cache is
   first prepared only by a live D>1 `balanced` round trip with final parameters.
+
+## Post-C105 hot-path simplicity audit (2026-07-26)
+
+- The audit found no silent fallback and confirmed both force capabilities are
+  still disabled.  It did find one correctness-maintenance risk: the proxy
+  arena prefix and force forward-metadata width were repeated in host and
+  device code.
+- Commit `8e8df41` makes `rail_balance_hybrid_layout.cuh` the only fact source
+  for the arena prefix and the force metadata fields/width.  Host allocation,
+  manifests, dispatch writes, combine reads, and codegen probes now share it.
+- Three performance changes remain hypotheses, not permission to edit: reuse
+  prepared kernels and fixed plan storage, avoid reading moved payload twice
+  while issuing proxy traffic earlier, and reduce per-round synchronization.
+  Each needs an isolated profiler-free/nsys/ncu experiment before production
+  complexity is accepted.

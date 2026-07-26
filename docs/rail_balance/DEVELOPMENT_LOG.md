@@ -6023,3 +6023,39 @@ main force/legacy-probe dispatch and combine kernels.  On the cluster, the
 first final-parameter case must be `balanced`; its live force prepare builds the
 complete planner/barrier/shuffle/epilogue/return chain before skew cases reuse
 the same cache.
+
+## 2026-07-26 — D104: make the force Hybrid ABI a single compile-time fact
+
+A production hot-path audit found one locally actionable High: the proxy arena
+prefix was recomputed inside dispatch, while the force `3+2K` forward-metadata
+width was repeated by host allocation, dispatch, combine, and codegen probes.
+Commit `8e8df41` moved the fixed fields, metadata-width helper, channel-count
+prefix, and proxy-dispatch offset into
+`rail_balance_hybrid_layout.cuh`.  All consumers now use those `constexpr`
+facts.  ABI values remain 0/1/2/3 and the same aligned proxy offset; no branch,
+atomic, allocation, or device load was added.
+
+Validation:
+
+- complete extension rebuild for SM90;
+- Hybrid layout 5/5, public API 9/9, constructor preflight 9/9;
+- public fake lifecycle, D1 prepare/fail-close recovery, legacy goldens 4/4;
+- C105 contract 23/23;
+- full dispatch codegen: four valid geometries plus rejection 8/8;
+- full combine codegen: six valid geometries plus rejection 8/8;
+- representative dispatch remains REG64/STACK96/SPILL0;
+- representative combine remains REG216/STACK96/SPILL0;
+- independent patch audit: Blocker0/High0.
+
+Two non-code failures are retained.  The first direct test launch omitted
+`PYTHONPATH=$PWD` and raised `ModuleNotFoundError: deep_ep`; the corrected
+command passed.  Pyrefly cannot resolve the repository's native
+`deep_ep._C` module in the pre-existing dispatch-prepare test and reports one
+`missing-import`; Ruff and py_compile pass, and Pyrefly reports zero errors for
+the two changed codegen tests.  No stub or suppression was added merely to hide
+that tool boundary.
+
+The same audit identified three production-performance gaps: per-invocation
+allocation/prepared-object construction, a second read of moved payload plus
+late proxy issue, and multiple host/WORLD synchronization gates.  They do not
+invalidate the correctness prototype and were not changed without measurement.
