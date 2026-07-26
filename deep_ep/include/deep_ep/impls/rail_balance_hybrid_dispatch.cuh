@@ -531,14 +531,19 @@ rail_balance_hybrid_dispatch_impl(
                  proxy_slot < proxy_end; ++proxy_slot) {
                 const int remote_slot =
                     retained_count + proxy_slot - proxy_begin;
-                gin.put<ncclTeamTagRail>(
-                    scaleout_recv_buffer.get_token_buffer(remote_slot)
-                        .get_base_ptr(),
+                const auto proxy_token = layout::TokenLayout(
+                    kNumHiddenBytes, 0, kNumTopk, true,
                     math::advance_ptr(
                         rail_balance_arena,
                         rail_balance::kHybridProxyDispatchOffsetBytes +
                             static_cast<int64_t>(proxy_slot) *
-                                token_layout.get_num_bytes<false>()),
+                                token_layout.get_num_bytes<false>()));
+                (void)ptx::ld_acquire_sys<int>(
+                    proxy_token.get_linked_list_idx_ptr());
+                gin.put<ncclTeamTagRail>(
+                    scaleout_recv_buffer.get_token_buffer(remote_slot)
+                        .get_base_ptr(),
+                    proxy_token.get_base_ptr(),
                     token_layout.get_num_bytes<false>(), lane_idx,
                     ncclGinOptFlagsAggregateRequests);
             }

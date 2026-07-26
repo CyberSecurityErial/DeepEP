@@ -244,6 +244,14 @@ void rail_balance_hybrid_source_shuffle_impl(
             }
             ptx::tma_store_commit();
             ptx::tma_store_wait();
+            // Publish the completed async-proxy copy through a field already
+            // carried by every moved token.  The egress acquires this exact
+            // word before allowing GIN to consume the proxy slot.
+            if (ptx::elect_one_sync())
+                ptx::st_release_sys(
+                    peer_layout.get_proxy_dispatch_layout(proxy_slot)
+                        .get_linked_list_idx_ptr(),
+                    proxy_slot);
             __syncwarp();
             moved_mask &= moved_mask - 1;
         }

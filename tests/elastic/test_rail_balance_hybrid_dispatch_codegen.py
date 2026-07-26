@@ -185,9 +185,12 @@ def _run_case(name: str) -> None:
     proxy_loop = header.index("for (int proxy_slot = proxy_begin;")
     remote_slot = header.index("const int remote_slot =", proxy_loop)
     proxy_put = header.index("gin.put<ncclTeamTagRail>(", proxy_loop)
+    proxy_acquire = header.index(
+        "(void)ptx::ld_acquire_sys<int>(", proxy_loop
+    )
     final_tail = header.index("const auto signaled_tail =", proxy_put)
     assert retained_threshold < proxy_begin < proxy_loop
-    assert proxy_loop < remote_slot < proxy_put < final_tail
+    assert proxy_loop < remote_slot < proxy_acquire < proxy_put < final_tail
     assert "retained_count + proxy_slot - proxy_begin" in header[
         remote_slot:proxy_put]
 

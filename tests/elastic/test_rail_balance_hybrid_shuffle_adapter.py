@@ -117,10 +117,11 @@ def main() -> None:
     # word per proxy copy.  Completed TMA peer writes must cross from the
     # async proxy into the generic-global domain before that barrier signals.
     wait = kernel_source.index("ptx::tma_store_wait();")
+    slot_release = kernel_source.index("ptx::st_release_sys(", wait)
     visibility = kernel_source.index(
-        "ptx::tma_store_global_visibility_fence();", wait
+        "ptx::tma_store_global_visibility_fence();", slot_release
     )
-    assert wait < visibility
+    assert wait < slot_release < visibility
     assert 'asm volatile("fence.proxy.async.global;"' in ptx_source
 
     print("PASS C080-H1b prepared source-shuffle raw submit")
