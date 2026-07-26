@@ -877,21 +877,6 @@ rail_balance_hybrid_dispatch_impl(
         __syncwarp();
     }
 
-    // Device-scope atomic increments are not directly publishable to an LSA
-    // peer.  After every forward warp has finished, have one local block
-    // republish the final counters with system release semantics.
-    cooperative_groups::this_grid().sync();
-    if (sm_idx == 0 and thread_idx < kNumScaleupRanks) {
-        const auto counter =
-            workspace_layout.get_scaleup_atomic_sender_counter() + thread_idx;
-        // The increments are issued by forward warps on every SM. A plain
-        // load here may reuse an SM-local L1 line which predates those atomics,
-        // even though the grid barrier has completed. Bypass that stale line
-        // before publishing the dense length to LSA peers.
-        const int final_count = ptx::ld_acquire_sys<int>(counter);
-        ptx::st_release_sys(counter, final_count);
-    }
-
     // Scale-up barrier to ensure data arrival
     // As scale-out tokens have already been consumed by forwarders, no need to do scale-out barrier again
     comm::gpu_barrier<true, kNumScaleoutRanks, kNumScaleupRanks,
@@ -899,18 +884,30 @@ rail_balance_hybrid_dispatch_impl(
         gin, workspace_layout, scaleout_rank_idx, scaleup_rank_idx, sm_idx, thread_idx, /* do not scale-out */ false, true);
 
     // Notify counted tokens by their original owner rail, but source shuffle
-    // changes the rank-buffer owner for moved copies.  Each egress's atomic
-    // sender counter is the authoritative dense length of its rank buffer on
-    // every target GPU.  Rebuild the rank prefix from those peer counters
-    // after all LSA forward stores have arrived.
+    // changes the rank-buffer owner for moved copies. Each forward channel
+    // publishes its final encoded tail to the target GPU before Tag1. Rebuild
+    // the rank prefix from those local tails instead of remotely snapshotting
+    // sender atomics, whose reset/publication can race across kernel epochs.
     if (sm_idx == 0 and warp_idx == 0) {
         int actual_count = 0;
         if (lane_idx < kNumScaleupRanks) {
-            const auto peer_counter = gin.get_sym_ptr<ncclTeamTagLsa>(
-                workspace_layout.get_scaleup_atomic_sender_counter() +
-                    scaleup_rank_idx,
-                lane_idx);
-            actual_count = ptx::ld_acquire_sys<int>(peer_counter);
+            constexpr int kNumTokensInLinkedList =
+                kNumMaxTokensPerChannel * kNumScaleoutRanks + 1;
+            #pragma unroll
+            for (int channel_idx = 0; channel_idx < kNumChannels;
+                 ++ channel_idx) {
+                const int encoded_tail = ptx::ld_acquire_sys<int>(
+                    workspace_layout.get_channel_scaleup_tail_ptr(
+                        channel_idx, lane_idx));
+                const int encoded_base =
+                    channel_idx *
+                        (kNumTokensInLinkedList * kNumScaleupRanks) +
+                    lane_idx;
+                const int encoded_count = encoded_tail - encoded_base;
+                EP_DEVICE_ASSERT(encoded_count >= 0 and
+                                 encoded_count % kNumScaleupRanks == 0);
+                actual_count += encoded_count / kNumScaleupRanks;
+            }
         }
         const int actual_prefix =
             ptx::warp_inclusive_sum(actual_count, lane_idx);
@@ -924,9 +921,7 @@ rail_balance_hybrid_dispatch_impl(
         }
     }
 
-    // Order the local prefix write before any SM triggers the epilogue. Peer
-    // counters remain immutable for the rest of this epoch, so no second LSA
-    // barrier is required.
+    // Order the local prefix write before any SM triggers the epilogue.
     cooperative_groups::this_grid().sync();
 
     // Trigger the copy epilogue kernel
