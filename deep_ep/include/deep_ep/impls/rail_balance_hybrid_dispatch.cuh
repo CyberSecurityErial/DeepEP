@@ -521,15 +521,43 @@ rail_balance_hybrid_dispatch_impl(
             __syncwarp();
         }
 
-        // Consume the descriptor-free moved groups owned by this egress.  The
-        // source slot p and destination slot are implied by static prefixes;
-        // no data-path atomic, ready word, or per-copy descriptor is needed.
-        bool issued_moved_put = false;
+        // Retained puts source this local send buffer. Complete them before
+        // reusing token slots as NIC-visible staging for moved proxy payloads.
         if (lane_idx < kNumScaleoutRanks and
             lane_idx != scaleout_rank_idx) {
+            EP_STATIC_ASSERT(
+                sizeof(ncclGinRequest_t) ==
+                    layout::WorkspaceLayout::kGinRequestBytes,
+                "Unexpected GIN request size");
+            const auto retained_put_request =
+                static_cast<ncclGinRequest_t*>(
+                    workspace_layout.get_scaleout_channel_gin_request_ptr(
+                        channel_idx, lane_idx));
+            gin.flush_async<ncclTeamTagRail, ncclCoopThread>(
+                lane_idx, retained_put_request);
+            gin.wait(*retained_put_request);
+        }
+        __syncwarp();
+
+        // Consume the descriptor-free moved groups owned by this egress. NIC
+        // reads use the legacy local send buffer rather than the peer-written
+        // arena directly; the cooperative copy also establishes system
+        // visibility before posting the Rail put.
+        const auto arena_layout = rail_balance::HybridArenaLayout(
+            kNumHiddenBytes / static_cast<int>(sizeof(nv_bfloat16)),
+            kNumTopk, kProxyCapacity, rail_balance_arena);
+        const int invocation_key = ptx::ld_acquire_sys<int>(
+            &arena_layout.get_control_ptr()->invocation_id);
+        const int token_bytes = token_layout.get_num_bytes<false>();
+        EP_DEVICE_ASSERT(token_bytes % sizeof(int4) == 0);
+        for (int dst_scaleout_rank_idx = 0;
+             dst_scaleout_rank_idx < kNumScaleoutRanks;
+             ++dst_scaleout_rank_idx) {
+            if (dst_scaleout_rank_idx == scaleout_rank_idx)
+                continue;
             const auto plan_offset =
                 rail_balance::hybrid_plan_detail::gcd_offset(
-                    scaleup_rank_idx, channel_idx, lane_idx,
+                    scaleup_rank_idx, channel_idx, dst_scaleout_rank_idx,
                     kNumChannels, kNumScaleoutRanks);
             const int retained_count =
                 __ldg(rail_balance_retained + plan_offset);
@@ -537,12 +565,6 @@ rail_balance_hybrid_dispatch_impl(
             const int proxy_begin =
                 __ldg(rail_balance_group_prefix + plan_offset);
             const int proxy_end = proxy_begin + moved_count;
-            const auto arena_layout = rail_balance::HybridArenaLayout(
-                kNumHiddenBytes / static_cast<int>(sizeof(nv_bfloat16)),
-                kNumTopk, kProxyCapacity, rail_balance_arena);
-            const int invocation_key = ptx::ld_acquire_sys<int>(
-                &arena_layout.get_control_ptr()->invocation_id);
-
             #pragma unroll 1
             for (int proxy_slot = proxy_begin;
                  proxy_slot < proxy_end; ++proxy_slot) {
@@ -588,33 +610,38 @@ rail_balance_hybrid_dispatch_impl(
                                *proxy_token.get_topk_idx_ptr());
                     }
                 }
-                gin.put<ncclTeamTagRail>(
+                EP_DEVICE_ASSERT(proxy_slot < kNumMaxTokensPerRank);
+                const auto staged_token =
+                    scaleout_send_buffer.get_token_buffer(proxy_slot);
+                const auto src = static_cast<const int4*>(
+                    proxy_token.get_base_ptr());
+                const auto dst = static_cast<int4*>(
+                    staged_token.get_base_ptr());
+                #pragma unroll 1
+                for (int i = lane_idx; i < token_bytes / sizeof(int4);
+                     i += 32)
+                    dst[i] = __ldg(src + i);
+                __syncwarp();
+                __threadfence_system();
+                __syncwarp();
+                if (ptx::elect_one_sync())
+                    gin.put<ncclTeamTagRail>(
                     scaleout_recv_buffer.get_token_buffer(remote_slot)
                         .get_base_ptr(),
-                    proxy_token.get_base_ptr(),
-                    token_layout.get_num_bytes<false>(), lane_idx);
-                issued_moved_put = true;
+                    staged_token.get_base_ptr(), token_bytes,
+                    dst_scaleout_rank_idx);
             }
-        }
-        __syncwarp();
-
-        // A remote atomic release does not order preceding GIN puts on every
-        // Rail QP.  Complete the moved-copy stream explicitly before publishing
-        // the final tail consumed by the remote forwarding warp.
-        if (issued_moved_put) {
-            EP_STATIC_ASSERT(
-                sizeof(ncclGinRequest_t) ==
-                    layout::WorkspaceLayout::kGinRequestBytes,
-                "Unexpected GIN request size");
             const auto moved_put_request =
                 static_cast<ncclGinRequest_t*>(
                     workspace_layout.get_scaleout_channel_gin_request_ptr(
-                        channel_idx, lane_idx));
-            gin.flush_async<ncclTeamTagRail, ncclCoopThread>(
-                lane_idx, moved_put_request);
-            gin.wait(*moved_put_request);
+                        channel_idx, dst_scaleout_rank_idx));
+            if (ptx::elect_one_sync()) {
+                gin.flush_async<ncclTeamTagRail, ncclCoopThread>(
+                    dst_scaleout_rank_idx, moved_put_request);
+                gin.wait(*moved_put_request);
+            }
+            __syncwarp();
         }
-        __syncwarp();
 
         // Tag0 begins a fresh dispatch epoch and the legacy forwarder clears
         // every signaled tail before leaving the preceding epoch. Therefore
