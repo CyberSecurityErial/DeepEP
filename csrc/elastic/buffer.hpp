@@ -1122,11 +1122,18 @@ public:
         const c10::cuda::CUDAGuard device_guard(device_index);
 
         // Freeze the complete raw submission ABI before poisoning ownership.
-        // From Invalid through the two adjacent submissions there may be no
+        // From Invalid through the three adjacent submissions there may be no
         // Tensor access, validation, allocation, JIT, status readback, or
-        // synchronization. Both launch adapters are still allowed to throw;
+        // host synchronization. The local barrier is required because source
+        // shuffle publishes into peer arenas: stream ordering protects the
+        // local producer only, while an egress rank may otherwise consume a
+        // peer proxy slot before its owner has finished writing it. All three
+        // launch adapters are still allowed to throw;
         // in that case the transaction remains permanently Invalid.
         const auto& prepared_source = *pending.source_shuffle;
+        const auto& prepared_local_barrier = pending.local_barrier;
+        const auto local_barrier_launch_args =
+            pending.local_barrier_launch_args;
         const auto& prepared_dispatch = *bundle.main_dispatch;
         const auto raw = bundle.raw;
         const auto nccl_dev_comm = nccl_context->dev_comm;
@@ -1142,6 +1149,7 @@ public:
         const int proxy_capacity_per_egress =
             bundle.proxy_capacity_per_egress;
         const int num_tokens = bundle.num_tokens;
+        const int64_t timeout_cycles = num_gpu_timeout_cycles;
 
         pending.state = RailBalanceHybridPlanState::Invalid;
         submit_prepared_rail_balance_hybrid_source_shuffle(
@@ -1157,6 +1165,10 @@ public:
             num_rails, scaleup_rank_idx,
             num_max_tokens_per_rank, rank_idx,
             proxy_capacity_per_egress, comm_stream);
+        submit_prepared_rail_balance_hybrid_local_barrier(
+            prepared_local_barrier, local_barrier_launch_args,
+            nccl_dev_comm, nccl_window, raw.workspace,
+            num_rails, scaleup_rank_idx, timeout_cycles, comm_stream);
         launch_prepared_rail_balance_hybrid_dispatch(
             prepared_dispatch,
             raw.x, nullptr,

@@ -102,8 +102,9 @@ def _assert_commit_contract() -> None:
 
     # Every validation and raw-ABI capture must finish before Invalid.  From
     # Invalid onward, either enqueue may throw and the transaction must remain
-    # permanently poisoned.  The two submissions are adjacent; successful
-    # publication consists only of shuffled=true followed by DispatchLive.
+    # permanently poisoned.  Source publication, its cross-rank visibility
+    # barrier, and dispatch are adjacent; successful publication consists only
+    # of shuffled=true followed by DispatchLive.
     invalid = "pending.state = RailBalanceHybridPlanState::Invalid;"
     shuffled = "pending.shuffled = true;"
     live = "pending.state = RailBalanceHybridPlanState::DispatchLive;"
@@ -116,6 +117,8 @@ def _assert_commit_contract() -> None:
     assert guard_begin < invalid_begin
     source_begin, source_end = _call_span(
         code, "submit_prepared_rail_balance_hybrid_source_shuffle")
+    barrier_begin, barrier_end = _call_span(
+        code, "submit_prepared_rail_balance_hybrid_local_barrier")
     dispatch_begin, dispatch_end = _call_span(
         code, "launch_prepared_rail_balance_hybrid_dispatch")
     shuffled_begin = code.index(shuffled)
@@ -124,14 +127,17 @@ def _assert_commit_contract() -> None:
     live_end = live_begin + len(live)
 
     assert code[invalid_end:source_begin].strip() == ""
-    assert code[source_end:dispatch_begin].strip() == ""
+    assert code[source_end:barrier_begin].strip() == ""
+    assert code[barrier_end:dispatch_begin].strip() == ""
     assert code[dispatch_end:shuffled_begin].strip() == ""
     assert code[shuffled_end:live_begin].strip() == ""
     assert code[live_end:].strip() == "}"
     critical = code[invalid_begin:live_end]
-    assert critical.count(";") == 5
+    assert critical.count(";") == 6
     assert critical.count(
         "submit_prepared_rail_balance_hybrid_source_shuffle(") == 1
+    assert critical.count(
+        "submit_prepared_rail_balance_hybrid_local_barrier(") == 1
     assert critical.count(
         "launch_prepared_rail_balance_hybrid_dispatch(") == 1
 
@@ -154,6 +160,13 @@ def _assert_commit_contract() -> None:
         "raw.group_prefix", "raw.proxy_required", "raw.status",
     ):
         assert field in source_call, field
+    barrier_call = code[barrier_begin:barrier_end]
+    for field in (
+        "prepared_local_barrier", "local_barrier_launch_args",
+        "nccl_dev_comm", "nccl_window", "raw.workspace", "num_rails",
+        "scaleup_rank_idx", "timeout_cycles", "comm_stream",
+    ):
+        assert field in barrier_call, field
     dispatch_call = code[dispatch_begin:dispatch_end]
     for field in (
         "raw.x", "raw.topk_idx", "raw.topk_weights",
