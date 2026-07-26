@@ -235,6 +235,11 @@ def _run_case(name: str) -> None:
     assert counter_clear < role_begin
     first_arrival_barrier = header.index(
         "comm::kHybridDispatchTag1", role_begin)
+    counter_publish = header.index(
+        "atomicAdd_system(\n"
+        "            workspace_layout.get_scaleup_atomic_sender_counter()",
+        role_begin,
+    )
     peer_count_snapshot = header.index(
         "const auto peer_count = gin.get_sym_ptr<ncclTeamTagLsa>(",
         first_arrival_barrier,
@@ -246,7 +251,8 @@ def _run_case(name: str) -> None:
     tail_completion = header.index(
         "ptx::fence_acq_rel_sys();", tail_publish)
     assert (
-        tail_publish < tail_completion < first_arrival_barrier <
+        tail_publish < tail_completion < counter_publish <
+        first_arrival_barrier <
         peer_count_snapshot
     )
     prefix_write = header.index(

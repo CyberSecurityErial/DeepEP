@@ -934,6 +934,11 @@ rail_balance_hybrid_dispatch_impl(
     // per-peer values stay frozen through Tag1 and are reset only at the next
     // Tag0, so receivers can snapshot them directly after the barrier.
     cooperative_groups::this_grid().sync();
+    if (sm_idx == 0 and thread_idx < kNumScaleupRanks)
+        atomicAdd_system(
+            workspace_layout.get_scaleup_atomic_sender_counter() +
+                thread_idx,
+            0);
 
     // Scale-up barrier to ensure data arrival
     // As scale-out tokens have already been consumed by forwarders, no need to do scale-out barrier again
