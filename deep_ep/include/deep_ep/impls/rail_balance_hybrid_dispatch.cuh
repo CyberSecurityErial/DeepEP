@@ -578,10 +578,17 @@ rail_balance_hybrid_dispatch_impl(
         // Rail QP.  Complete the moved-copy stream explicitly before publishing
         // the final tail consumed by the remote forwarding warp.
         if (issued_moved_put) {
-            ncclGinRequest_t moved_put_request;
+            EP_STATIC_ASSERT(
+                sizeof(ncclGinRequest_t) ==
+                    layout::WorkspaceLayout::kGinRequestBytes,
+                "Unexpected GIN request size");
+            const auto moved_put_request =
+                static_cast<ncclGinRequest_t*>(
+                    workspace_layout.get_scaleout_channel_gin_request_ptr(
+                        channel_idx, lane_idx));
             gin.flush_async<ncclTeamTagRail, ncclCoopThread>(
-                lane_idx, &moved_put_request);
-            gin.wait(moved_put_request);
+                lane_idx, moved_put_request);
+            gin.wait(*moved_put_request);
         }
         __syncwarp();
 

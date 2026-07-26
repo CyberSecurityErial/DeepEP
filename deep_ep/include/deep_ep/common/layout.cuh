@@ -20,6 +20,8 @@ struct WorkspaceLayout {
     static constexpr int kNumMaxExperts = 2048;
     static constexpr int kNumMaxExpertsPerRank = 256;
     static constexpr int kNumMaxInflightAGRS = 32;
+    static constexpr int kNumMaxScaleoutRanks = 32;
+    static constexpr int kGinRequestBytes = 16;
 
     static constexpr int64_t kNumBarrierSignalBytes = 16;
 
@@ -75,6 +77,11 @@ struct WorkspaceLayout {
 
         // AGRS signals
         num_bytes += (kNumMaxInflightAGRS + 1) * kNumMaxRanks * sizeof(int);
+
+        // Per-channel completion requests used to order source-shuffled Rail
+        // puts before their final remote tail publication.
+        num_bytes += kNumMaxChannels * kNumMaxScaleoutRanks *
+            kGinRequestBytes;
 
         return num_bytes;
     }
@@ -173,6 +180,17 @@ struct WorkspaceLayout {
         const auto base_ptr = math::advance_ptr<int>(
             get_agrs_recv_signal_ptr(0, 0), kNumMaxInflightAGRS * kNumMaxRanks * sizeof(int));
         return base_ptr + rank_idx;
+    }
+
+    __forceinline__ __device__ __host__ void*
+    get_scaleout_channel_gin_request_ptr(
+            const int& channel_idx, const int& scaleout_rank_idx) const {
+        const auto base_ptr = math::advance_ptr<uint8_t>(
+            get_agrs_session_signal_ptr(0),
+            kNumMaxRanks * sizeof(int));
+        return base_ptr +
+            (channel_idx * kNumMaxScaleoutRanks + scaleout_rank_idx) *
+                kGinRequestBytes;
     }
 };
 
