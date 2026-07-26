@@ -973,7 +973,7 @@ rail_balance_hybrid_dispatch_impl(
             [&](const bool& is_last_check) {
                 published_count = ptx::ld_acquire_sys<int64_t>(
                     scaleup_count_mailbox + lane_idx);
-                if (static_cast<uint64_t>(published_count) >> 32ull == 1)
+                if (static_cast<uint32_t>(published_count) == 1u)
                     return true;
                 if (is_last_check)
                     printf("DeepEP rail count timeout, scale-out: %d, "
@@ -983,7 +983,8 @@ rail_balance_hybrid_dispatch_impl(
                 return false;
             });
         if (lane_idx < kNumScaleupRanks)
-            actual_count = static_cast<int>(published_count);
+            actual_count = static_cast<int>(
+                static_cast<uint64_t>(published_count) >> 32ull);
         const int actual_prefix =
             ptx::warp_inclusive_sum(actual_count, lane_idx);
         if (lane_idx < kNumScaleupRanks)

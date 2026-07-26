@@ -270,6 +270,7 @@ def _run_case(name: str) -> None:
     )
     assert "const int final_count = atomicAdd(" in header
     assert "DeepEP rail count timeout" in header
+    assert "static_cast<uint32_t>(published_count) == 1u" in header
     assert "kRailBalanceHybridDispatchCountTag" not in header
 
     # After the opening Tag0 epoch boundary the release specialization trusts
