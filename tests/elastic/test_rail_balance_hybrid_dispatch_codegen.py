@@ -192,6 +192,8 @@ def _run_case(name: str) -> None:
     )
     final_tail = header.index("const auto signaled_tail =", proxy_put)
     assert retained_threshold < retained_flush < proxy_begin < proxy_loop
+    assert "if (stored_num_retained_puts > 0)" in header[
+        retained_threshold:retained_flush]
     assert (
         "gin.flush_async<ncclTeamTagRail, ncclCoopThread>(\n"
         "                lane_idx, retained_put_request);"

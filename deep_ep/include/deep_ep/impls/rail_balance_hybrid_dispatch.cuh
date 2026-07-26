@@ -388,6 +388,7 @@ rail_balance_hybrid_dispatch_impl(
         EP_STATIC_ASSERT(kNumScaleoutRanks <= 32,
                          "Invalid number of scale-out ranks");
         int stored_owner_tail = 0;
+        int stored_num_retained_puts = 0;
 
         // Preload next token
         const auto preload_next_token = [&](const int& token_idx) {
@@ -517,6 +518,7 @@ rail_balance_hybrid_dispatch_impl(
                         tma_buffer.get_num_bytes<false>(),
                         stored_dst_scaleout_rank_idx,
                         ncclGinOptFlagsAggregateRequests);
+                ++stored_num_retained_puts;
             }
             __syncwarp();
         }
@@ -526,7 +528,7 @@ rail_balance_hybrid_dispatch_impl(
         // thread-cooperative aggregation queue, so every remote-destination
         // lane must complete its own queue before proxy puts and the final tail
         // can make those receive slots visible to the forwarder.
-        if (lane_idx < kNumScaleoutRanks and lane_idx != scaleout_rank_idx) {
+        if (stored_num_retained_puts > 0) {
             const auto retained_put_request =
                 static_cast<ncclGinRequest_t*>(
                     workspace_layout.get_scaleout_channel_gin_request_ptr(
