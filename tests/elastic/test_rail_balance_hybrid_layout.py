@@ -111,13 +111,13 @@ def test_cpp_layout_matches_independent_formula_and_goldens():
     goldens = {
         (256, 1, 1):
             (0, 32, 32, 131072, 131136, 544,
-             131680, 544, 132224, 2097152),
+             132224, 544, 132768, 2097152),
         (1024, 4, 32):
             (0, 32, 32, 131072, 131232, 2112,
-             198816, 2080, 265376, 2097152),
+             266400, 2080, 332960, 2097152),
         (7168, 8, 32):
             (0, 32, 32, 131072, 131232, 14464,
-             594080, 14400, 1054880, 2097152),
+             1056928, 14400, 1517728, 2097152),
     }
     for arguments, expected in goldens.items():
         assert _reference_layout(*arguments) == expected
@@ -129,9 +129,9 @@ def test_proxy_capacity_is_per_egress_and_each_arena_has_pcap_slots():
     one = _device_layout(hidden, num_topk, 1)
     thirty_two = _device_layout(hidden, num_topk, 32)
     ready_growth = thirty_two[4] - one[4]
-    assert thirty_two[6] - one[6] == ready_growth + 31 * one[5]
+    assert thirty_two[6] - one[6] == ready_growth + 2 * 31 * one[5]
     assert thirty_two[8] - one[8] == (
-        ready_growth + 31 * (one[5] + one[7]))
+        ready_growth + 31 * (2 * one[5] + one[7]))
     assert thirty_two == _reference_layout(hidden, num_topk, 32)
 
 
