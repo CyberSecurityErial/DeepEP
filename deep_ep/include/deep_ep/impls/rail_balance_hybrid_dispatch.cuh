@@ -818,8 +818,14 @@ rail_balance_hybrid_dispatch_impl(
         }
         const int actual_prefix =
             ptx::warp_inclusive_sum(actual_count, lane_idx);
-        if (lane_idx < kNumScaleupRanks)
+        if (lane_idx < kNumScaleupRanks) {
+            printf("RB_COUNT node=%d target=%d source=%d count=%d prefix=%d notify_total=%d\n",
+                   scaleout_rank_idx, scaleup_rank_idx, lane_idx,
+                   actual_count, actual_prefix,
+                   psum_num_recv_tokens_per_scaleup_rank[
+                       kNumScaleupRanks - 1]);
             psum_num_recv_tokens_per_scaleup_rank[lane_idx] = actual_prefix;
+        }
     }
 
     // No egress may clear its sender counters until every target has consumed
