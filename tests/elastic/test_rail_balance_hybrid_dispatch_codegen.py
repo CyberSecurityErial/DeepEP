@@ -49,14 +49,11 @@ def _derive_static_payload_counters(
     assert token_bytes > 0
     assert len(retained) == len(moved)
     assert all(value >= 0 for value in retained + moved)
-    retained_tokens = sum(retained)
-    moved_tokens = sum(moved)
-    payload_puts = sum(
-        int(retained_count > 0) + int(moved_count > 0)
-        for retained_count, moved_count in zip(retained, moved)
-    )
-    payload_gin_bytes = (retained_tokens + moved_tokens) * token_bytes
-    return retained_tokens, moved_tokens, payload_puts, payload_gin_bytes
+    retained_puts = sum(retained)
+    moved_puts = sum(moved)
+    payload_puts = retained_puts + moved_puts
+    payload_gin_bytes = payload_puts * token_bytes
+    return retained_puts, moved_puts, payload_puts, payload_gin_bytes
 
 
 def _sha256(path: Path) -> str:
@@ -189,6 +186,7 @@ def _run_case(name: str) -> None:
     retained_staging = header.index(
         "arena_layout.get_retained_rail_staging_layout(",
         retained_threshold)
+    remote_slot = header.index("const int remote_slot =", proxy_loop)
     grouped_put_helper = header.index("const auto issue_grouped_put =")
     final_action = header.index("ncclGin_VASignalAdd(", grouped_put_helper)
     proxy_put = header.index("issue_grouped_put(", proxy_loop)
@@ -199,8 +197,8 @@ def _run_case(name: str) -> None:
     final_flush = header.index("gin.flush<ncclCoopWarp>();", proxy_put)
     assert retained_threshold < retained_staging < proxy_begin < proxy_loop
     assert (
-        grouped_put_helper < final_action < proxy_loop < proxy_acquire <
-        proxy_put < final_flush < final_tail
+        grouped_put_helper < final_action < proxy_loop < remote_slot <
+        proxy_acquire < proxy_put < final_flush < final_tail
     )
     assert "RB_PROXY_BAD" not in header
     assert "embedded_proxy" not in header
@@ -213,8 +211,8 @@ def _run_case(name: str) -> None:
     assert "ncclGinOptFlagsDefault" in header[
         grouped_put_helper:final_tail
     ]
-    assert "first_staged_token.get_base_ptr(), moved_count" in header[
-        proxy_acquire:proxy_put + 500]
+    assert "retained_count + proxy_slot - proxy_begin" in header[
+        remote_slot:proxy_put]
 
     proxy_snapshot = header.index("int stored_proxy_slot = -1;")
     linked_list_overwrite = header.index(
@@ -297,17 +295,14 @@ def _run_case(name: str) -> None:
     scaleout_end = header.index(
         "\n    } else {\n        const int forward_warp_idx", scaleout_begin)
     scaleout_body = header[scaleout_begin:scaleout_end]
-    # Retained and moved staging are dense, so each non-empty range is one
-    # bulk put.  The final range carries one completion marker for the whole
-    # destination stream; local destination remains a TMA bypass.
-    assert scaleout_body.count("gin.put<ncclTeamTagRail>(") == 2
+    # The correctness-first grouped put helper doorbells every payload and
+    # publishes a per-slot epoch marker as its remote completion action. Local
+    # destination remains a TMA bypass.
+    assert scaleout_body.count("gin.put<ncclTeamTagRail>(") == 1
     assert "ncclGinOptFlagsAggregateRequests" not in scaleout_body
     assert scaleout_body.count("ncclGin_VASignalAdd(") == 1
     assert "encoded_proxy - forward_ready_epoch_base" in header
     assert "DeepEP rail payload timeout" in header
-    completion_gate = header.index("const int final_slot_idx =")
-    slot_loop = header.index("for (int slot_idx = start_slot_idx;")
-    assert completion_gate < slot_loop
     assert "if (lane_idx == dst_scaleout_rank_idx)" in scaleout_body
     assert "flush_async<ncclTeamTagRail" not in scaleout_body
     assert "gin.wait(*completion_request);" not in scaleout_body
@@ -316,7 +311,7 @@ def _run_case(name: str) -> None:
     assert "for (int proxy_slot = proxy_begin;" in scaleout_body
 
     counters = _derive_static_payload_counters((3, 0, 5), (0, 4, 2), 1024)
-    assert counters == (8, 6, 4, 14336)
+    assert counters == (8, 6, 14, 14336)
 
     print(
         "PASS C080-E dispatch codegen "

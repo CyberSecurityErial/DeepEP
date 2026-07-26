@@ -525,21 +525,15 @@ rail_balance_hybrid_dispatch_impl(
         int stored_grouped_tail = -1;
         const auto issue_grouped_put = [&] (
                 const auto& recv_token, void* send_ptr,
-                const int& num_tokens_in_put,
-                const auto& completion_token,
                 const int& dst_scaleout_rank_idx) {
-            if (num_tokens_in_put <= 0)
-                return;
             if (lane_idx == dst_scaleout_rank_idx) {
                 gin.put<ncclTeamTagRail>(
-                    recv_token.get_base_ptr(), send_ptr,
-                    num_tokens_in_put * token_bytes,
+                    recv_token.get_base_ptr(), send_ptr, token_bytes,
                     dst_scaleout_rank_idx, ncclGinOptFlagsDefault,
                     ncclGin_VASignalAdd(
                         nccl_window,
                         gin.get_sym_offset(
-                            completion_token
-                                .get_src_token_global_idx_ptr()),
+                            recv_token.get_src_token_global_idx_ptr()),
                         static_cast<uint64_t>(ready_epoch_base) << 32));
             }
         };
@@ -573,15 +567,15 @@ rail_balance_hybrid_dispatch_impl(
                             kNumScaleoutRanks));
                 }
             }
-            if (retained_count > 0 and moved_count == 0) {
-                const auto first_retained_token =
+            for (int retained_ordinal = 0;
+                 retained_ordinal < retained_count; ++retained_ordinal) {
+                const auto retained_token =
                     arena_layout.get_retained_rail_staging_layout(
-                        retained_begin);
+                        retained_begin + retained_ordinal);
                 issue_grouped_put(
-                    scaleout_recv_buffer.get_token_buffer(0),
-                    first_retained_token.get_base_ptr(), retained_count,
                     scaleout_recv_buffer
-                        .get_token_buffer(retained_count - 1),
+                        .get_token_buffer(retained_ordinal),
+                    retained_token.get_base_ptr(),
                     dst_scaleout_rank_idx);
             }
             const int proxy_begin =
@@ -590,6 +584,8 @@ rail_balance_hybrid_dispatch_impl(
             #pragma unroll 1
             for (int proxy_slot = proxy_begin;
                  proxy_slot < proxy_end; ++proxy_slot) {
+                const int remote_slot =
+                    retained_count + proxy_slot - proxy_begin;
                 const auto proxy_token =
                     arena_layout.get_proxy_dispatch_layout(proxy_slot);
                 comm::timeout_while<kNumTimeoutCycles>([&](
@@ -626,34 +622,9 @@ rail_balance_hybrid_dispatch_impl(
                 ptx::tma_store_wait();
                 ptx::tma_store_global_visibility_fence();
                 __syncwarp();
-            }
-            if (moved_count > 0) {
-                // The retained and proxy staging arrays are individually
-                // dense.  At most two bulk puts therefore cover the complete
-                // destination stream.  The completion action on the final
-                // put orders both payload ranges; the receiver waits on that
-                // final marker before consuming any slot from this source.
-                if (retained_count > 0) {
-                    const auto first_retained_token =
-                        arena_layout.get_retained_rail_staging_layout(
-                            retained_begin);
-                    if (lane_idx == dst_scaleout_rank_idx) {
-                        gin.put<ncclTeamTagRail>(
-                            scaleout_recv_buffer.get_token_buffer(0)
-                                .get_base_ptr(),
-                            first_retained_token.get_base_ptr(),
-                            retained_count * token_bytes,
-                            dst_scaleout_rank_idx,
-                            ncclGinOptFlagsDefault);
-                    }
-                }
-                const auto first_staged_token =
-                    arena_layout.get_proxy_rail_staging_layout(proxy_begin);
                 issue_grouped_put(
-                    scaleout_recv_buffer
-                        .get_token_buffer(retained_count),
-                    first_staged_token.get_base_ptr(), moved_count,
-                    scaleout_recv_buffer.get_token_buffer(final_tail - 1),
+                    scaleout_recv_buffer.get_token_buffer(remote_slot),
+                    staged_token.get_base_ptr(),
                     dst_scaleout_rank_idx);
             }
             __syncwarp();
@@ -770,45 +741,38 @@ rail_balance_hybrid_dispatch_impl(
                 stored_scaleout_old_tail_idx = end_slot_idx;
 
             const auto recv_buffer = scaleout_recv_buffer.get_rank_buffer(recv_scaleout_rank_idx);
-            // Force-v1 publishes one final dense tail per remote source.  Its
-            // last slot carries the completion action for the at-most-two
-            // bulk puts that populate the whole stream, so gate the first
-            // chunk on that marker instead of attaching a completion action
-            // to every token-sized put.
-            if (recv_scaleout_rank_idx != scaleout_rank_idx and
-                start_slot_idx == 0) {
-                const int final_slot_idx = ptx::exchange(
-                    stored_scaleout_tail_idx,
-                    recv_scaleout_rank_idx) - 1;
-                const auto completion_token =
-                    recv_buffer.get_token_buffer(final_slot_idx);
-                comm::timeout_while<kNumTimeoutCycles>([&](
-                        const bool& is_last_check) {
-                    const uint32_t encoded_proxy =
-                        ptx::ld_acquire_sys<uint32_t>(
-                            reinterpret_cast<const uint32_t*>(
-                                completion_token
-                                    .get_linked_list_idx_ptr()));
-                    const uint32_t decoded_proxy =
-                        encoded_proxy - forward_ready_epoch_base;
-                    const bool ready =
-                        decoded_proxy == ~uint32_t(0) or
-                        decoded_proxy <
-                            static_cast<uint32_t>(kProxyCapacity);
-                    if (ready)
-                        return true;
-                    if (is_last_check and ptx::elect_one_sync())
-                        printf("DeepEP rail payload timeout, scale-out: %d, "
-                               "scale-up: %d, channel: %d, slot: %d, "
-                               "encoded: %u, epoch: %u\n",
-                               scaleout_rank_idx, scaleup_rank_idx,
-                               channel_idx, final_slot_idx, encoded_proxy,
-                               forward_ready_epoch_base);
-                    return false;
-                });
-            }
             for (int slot_idx = start_slot_idx; slot_idx < end_slot_idx; ++ slot_idx) {
                 const auto token_buffer = recv_buffer.get_token_buffer(slot_idx);
+
+                // A remote dense tail may be observed before earlier payloads
+                // on the same Rail QP complete. Each put adds this invocation's
+                // epoch to the source/proxy metadata pair only after its own
+                // payload is visible, so do not consume a remote slot early.
+                if (recv_scaleout_rank_idx != scaleout_rank_idx) {
+                    comm::timeout_while<kNumTimeoutCycles>([&](
+                            const bool& is_last_check) {
+                        const uint32_t encoded_proxy =
+                            ptx::ld_acquire_sys<uint32_t>(
+                                reinterpret_cast<const uint32_t*>(
+                                    token_buffer.get_linked_list_idx_ptr()));
+                        const uint32_t decoded_proxy =
+                            encoded_proxy - forward_ready_epoch_base;
+                        const bool ready =
+                            decoded_proxy == ~uint32_t(0) or
+                            decoded_proxy <
+                                static_cast<uint32_t>(kProxyCapacity);
+                        if (ready)
+                            return true;
+                        if (is_last_check and ptx::elect_one_sync())
+                            printf("DeepEP rail payload timeout, scale-out: %d, "
+                                   "scale-up: %d, channel: %d, slot: %d, "
+                                   "encoded: %u, epoch: %u\n",
+                                   scaleout_rank_idx, scaleup_rank_idx,
+                                   channel_idx, slot_idx, encoded_proxy,
+                                   forward_ready_epoch_base);
+                        return false;
+                    });
+                }
 
                 // Wait TMA arrival
                 ptx::tma_store_wait();
