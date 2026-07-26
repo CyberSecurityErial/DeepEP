@@ -774,7 +774,7 @@ rail_balance_hybrid_dispatch_impl(
             // chunk on that marker instead of attaching a completion action
             // to every token-sized put.
             if (recv_scaleout_rank_idx != scaleout_rank_idx and
-                start_slot_idx == 0) {
+                start_slot_idx == 0 and end_slot_idx > start_slot_idx) {
                 const int final_slot_idx = ptx::exchange(
                     stored_scaleout_tail_idx,
                     recv_scaleout_rank_idx) - 1;
