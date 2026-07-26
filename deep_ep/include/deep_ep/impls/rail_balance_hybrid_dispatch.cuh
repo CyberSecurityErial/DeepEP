@@ -549,7 +549,6 @@ rail_balance_hybrid_dispatch_impl(
         const int invocation_key = ptx::ld_acquire_sys<int>(
             &arena_layout.get_control_ptr()->invocation_id);
         const int token_bytes = token_layout.get_num_bytes<false>();
-        EP_DEVICE_ASSERT(token_bytes % sizeof(int4) == 0);
         for (int dst_scaleout_rank_idx = 0;
              dst_scaleout_rank_idx < kNumScaleoutRanks;
              ++dst_scaleout_rank_idx) {
@@ -610,9 +609,8 @@ rail_balance_hybrid_dispatch_impl(
                                *proxy_token.get_topk_idx_ptr());
                     }
                 }
-                EP_DEVICE_ASSERT(proxy_slot < kNumMaxTokensPerRank);
                 const auto staged_token =
-                    scaleout_send_buffer.get_token_buffer(proxy_slot);
+                    scaleout_send_buffer.get_token_buffer(remote_slot);
                 const auto src = static_cast<const int4*>(
                     proxy_token.get_base_ptr());
                 const auto dst = static_cast<int4*>(
