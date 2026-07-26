@@ -204,7 +204,12 @@ def _run_case(name: str) -> None:
     # epilogue prefix must therefore be rebuilt from the post-forward sender
     # counters, and a second local barrier must protect those counters from an
     # early peer reset.
-    counter_publish = header.index("ptx::st_release_sys(counter, *counter)")
+    counter_local_acquire = header.index(
+        "const int final_count = ptx::ld_acquire_sys<int>(counter)"
+    )
+    counter_publish = header.index(
+        "ptx::st_release_sys(counter, final_count)"
+    )
     first_arrival_barrier = header.index(
         "comm::kHybridDispatchTag1", counter_publish)
     peer_count_snapshot = header.index(
@@ -224,8 +229,9 @@ def _run_case(name: str) -> None:
         epilogue_trigger,
     )
     assert (
-        counter_publish < first_arrival_barrier < peer_count_snapshot < prefix_write <
-        count_barrier < epilogue_trigger < counter_reset
+        counter_local_acquire < counter_publish < first_arrival_barrier <
+        peer_count_snapshot < prefix_write < count_barrier < epilogue_trigger <
+        counter_reset
     )
 
     # After the opening Tag0 epoch boundary the release specialization trusts

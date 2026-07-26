@@ -803,7 +803,12 @@ rail_balance_hybrid_dispatch_impl(
     if (sm_idx == 0 and thread_idx < kNumScaleupRanks) {
         const auto counter =
             workspace_layout.get_scaleup_atomic_sender_counter() + thread_idx;
-        ptx::st_release_sys(counter, *counter);
+        // The increments are issued by forward warps on every SM. A plain
+        // load here may reuse an SM-local L1 line which predates those atomics,
+        // even though the grid barrier has completed. Bypass that stale line
+        // before publishing the dense length to LSA peers.
+        const int final_count = ptx::ld_acquire_sys<int>(counter);
+        ptx::st_release_sys(counter, final_count);
     }
 
     // Scale-up barrier to ensure data arrival
