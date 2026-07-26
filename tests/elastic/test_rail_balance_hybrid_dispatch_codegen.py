@@ -201,8 +201,11 @@ def _run_case(name: str) -> None:
     assert "RB_PROXY_BAD" not in header
     assert "embedded_proxy" not in header
     proxy_copy = header[proxy_acquire:proxy_put]
-    assert "ptx::ld_acquire_sys(src + i)" in proxy_copy
-    assert "__ldg(src + i)" not in proxy_copy
+    assert "ptx::tma_load_1d(" in proxy_copy
+    assert "proxy_token.get_base_ptr(), mbarrier_ptr" in proxy_copy
+    assert "ptx::tma_store_1d(" in proxy_copy
+    assert "ptx::tma_store_global_visibility_fence();" in proxy_copy
+    assert "__threadfence_system();" not in proxy_copy
     assert "ncclGinOptFlagsAggregateRequests" in header[
         proxy_put:final_tail
     ]

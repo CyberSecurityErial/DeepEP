@@ -578,16 +578,23 @@ rail_balance_hybrid_dispatch_impl(
                 });
                 const auto staged_token =
                     arena_layout.get_proxy_rail_staging_layout(proxy_slot);
-                const auto src = static_cast<const int*>(
-                    proxy_token.get_base_ptr());
-                const auto dst = static_cast<int*>(
-                    staged_token.get_base_ptr());
-                #pragma unroll 1
-                for (int i = lane_idx; i < token_bytes / sizeof(int);
-                     i += 32)
-                    dst[i] = ptx::ld_acquire_sys(src + i);
+                if (ptx::elect_one_sync()) {
+                    ptx::tma_load_1d(
+                        tma_buffer.get_base_ptr(),
+                        proxy_token.get_base_ptr(), mbarrier_ptr,
+                        token_bytes);
+                    ptx::mbarrier_arrive_and_set_tx(
+                        mbarrier_ptr, token_bytes);
+                    ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
+                }
                 __syncwarp();
-                __threadfence_system();
+                if (ptx::elect_one_sync())
+                    ptx::tma_store_1d(
+                        staged_token.get_base_ptr(),
+                        tma_buffer.get_base_ptr(), token_bytes);
+                ptx::tma_store_commit();
+                ptx::tma_store_wait();
+                ptx::tma_store_global_visibility_fence();
                 __syncwarp();
                 if (lane_idx == dst_scaleout_rank_idx)
                     gin.put<ncclTeamTagRail>(
