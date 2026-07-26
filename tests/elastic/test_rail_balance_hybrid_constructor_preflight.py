@@ -70,8 +70,10 @@ def _reference_layout(hidden: int, num_topk: int, pcap: int):
     proxy_dispatch_offset = _align(
         proxy_ready_offset + pcap * 4, 32)
     dispatch_token_bytes = _token_bytes(hidden, num_topk, True)
-    proxy_return_offset = _align(
+    proxy_rail_staging_offset = _align(
         proxy_dispatch_offset + pcap * dispatch_token_bytes, 32)
+    proxy_return_offset = _align(
+        proxy_rail_staging_offset + pcap * dispatch_token_bytes, 32)
     combine_token_bytes = _token_bytes(hidden, num_topk, False)
     raw_bytes = proxy_return_offset + pcap * combine_token_bytes
     arena_bytes = _align(raw_bytes, _ARENA_BYTES)
@@ -87,7 +89,7 @@ def _reference_layout(hidden: int, num_topk: int, pcap: int):
 _LAYOUT = _reference_layout(1280, 7, 37)
 assert _LAYOUT == (
     0, 32, 32, 131072, 131264, 2656,
-    229536, 2624, 326624, 2097152)
+    327808, 2624, 424896, 2097152)
 
 
 class _FakeScalar:

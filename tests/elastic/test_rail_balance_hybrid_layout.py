@@ -47,8 +47,11 @@ def _reference_layout(hidden: int, num_topk: int,
     proxy_dispatch_offset = _align(
         proxy_ready_offset + proxy_capacity * 4, TMA_ALIGNMENT)
     dispatch_token_bytes = _token_bytes(hidden, num_topk, True)
-    proxy_return_offset = _align(
+    proxy_rail_staging_offset = _align(
         proxy_dispatch_offset + proxy_capacity * dispatch_token_bytes,
+        TMA_ALIGNMENT)
+    proxy_return_offset = _align(
+        proxy_rail_staging_offset + proxy_capacity * dispatch_token_bytes,
         TMA_ALIGNMENT)
     combine_token_bytes = _token_bytes(hidden, num_topk, False)
     raw_bytes = proxy_return_offset + proxy_capacity * combine_token_bytes

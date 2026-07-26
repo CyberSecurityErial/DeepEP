@@ -521,28 +521,10 @@ rail_balance_hybrid_dispatch_impl(
             __syncwarp();
         }
 
-        // Retained puts source this local send buffer. Complete them before
-        // reusing token slots as NIC-visible staging for moved proxy payloads.
-        if (lane_idx < kNumScaleoutRanks and
-            lane_idx != scaleout_rank_idx) {
-            EP_STATIC_ASSERT(
-                sizeof(ncclGinRequest_t) ==
-                    layout::WorkspaceLayout::kGinRequestBytes,
-                "Unexpected GIN request size");
-            const auto retained_put_request =
-                static_cast<ncclGinRequest_t*>(
-                    workspace_layout.get_scaleout_channel_gin_request_ptr(
-                        channel_idx, lane_idx));
-            gin.flush_async<ncclTeamTagRail, ncclCoopThread>(
-                lane_idx, retained_put_request);
-            gin.wait(*retained_put_request);
-        }
-        __syncwarp();
-
         // Consume the descriptor-free moved groups owned by this egress. NIC
-        // reads use the legacy local send buffer rather than the peer-written
-        // arena directly; the cooperative copy also establishes system
-        // visibility before posting the Rail put.
+        // reads use a dedicated egress-local staging region rather than the
+        // peer-written arena directly; the cooperative copy also establishes
+        // system visibility before posting the Rail put.
         const auto arena_layout = rail_balance::HybridArenaLayout(
             kNumHiddenBytes / static_cast<int>(sizeof(nv_bfloat16)),
             kNumTopk, kProxyCapacity, rail_balance_arena);
@@ -610,7 +592,7 @@ rail_balance_hybrid_dispatch_impl(
                     }
                 }
                 const auto staged_token =
-                    scaleout_send_buffer.get_token_buffer(proxy_slot);
+                    arena_layout.get_proxy_rail_staging_layout(proxy_slot);
                 const auto src = static_cast<const int4*>(
                     proxy_token.get_base_ptr());
                 const auto dst = static_cast<int4*>(
