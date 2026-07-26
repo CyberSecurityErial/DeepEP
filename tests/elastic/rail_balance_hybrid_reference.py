@@ -27,6 +27,8 @@ _MAX_CHANNELS = 1024
 _MAX_DESTINATIONS = 32
 _MAX_TOPK = 32
 _CAPACITY_FAILURE = "proxy_capacity_per_egress_exceeded"
+_POLICIES = ("all", "active", "adaptive")
+_MAX_THRESHOLD_PERCENT = 3100
 
 
 def _require_int(name: str, value: int, *, minimum: Optional[int] = None) -> int:
@@ -84,6 +86,8 @@ class HybridRailSchedule:
     num_tokens_per_owner: Tuple[int, ...]
     local_destination: Optional[int]
     remainder_seed: int
+    policy: str
+    threshold_percent: int
 
     # [owner][channel][destination]
     channel_count: Tensor3
@@ -268,10 +272,47 @@ def map_topk_experts_to_destinations(
     return tuple(mapped_owners)
 
 
+def _select_egress_rails(
+    destination_count: Sequence[int],
+    *,
+    ring: Sequence[int],
+    policy: str,
+    threshold_percent: int,
+) -> Tuple[int, ...]:
+    """Return the policy-selected rail ids; quota construction stays shared."""
+
+    num_rails = len(destination_count)
+    active = {
+        owner for owner, value in enumerate(destination_count) if value > 0
+    }
+    if policy == "all":
+        return tuple(range(num_rails))
+    if policy == "active":
+        return tuple(owner for owner in ring if owner in active)
+
+    selected = set(active)
+    total = sum(destination_count)
+    for owner in ring:
+        if owner in selected:
+            continue
+        selected_count = len(selected)
+        if selected_count == 0:
+            break
+        current_tail = (total + selected_count - 1) // selected_count
+        next_tail = (total + selected_count) // (selected_count + 1)
+        if current_tail * 100 > next_tail * (100 + threshold_percent):
+            selected.add(owner)
+        else:
+            break
+    return tuple(owner for owner in ring if owner in selected)
+
+
 def _build_quota_and_segments(
     count: Matrix,
     *,
     remainder_seed: int,
+    policy: str,
+    threshold_percent: int,
 ) -> Tuple[
     Matrix,
     Matrix,
@@ -284,22 +325,45 @@ def _build_quota_and_segments(
 
     for destination in range(num_destinations):
         total = sum(count[owner][destination] for owner in range(num_rails))
-        base, remainder = divmod(total, num_rails)
         ring = tuple(
             (remainder_seed + destination + offset) % num_rails
             for offset in range(num_rails)
         )
+        selected = _select_egress_rails(
+            tuple(count[owner][destination] for owner in range(num_rails)),
+            ring=ring,
+            policy=policy,
+            threshold_percent=threshold_percent,
+        )
+
+        if not selected:
+            continue
+        selected_count = len(selected)
+        selected_set = set(selected)
+        ideal = (total + selected_count - 1) // selected_count
+        observed_max = max(count[owner][destination]
+                           for owner in range(num_rails))
+        if threshold_percent > 0 and observed_max * 100 <= ideal * (
+                100 + threshold_percent):
+            for owner in range(num_rails):
+                quota[owner][destination] = count[owner][destination]
+            continue
+
+        base, remainder = divmod(total, selected_count)
         # Giving remainder slots to already-heavy owners first minimizes the
         # number of copies that must cross an intra-node link.
         preferred = tuple(
-            owner for owner in ring if count[owner][destination] > base
+            owner for owner in ring
+            if owner in selected_set and count[owner][destination] > base
         )
         fallback = tuple(
-            owner for owner in ring if count[owner][destination] <= base
+            owner for owner in ring
+            if owner in selected_set and count[owner][destination] <= base
         )
         winners = set((preferred + fallback)[:remainder])
         for owner in range(num_rails):
-            quota[owner][destination] = base + int(owner in winners)
+            if owner in selected_set:
+                quota[owner][destination] = base + int(owner in winners)
 
     keep = [
         [min(count[owner][d], quota[owner][d]) for d in range(num_destinations)]
@@ -362,13 +426,20 @@ def build_hybrid_rail_schedule_from_destinations(
     local_destination: Optional[int] = None,
     remainder_seed: int = 0,
     proxy_capacity_per_egress: Optional[int] = None,
+    policy: str = "all",
+    threshold_percent: int = 0,
 ) -> HybridRailSchedule:
     """Build a compact schedule from pre-mapped destination sets.
 
     This lower-level candidate oracle keeps ``None`` and zero capacity useful
     for mathematical tests. Public force-v1 enters through
     :func:`build_hybrid_rail_schedule`, which requires positive capacity and
-    validates real top-k expert indices first.
+    validates real top-k expert indices first. ``policy`` changes only which
+    rails receive quota: ``all`` selects every rail, ``active`` selects rails
+    with a nonzero original destination count, and ``adaptive`` greedily adds
+    inactive rails in the destination/seed ring while each next rail clears the
+    marginal tail threshold. A zero threshold disables the final rewrite gate
+    so the historical ``all`` schedule remains exact.
     """
 
     num_destinations = _require_int(
@@ -384,6 +455,13 @@ def build_hybrid_rail_schedule_from_destinations(
         "num_max_tokens_per_rank", num_max_tokens_per_rank, minimum=1)
     remainder_seed = _require_nonnegative_int64(
         "remainder_seed", remainder_seed)
+    if type(policy) is not str or policy not in _POLICIES:
+        raise ValueError(f"policy must be exactly one of {_POLICIES}")
+    if type(threshold_percent) is not int or not (
+            0 <= threshold_percent <= _MAX_THRESHOLD_PERCENT):
+        raise ValueError(
+            "threshold_percent must be an integer in "
+            f"[0, {_MAX_THRESHOLD_PERCENT}]")
     if local_destination is not None:
         local_destination = _require_int(
             "local_destination", local_destination, minimum=0)
@@ -436,7 +514,11 @@ def build_hybrid_rail_schedule_from_destinations(
 
     count_tuple = tuple(tuple(row) for row in count)
     quota, keep, segments, num_segments = _build_quota_and_segments(
-        count_tuple, remainder_seed=remainder_seed)
+        count_tuple,
+        remainder_seed=remainder_seed,
+        policy=policy,
+        threshold_percent=threshold_percent,
+    )
 
     retained = [
         [[0] * num_destinations for _ in range(num_channels)]
@@ -524,6 +606,8 @@ def build_hybrid_rail_schedule_from_destinations(
         num_tokens_per_owner=tuple(len(tokens) for tokens in normalized),
         local_destination=local_destination,
         remainder_seed=remainder_seed,
+        policy=policy,
+        threshold_percent=threshold_percent,
         channel_count=tuple(
             tuple(tuple(row) for row in owner) for owner in channel_count),
         owner_channel_prefix=tuple(
@@ -564,6 +648,8 @@ def build_hybrid_rail_schedule(
     num_max_tokens_per_rank: int,
     remainder_seed: int = 0,
     proxy_capacity_per_egress: int,
+    policy: str = "all",
+    threshold_percent: int = 0,
 ) -> HybridRailSchedule:
     """Build the strict force-v1 schedule from real top-k expert indices."""
 
@@ -587,6 +673,8 @@ def build_hybrid_rail_schedule(
         local_destination=local_scaleout_rank,
         remainder_seed=remainder_seed,
         proxy_capacity_per_egress=proxy_capacity_per_egress,
+        policy=policy,
+        threshold_percent=threshold_percent,
     )
 
 
@@ -661,6 +749,13 @@ def validate_hybrid_rail_schedule(schedule: HybridRailSchedule) -> None:
         "remainder_seed", schedule.remainder_seed, minimum=0)
     if remainder_seed >= g:
         raise ValueError("remainder_seed must be normalized to the rail range")
+    if type(schedule.policy) is not str or schedule.policy not in _POLICIES:
+        raise ValueError(f"policy must be exactly one of {_POLICIES}")
+    if type(schedule.threshold_percent) is not int or not (
+            0 <= schedule.threshold_percent <= _MAX_THRESHOLD_PERCENT):
+        raise ValueError(
+            "threshold_percent must be an integer in "
+            f"[0, {_MAX_THRESHOLD_PERCENT}]")
     if schedule.local_destination is not None:
         local_destination = _require_int(
             "local_destination", schedule.local_destination, minimum=0)
@@ -712,6 +807,8 @@ def validate_hybrid_rail_schedule(schedule: HybridRailSchedule) -> None:
         _build_quota_and_segments(
             schedule.count,
             remainder_seed=schedule.remainder_seed,
+            policy=schedule.policy,
+            threshold_percent=schedule.threshold_percent,
         )
     )
     if schedule.quota != expected_quota:

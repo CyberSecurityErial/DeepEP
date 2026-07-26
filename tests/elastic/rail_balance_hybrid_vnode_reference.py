@@ -86,6 +86,8 @@ class VnodeRoundTripCase:
     experts_per_physical_rank: int
     proxy_capacity_per_egress: int
     remainder_seed: int
+    policy: str = "all"
+    threshold_percent: int = 0
 
     @property
     def num_tokens_per_owner(self) -> tuple[int, ...]:
@@ -342,6 +344,8 @@ def run_vnode_roundtrip(case: VnodeRoundTripCase) -> VnodeRoundTripResult:
         num_max_tokens_per_rank=case.num_max_tokens_per_rank,
         proxy_capacity_per_egress=case.proxy_capacity_per_egress,
         remainder_seed=case.remainder_seed,
+        policy=case.policy,
+        threshold_percent=case.threshold_percent,
     )
     if not schedule.enabled:
         raise RuntimeError(schedule.failure_reason)
