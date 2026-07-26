@@ -49,10 +49,12 @@ def _derive_static_payload_counters(
     assert token_bytes > 0
     assert len(retained) == len(moved)
     assert all(value >= 0 for value in retained + moved)
+    max_tokens_per_put = max(1, (64 * 1024) // token_bytes)
     retained_tokens = sum(retained)
     moved_tokens = sum(moved)
     payload_puts = sum(
-        int(retained_count > 0) + int(moved_count > 0)
+        (retained_count + max_tokens_per_put - 1) // max_tokens_per_put
+        + (moved_count + max_tokens_per_put - 1) // max_tokens_per_put
         for retained_count, moved_count in zip(retained, moved)
     )
     payload_gin_bytes = (retained_tokens + moved_tokens) * token_bytes
@@ -213,7 +215,7 @@ def _run_case(name: str) -> None:
     assert "ncclGinOptFlagsDefault" in header[
         grouped_put_helper:final_tail
     ]
-    assert "first_staged_token.get_base_ptr(), moved_count" in header[
+    assert "staged_token.get_base_ptr(), chunk_tokens" in header[
         proxy_acquire:proxy_put + 500]
 
     proxy_snapshot = header.index("int stored_proxy_slot = -1;")
@@ -297,8 +299,8 @@ def _run_case(name: str) -> None:
     scaleout_end = header.index(
         "\n    } else {\n        const int forward_warp_idx", scaleout_begin)
     scaleout_body = header[scaleout_begin:scaleout_end]
-    # Retained and moved staging are dense, so each non-empty range is one
-    # bulk put.  The final range carries one completion marker for the whole
+    # Retained and moved staging are dense, so each range is split into bounded
+    # bulk puts. The final chunk carries one completion marker for the whole
     # destination stream; local destination remains a TMA bypass.
     assert scaleout_body.count("gin.put<ncclTeamTagRail>(") == 2
     assert "ncclGinOptFlagsAggregateRequests" not in scaleout_body
