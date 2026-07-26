@@ -529,7 +529,7 @@ rail_balance_hybrid_dispatch_impl(
                     gin.put<ncclTeamTagRail>(
                         recv_ptr, send_ptr, token_bytes,
                         dst_scaleout_rank_idx,
-                        ncclGinOptFlagsAggregateRequests);
+                        ncclGinOptFlagsDefault);
                 }
             }
         };
@@ -639,7 +639,7 @@ rail_balance_hybrid_dispatch_impl(
         }
 
         // The grouped force path has no legacy interval update to terminate
-        // the aggregate queue. Complete every payload issue before publishing
+        // the grouped queue. Complete every payload issue before publishing
         // the one dense tail below, matching Hybrid combine's final protocol.
         gin.flush<ncclCoopWarp>();
         __syncwarp();

@@ -208,7 +208,7 @@ def _run_case(name: str) -> None:
     assert "ptx::tma_store_1d(" in proxy_copy
     assert "ptx::tma_store_global_visibility_fence();" in proxy_copy
     assert "__threadfence_system();" not in proxy_copy
-    assert "ncclGinOptFlagsAggregateRequests" in header[
+    assert "ncclGinOptFlagsDefault" in header[
         grouped_put_helper:final_tail
     ]
     assert "retained_count + proxy_slot - proxy_begin" in header[
@@ -289,11 +289,11 @@ def _run_case(name: str) -> None:
     scaleout_end = header.index(
         "\n    } else {\n        const int forward_warp_idx", scaleout_begin)
     scaleout_body = header[scaleout_begin:scaleout_end]
-    # The grouped put helper has one aggregate site and one final site whose
-    # remote action publishes the finish marker after payload arrival. Local
-    # destination remains a TMA bypass.
+    # The correctness-first grouped put helper doorbells every payload and has
+    # one final site whose remote action publishes the finish marker after
+    # payload arrival. Local destination remains a TMA bypass.
     assert scaleout_body.count("gin.put<ncclTeamTagRail>(") == 2
-    assert scaleout_body.count("ncclGinOptFlagsAggregateRequests") == 1
+    assert "ncclGinOptFlagsAggregateRequests" not in scaleout_body
     assert scaleout_body.count("ncclGin_VASignalAdd(") == 1
     assert "if (lane_idx == dst_scaleout_rank_idx)" in scaleout_body
     assert "flush_async<ncclTeamTagRail" not in scaleout_body
