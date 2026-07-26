@@ -388,6 +388,9 @@ rail_balance_hybrid_dispatch_impl(
         EP_STATIC_ASSERT(kNumScaleoutRanks <= 32,
                          "Invalid number of scale-out ranks");
         int stored_owner_tail = 0;
+        const auto arena_layout = rail_balance::HybridArenaLayout(
+            kNumHiddenBytes / static_cast<int>(sizeof(nv_bfloat16)),
+            kNumTopk, kProxyCapacity, rail_balance_arena);
 
         // Preload next token
         const auto preload_next_token = [&](const int& token_idx) {
@@ -479,22 +482,11 @@ rail_balance_hybrid_dispatch_impl(
             // resolver even when this copy is not retained here.
             const auto scaleout_rank_mask = ptx::reduce_or(stored_dst_scaleout_rank_idx >= 0 ? (1u << stored_dst_scaleout_rank_idx) : 0u);
             stored_owner_tail += (scaleout_rank_mask >> lane_idx) & 1;
-            const auto retained_remote_mask = ptx::reduce_or(
-                stored_dst_slot_idx >= 0 and
-                stored_dst_scaleout_rank_idx != scaleout_rank_idx ?
-                    (1u << stored_dst_scaleout_rank_idx) : 0u);
 
-            // Wait TMA arrival and issue the TMA store into send buffer
+            // Wait for the owner payload used by the local bypass.
             if (ptx::elect_one_sync()) {
                 ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, kNumHiddenBytes);
                 ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
-
-                // One owner payload is shared by every retained remote
-                // destination. Moved copies already reside in peer proxy slots.
-                if (retained_remote_mask != 0) {
-                    ptx::tma_store_1d(scaleout_send_buffer.get_token_buffer(token_idx).get_base_ptr(),
-                                      tma_buffer.get_base_ptr(), tma_buffer.get_num_bytes<false>());
-                }
             }
             __syncwarp();
 
@@ -505,10 +497,6 @@ rail_balance_hybrid_dispatch_impl(
             }
             ptx::tma_store_commit();
             ptx::tma_store_wait();
-            if (retained_remote_mask != 0) {
-                ptx::tma_store_global_visibility_fence();
-                __threadfence_system();
-            }
             __syncwarp();
 
             // Preload the next token (overlapping with the IBGDA issues)
@@ -518,7 +506,8 @@ rail_balance_hybrid_dispatch_impl(
             if (stored_dst_slot_idx >= 0 and stored_dst_scaleout_rank_idx != scaleout_rank_idx) {
                 gin.put<ncclTeamTagRail>(
                         scaleout_recv_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(),
-                        scaleout_send_buffer.get_token_buffer(token_idx).get_base_ptr(),
+                        arena_layout.get_retained_rail_staging_layout(token_idx)
+                            .get_base_ptr(),
                         tma_buffer.get_num_bytes<false>(),
                         stored_dst_scaleout_rank_idx);
             }
@@ -529,9 +518,6 @@ rail_balance_hybrid_dispatch_impl(
         // reads use a dedicated egress-local staging region rather than the
         // peer-written arena directly; the cooperative copy also establishes
         // system visibility before posting the Rail put.
-        const auto arena_layout = rail_balance::HybridArenaLayout(
-            kNumHiddenBytes / static_cast<int>(sizeof(nv_bfloat16)),
-            kNumTopk, kProxyCapacity, rail_balance_arena);
         const int invocation_key = ptx::ld_acquire_sys<int>(
             &arena_layout.get_control_ptr()->invocation_id);
         const int token_bytes = token_layout.get_num_bytes<false>();

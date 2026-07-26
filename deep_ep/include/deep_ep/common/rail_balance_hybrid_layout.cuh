@@ -113,6 +113,7 @@ struct HybridArenaLayout {
     int64_t proxy_dispatch_offset;
     int64_t dispatch_token_bytes;
     int64_t proxy_rail_staging_offset;
+    int64_t retained_rail_staging_offset;
     int64_t proxy_return_offset;
     int64_t combine_token_bytes;
     int64_t raw_bytes;
@@ -154,9 +155,14 @@ struct HybridArenaLayout {
                 proxy_dispatch_offset,
                 checked_mul_i64(proxy_capacity, dispatch_token_bytes)),
             ptx::kNumTMAAlignBytes);
-        proxy_return_offset = checked_align_i64(
+        retained_rail_staging_offset = checked_align_i64(
             checked_add_i64(
                 proxy_rail_staging_offset,
+                checked_mul_i64(proxy_capacity, dispatch_token_bytes)),
+            ptx::kNumTMAAlignBytes);
+        proxy_return_offset = checked_align_i64(
+            checked_add_i64(
+                retained_rail_staging_offset,
                 checked_mul_i64(proxy_capacity, dispatch_token_bytes)),
             ptx::kNumTMAAlignBytes);
         raw_bytes = checked_add_i64(
@@ -169,6 +175,7 @@ struct HybridArenaLayout {
         EP_UNIFIED_ASSERT(proxy_ready_offset % ptx::kNumTMAAlignBytes == 0);
         EP_UNIFIED_ASSERT(proxy_dispatch_offset % ptx::kNumTMAAlignBytes == 0);
         EP_UNIFIED_ASSERT(proxy_rail_staging_offset % ptx::kNumTMAAlignBytes == 0);
+        EP_UNIFIED_ASSERT(retained_rail_staging_offset % ptx::kNumTMAAlignBytes == 0);
         EP_UNIFIED_ASSERT(proxy_return_offset % ptx::kNumTMAAlignBytes == 0);
         EP_UNIFIED_ASSERT(arena_bytes % kNumHybridBufferAlignmentBytes == 0);
     }
@@ -208,6 +215,16 @@ struct HybridArenaLayout {
             math::advance_ptr(base, checked_add_i64(
                 proxy_rail_staging_offset,
                 checked_mul_i64(proxy_slot, dispatch_token_bytes))));
+    }
+
+    __forceinline__ __device__ __host__ layout::TokenLayout
+    get_retained_rail_staging_layout(const int token_slot) const {
+        EP_UNIFIED_ASSERT(token_slot >= 0 and token_slot < proxy_capacity);
+        return layout::TokenLayout(
+            hidden * sizeof(nv_bfloat16), 0, num_topk, true,
+            math::advance_ptr(base, checked_add_i64(
+                retained_rail_staging_offset,
+                checked_mul_i64(token_slot, dispatch_token_bytes))));
     }
 
     __forceinline__ __device__ __host__ layout::TokenLayout

@@ -346,7 +346,7 @@ public:
                        num_scaleout_ranks <= 32);
         EP_HOST_ASSERT(local_scaleout_rank >= 0 and
                        local_scaleout_rank < num_scaleout_ranks);
-        EP_HOST_ASSERT(proxy_capacity_per_egress > 0);
+        EP_HOST_ASSERT(proxy_capacity_per_egress >= num_tokens);
         EP_HOST_ASSERT(hidden > 0 and hidden % 256 == 0);
         EP_HOST_ASSERT(
             num_experts % (num_scaleout_ranks * num_rails) == 0);
@@ -580,7 +580,7 @@ public:
         EP_HOST_ASSERT(num_sms <= jit::device_runtime->get_num_sms());
         EP_HOST_ASSERT(num_qps > 0 and
                        num_qps <= nccl_context->num_allocated_qps);
-        EP_HOST_ASSERT(proxy_capacity_per_egress > 0);
+        EP_HOST_ASSERT(proxy_capacity_per_egress >= num_tokens);
 
         const int num_destinations = nccl_context->num_scaleout_ranks;
         const int num_rails = nccl_context->num_scaleup_ranks;

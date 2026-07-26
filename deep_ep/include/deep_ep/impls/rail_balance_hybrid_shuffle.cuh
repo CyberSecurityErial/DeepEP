@@ -143,10 +143,6 @@ void rail_balance_hybrid_source_shuffle_impl(
                 __ldg(topk_weights + token_offset + lane);
             staged_token.get_linked_list_idx_ptr()[lane] = -1;
         }
-        if constexpr (kNumTopk > 1) {
-            if (lane == 1)
-                staged_token.get_linked_list_idx_ptr()[1] = invocation_key;
-        }
         if (lane == 0) {
             *staged_token.get_src_token_global_idx_ptr() =
                 rank_idx * num_max_tokens_per_rank + token;
@@ -211,9 +207,11 @@ void rail_balance_hybrid_source_shuffle_impl(
             break;
         }
 
+        const unsigned retained_mask = ptx::gather(
+            present and resolution.moved == 0);
         unsigned moved_mask = ptx::gather(
             present and resolution.moved == 1);
-        if (moved_mask == 0)
+        if (retained_mask == 0 and moved_mask == 0)
             continue;
 
         if (ptx::elect_one_sync()) {
@@ -229,6 +227,25 @@ void rail_balance_hybrid_source_shuffle_impl(
         }
         __syncwarp();
 
+        // Retained payloads use a stable source-shuffle staging slot instead
+        // of the dispatch kernel's transient TMA send buffer.  The token index
+        // is unique within the owner arena and proxy capacity is preflighted
+        // against the per-rank token capacity.
+        if (retained_mask != 0) {
+            const auto retained_token =
+                local_arena_layout.get_retained_rail_staging_layout(token);
+            ptx::tma_store_fence();
+            __syncwarp();
+            if (ptx::elect_one_sync())
+                ptx::tma_store_1d(
+                    retained_token.get_base_ptr(), staged_token.get_base_ptr(),
+                    staged_token_bytes);
+            ptx::tma_store_commit();
+            ptx::tma_store_wait();
+            ptx::tma_store_global_visibility_fence();
+            __syncwarp();
+        }
+
         while (moved_mask != 0) {
             const int source_lane = __ffs(moved_mask) - 1;
             const int egress = ptx::exchange(resolution.egress, source_lane);
@@ -239,6 +256,10 @@ void rail_balance_hybrid_source_shuffle_impl(
 
             if (lane == 0)
                 staged_token.get_linked_list_idx_ptr()[0] = proxy_slot;
+            if constexpr (kNumTopk > 1) {
+                if (lane == 1)
+                    staged_token.get_linked_list_idx_ptr()[1] = invocation_key;
+            }
             if constexpr (kNumTopk > 2) {
                 if (lane == 2)
                     staged_token.get_linked_list_idx_ptr()[2] =

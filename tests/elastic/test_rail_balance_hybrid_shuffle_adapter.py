@@ -125,6 +125,19 @@ def main() -> None:
     assert wait < visibility < slot_release
     assert 'asm volatile("fence.proxy.async.global;"' in ptx_source
 
+    # Retained copies are materialized once in an owner-local stable slot
+    # before moved copies add their per-proxy diagnostic metadata.
+    retained_mask = kernel_source.index("const unsigned retained_mask =")
+    retained_stage = kernel_source.index(
+        "get_retained_rail_staging_layout(token)", retained_mask)
+    moved_loop = kernel_source.index("while (moved_mask != 0)", retained_stage)
+    moved_generation = kernel_source.index(
+        "get_linked_list_idx_ptr()[1] = invocation_key", moved_loop)
+    assert retained_mask < retained_stage < moved_loop < moved_generation
+    retained_body = kernel_source[retained_stage:moved_loop]
+    assert "ptx::tma_store_fence();" in retained_body
+    assert "ptx::tma_store_global_visibility_fence();" in retained_body
+
     print("PASS C080-H1b prepared source-shuffle raw submit")
 
 
