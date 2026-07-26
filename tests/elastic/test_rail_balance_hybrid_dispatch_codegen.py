@@ -248,7 +248,7 @@ def _run_case(name: str) -> None:
         first_arrival_barrier,
     )
     tail_publish = header.index(
-        "ptx::st_release_sys(\n"
+        "ptx::red_add_rel_sys(\n"
         "                        gin.get_sym_ptr<ncclTeamTagLsa>(tail_ptr, j)"
     )
     tail_completion = header.index(

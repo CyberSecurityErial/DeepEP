@@ -920,7 +920,7 @@ rail_balance_hybrid_dispatch_impl(
             #pragma unroll
             for (int i = 0; i < kNumScaleupRanksPerLane; ++ i) {
                 if (const auto j = i * 32 + lane_idx; i < (kNumScaleupRanksPerLane - 1) or j < kNumScaleupRanks) {
-                    ptx::st_release_sys(
+                    ptx::red_add_rel_sys(
                         gin.get_sym_ptr<ncclTeamTagLsa>(tail_ptr, j),
                         transform_linked_list_idx(stored_scaleup_send_counters[i]));
                     auto peer_mailbox = gin.get_sym_ptr<ncclTeamTagLsa>(
