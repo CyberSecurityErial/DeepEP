@@ -248,6 +248,11 @@ void rail_balance_hybrid_source_shuffle_impl(
             moved_mask &= moved_mask - 1;
         }
     }
+
+    // TMA stores complete through the async proxy.  The following local LSA
+    // barrier synchronizes through generic global operations, so bridge the
+    // proxy domains once per source CTA after all of its peer writes finish.
+    ptx::tma_store_global_visibility_fence();
 }
 
 }  // namespace deep_ep::elastic

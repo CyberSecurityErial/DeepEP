@@ -7,6 +7,10 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
 _ADAPTER = _ROOT / "csrc/kernels/elastic/rail_balance_hybrid_shuffle.hpp"
+_KERNEL = (
+    _ROOT / "deep_ep/include/deep_ep/impls/rail_balance_hybrid_shuffle.cuh"
+)
+_PTX = _ROOT / "deep_ep/include/deep_ep/common/ptx.cuh"
 _PENDING = _ROOT / "csrc/kernels/elastic/rail_balance_hybrid_dispatch.hpp"
 _CALLSITE = _ROOT / "csrc/elastic/buffer.hpp"
 
@@ -18,6 +22,8 @@ def _section(source: str, begin: str, end: str) -> str:
 
 def main() -> None:
     source = _ADAPTER.read_text()
+    kernel_source = _KERNEL.read_text()
+    ptx_source = _PTX.read_text()
     pending_source = _PENDING.read_text()
     callsite_source = _CALLSITE.read_text()
 
@@ -106,6 +112,16 @@ def main() -> None:
         "                    hidden, num_topk, num_channels, num_tokens)"
         in callsite_source
     )
+
+    # The descriptor-free handoff relies on one barrier rather than a ready
+    # word per proxy copy.  Completed TMA peer writes must cross from the
+    # async proxy into the generic-global domain before that barrier signals.
+    wait = kernel_source.index("ptx::tma_store_wait();")
+    visibility = kernel_source.index(
+        "ptx::tma_store_global_visibility_fence();", wait
+    )
+    assert wait < visibility
+    assert 'asm volatile("fence.proxy.async.global;"' in ptx_source
 
     print("PASS C080-H1b prepared source-shuffle raw submit")
 
