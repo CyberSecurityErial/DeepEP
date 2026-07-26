@@ -235,18 +235,9 @@ def _run_case(name: str) -> None:
     assert counter_clear < role_begin
     first_arrival_barrier = header.index(
         "comm::kHybridDispatchTag1", role_begin)
-    counter_publish = header.index(
-        "atomicAdd_system(\n"
-        "            workspace_layout.get_scaleup_atomic_sender_counter()",
-        role_begin,
-    )
-    peer_count_snapshot = header.index(
-        "const auto peer_count = gin.get_sym_ptr<ncclTeamTagLsa>(",
+    tail_count_snapshot = header.index(
+        "const int encoded_tail = ptx::ld_acquire_sys<int>(",
         first_arrival_barrier,
-    )
-    peer_count_atomic_snapshot = header.index(
-        "actual_count = atomicAdd_system(peer_count, 0);",
-        peer_count_snapshot,
     )
     tail_publish = header.index(
         "ptx::st_release_sys(\n"
@@ -255,24 +246,22 @@ def _run_case(name: str) -> None:
     tail_completion = header.index(
         "ptx::fence_acq_rel_sys();", tail_publish)
     assert (
-        tail_publish < tail_completion < counter_publish <
-        first_arrival_barrier <
-        peer_count_snapshot
+        tail_publish < tail_completion < first_arrival_barrier <
+        tail_count_snapshot
     )
     prefix_write = header.index(
         "ptx::st_release_sys(\n"
         "                psum_num_recv_tokens_per_scaleup_rank + lane_idx",
-        peer_count_snapshot,
+        tail_count_snapshot,
     )
     epilogue_trigger = header.index(
         "cudaTriggerProgrammaticLaunchCompletion()", prefix_write)
     assert (
-        first_arrival_barrier < peer_count_snapshot < prefix_write <
+        first_arrival_barrier < tail_count_snapshot < prefix_write <
         epilogue_trigger
     )
-    assert peer_count_snapshot < peer_count_atomic_snapshot < prefix_write
     assert "peer_mailbox" not in header
-    assert first_arrival_barrier < peer_count_snapshot
+    assert "peer_count" not in header
     assert "kRailBalanceHybridDispatchCountTag" not in header
 
     # After the opening Tag0 epoch boundary the release specialization trusts

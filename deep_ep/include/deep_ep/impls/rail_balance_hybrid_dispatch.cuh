@@ -930,15 +930,10 @@ rail_balance_hybrid_dispatch_impl(
         __syncwarp();
     }
 
-    // Forward warps allocate dense destination slots with local atomics. Their
-    // per-peer values stay frozen through Tag1 and are reset only at the next
-    // Tag0, so receivers can snapshot them directly after the barrier.
+    // Wait until forward warps have published every destination tail.  The
+    // receiver reconstructs per-source counts from those local tails after
+    // Tag1, avoiding peer counter coherence assumptions.
     cooperative_groups::this_grid().sync();
-    if (sm_idx == 0 and thread_idx < kNumScaleupRanks)
-        atomicAdd_system(
-            workspace_layout.get_scaleup_atomic_sender_counter() +
-                thread_idx,
-            0);
 
     // Scale-up barrier to ensure data arrival
     // As scale-out tokens have already been consumed by forwarders, no need to do scale-out barrier again
@@ -948,15 +943,24 @@ rail_balance_hybrid_dispatch_impl(
 
     // Notify counted tokens by their original owner rail, but source shuffle
     // changes the rank-buffer owner for moved copies. Rebuild the rank prefix
-    // from the frozen sender-owned dense counts after Tag1.
+    // from the per-channel linked-list tails already delivered to this target
+    // before Tag1.
     if (sm_idx == 0 and warp_idx == 0) {
         int actual_count = 0;
         if (lane_idx < kNumScaleupRanks) {
-            const auto peer_count = gin.get_sym_ptr<ncclTeamTagLsa>(
-                workspace_layout.get_scaleup_atomic_sender_counter() +
-                    scaleup_rank_idx,
-                lane_idx);
-            actual_count = atomicAdd_system(peer_count, 0);
+            constexpr int kNumTokensInLinkedList =
+                kNumMaxTokensPerChannel * kNumScaleoutRanks + 1;
+            for (int channel_idx = 0; channel_idx < kNumChannels;
+                 ++channel_idx) {
+                const int encoded_tail = ptx::ld_acquire_sys<int>(
+                    workspace_layout.get_channel_scaleup_tail_ptr(
+                        channel_idx, lane_idx));
+                const int channel_base = channel_idx *
+                    kNumTokensInLinkedList * kNumScaleupRanks;
+                actual_count +=
+                    (encoded_tail - channel_base - lane_idx) /
+                    kNumScaleupRanks;
+            }
         }
         const int actual_prefix =
             ptx::warp_inclusive_sum(actual_count, lane_idx);
