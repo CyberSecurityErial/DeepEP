@@ -517,20 +517,20 @@ rail_balance_hybrid_dispatch_impl(
                 const int& dst_scaleout_rank_idx,
                 const bool& is_final,
                 int64_t* tail_ptr, const int64_t& signaled_tail) {
-            if (lane_idx != dst_scaleout_rank_idx)
-                return;
-            if (is_final) {
-                gin.put<ncclTeamTagRail>(
-                    recv_ptr, send_ptr, token_bytes,
-                    dst_scaleout_rank_idx, ncclGinOptFlagsDefault,
-                    ncclGin_VASignalAdd(
-                        nccl_window, gin.get_sym_offset(tail_ptr),
-                        static_cast<uint64_t>(signaled_tail)));
-            } else {
-                gin.put<ncclTeamTagRail>(
-                    recv_ptr, send_ptr, token_bytes,
-                    dst_scaleout_rank_idx,
-                    ncclGinOptFlagsAggregateRequests);
+            if (lane_idx == dst_scaleout_rank_idx) {
+                if (is_final) {
+                    gin.put<ncclTeamTagRail>(
+                        recv_ptr, send_ptr, token_bytes,
+                        dst_scaleout_rank_idx, ncclGinOptFlagsDefault,
+                        ncclGin_VASignalAdd(
+                            nccl_window, gin.get_sym_offset(tail_ptr),
+                            static_cast<uint64_t>(signaled_tail)));
+                } else {
+                    gin.put<ncclTeamTagRail>(
+                        recv_ptr, send_ptr, token_bytes,
+                        dst_scaleout_rank_idx,
+                        ncclGinOptFlagsAggregateRequests);
+                }
             }
         };
         for (int dst_scaleout_rank_idx = 0;
