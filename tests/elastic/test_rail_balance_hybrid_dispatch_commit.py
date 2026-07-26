@@ -101,7 +101,7 @@ def _assert_commit_contract() -> None:
     _assert_prefix_pointer_boundary(pending_source, prepare)
 
     # Every validation and raw-ABI capture must finish before Invalid.  From
-    # Invalid onward, either enqueue may throw and the transaction must remain
+    # Invalid onward, any enqueue may throw and the transaction must remain
     # permanently poisoned.  Source publication, its cross-rank visibility
     # barrier, and dispatch are adjacent; successful publication consists only
     # of shuffled=true followed by DispatchLive.
@@ -181,7 +181,7 @@ def _assert_commit_contract() -> None:
     ):
         assert field in dispatch_call, field
     assert "raw.psum_num_recv_tokens_per_expert_inclusive" not in dispatch_call
-    assert critical.count("comm_stream") == 2
+    assert critical.count("comm_stream") == 3
 
     # H4c is private until the full dispatch epilogue/handle transaction is
     # complete.  It must not leak into the public Python dispatch yet.
@@ -195,8 +195,9 @@ def _assert_commit_contract() -> None:
 def main() -> None:
     _assert_commit_contract()
     print(
-        "PASS C080-H4c source contract: Invalid -> source -> dispatch -> "
-        "DispatchLive, frozen raw ABI and expert-prefix base boundary",
+        "PASS C080-H4c source contract: Invalid -> source -> barrier -> "
+        "dispatch -> DispatchLive, frozen raw ABI and expert-prefix base "
+        "boundary",
         flush=True,
     )
 
