@@ -519,9 +519,6 @@ rail_balance_hybrid_dispatch_impl(
         const int invocation_key = ptx::ld_acquire_sys<int>(
             &arena_layout.get_control_ptr()->invocation_id);
         const int token_bytes = token_layout.get_num_bytes<false>();
-        constexpr int kMaxGinPutBytes = 64 * 1024;
-        const int max_tokens_per_put =
-            std::max(1, kMaxGinPutBytes / token_bytes);
         const uint32_t ready_epoch_base =
             static_cast<uint32_t>(invocation_key) *
             static_cast<uint32_t>(kProxyCapacity + 1);
@@ -530,27 +527,18 @@ rail_balance_hybrid_dispatch_impl(
                 const auto& recv_token, void* send_ptr,
                 const int& num_tokens_in_put,
                 const auto& completion_token,
-                const int& dst_scaleout_rank_idx,
-                const bool& publish_completion) {
+                const int& dst_scaleout_rank_idx) {
             if (lane_idx == dst_scaleout_rank_idx) {
-                if (publish_completion) {
-                    gin.put<ncclTeamTagRail>(
-                        recv_token.get_base_ptr(), send_ptr,
-                        num_tokens_in_put * token_bytes,
-                        dst_scaleout_rank_idx, ncclGinOptFlagsDefault,
-                        ncclGin_VASignalAdd(
-                            nccl_window,
-                            gin.get_sym_offset(
-                                completion_token
-                                    .get_src_token_global_idx_ptr()),
-                            static_cast<uint64_t>(ready_epoch_base) << 32));
-                } else {
-                    gin.put<ncclTeamTagRail>(
-                        recv_token.get_base_ptr(), send_ptr,
-                        num_tokens_in_put * token_bytes,
-                        dst_scaleout_rank_idx,
-                        ncclGinOptFlagsDefault);
-                }
+                gin.put<ncclTeamTagRail>(
+                    recv_token.get_base_ptr(), send_ptr,
+                    num_tokens_in_put * token_bytes,
+                    dst_scaleout_rank_idx, ncclGinOptFlagsDefault,
+                    ncclGin_VASignalAdd(
+                        nccl_window,
+                        gin.get_sym_offset(
+                            completion_token
+                                .get_src_token_global_idx_ptr()),
+                        static_cast<uint64_t>(ready_epoch_base) << 32));
             }
         };
         for (int dst_scaleout_rank_idx = 0;
@@ -583,24 +571,16 @@ rail_balance_hybrid_dispatch_impl(
                             kNumScaleoutRanks));
                 }
             }
-            for (int retained_offset = 0;
-                 retained_offset < retained_count;
-                 retained_offset += max_tokens_per_put) {
-                const int chunk_tokens = std::min(
-                    max_tokens_per_put,
-                    retained_count - retained_offset);
-                const auto retained_token =
+            if (retained_count > 0 and moved_count == 0) {
+                const auto first_retained_token =
                     arena_layout.get_retained_rail_staging_layout(
-                        retained_begin + retained_offset);
+                        retained_begin);
                 issue_grouped_put(
+                    scaleout_recv_buffer.get_token_buffer(0),
+                    first_retained_token.get_base_ptr(), retained_count,
                     scaleout_recv_buffer
-                        .get_token_buffer(retained_offset),
-                    retained_token.get_base_ptr(), chunk_tokens,
-                    scaleout_recv_buffer
-                        .get_token_buffer(final_tail - 1),
-                    dst_scaleout_rank_idx,
-                    moved_count == 0 and
-                        retained_offset + chunk_tokens == retained_count);
+                        .get_token_buffer(retained_count - 1),
+                    dst_scaleout_rank_idx);
             }
             const int proxy_begin =
                 __ldg(rail_balance_group_prefix + plan_offset);
@@ -647,27 +627,32 @@ rail_balance_hybrid_dispatch_impl(
             }
             if (moved_count > 0) {
                 // The retained and proxy staging arrays are individually
-                // dense. Chunk them below the Gin payload ceiling and attach
-                // one completion action to the final chunk. The receiver
-                // waits on that marker before consuming the whole stream.
-                for (int moved_offset = 0;
-                     moved_offset < moved_count;
-                     moved_offset += max_tokens_per_put) {
-                    const int chunk_tokens = std::min(
-                        max_tokens_per_put,
-                        moved_count - moved_offset);
-                    const auto staged_token =
-                        arena_layout.get_proxy_rail_staging_layout(
-                            proxy_begin + moved_offset);
-                    issue_grouped_put(
-                        scaleout_recv_buffer.get_token_buffer(
-                            retained_count + moved_offset),
-                        staged_token.get_base_ptr(), chunk_tokens,
-                        scaleout_recv_buffer
-                            .get_token_buffer(final_tail - 1),
-                        dst_scaleout_rank_idx,
-                        moved_offset + chunk_tokens == moved_count);
+                // dense.  At most two bulk puts therefore cover the complete
+                // destination stream.  The completion action on the final
+                // put orders both payload ranges; the receiver waits on that
+                // final marker before consuming any slot from this source.
+                if (retained_count > 0) {
+                    const auto first_retained_token =
+                        arena_layout.get_retained_rail_staging_layout(
+                            retained_begin);
+                    if (lane_idx == dst_scaleout_rank_idx) {
+                        gin.put<ncclTeamTagRail>(
+                            scaleout_recv_buffer.get_token_buffer(0)
+                                .get_base_ptr(),
+                            first_retained_token.get_base_ptr(),
+                            retained_count * token_bytes,
+                            dst_scaleout_rank_idx,
+                            ncclGinOptFlagsDefault);
+                    }
                 }
+                const auto first_staged_token =
+                    arena_layout.get_proxy_rail_staging_layout(proxy_begin);
+                issue_grouped_put(
+                    scaleout_recv_buffer
+                        .get_token_buffer(retained_count),
+                    first_staged_token.get_base_ptr(), moved_count,
+                    scaleout_recv_buffer.get_token_buffer(final_tail - 1),
+                    dst_scaleout_rank_idx);
             }
             __syncwarp();
         }
@@ -685,9 +670,9 @@ rail_balance_hybrid_dispatch_impl(
         // one final dense tail per (channel,destination); it intentionally
         // gives up the legacy interval overlap until C100 can measure a safe
         // grouped alternative.
-        // Remote payloads publish one final epoch marker as their completion
+        // Remote payloads publish a per-slot epoch marker as their completion
         // action. The dense tail may arrive first; forwarders validate that
-        // marker before consuming the advertised stream.
+        // marker before consuming each advertised slot.
         if (lane_idx < kNumScaleoutRanks) {
             const int final_tail = lane_idx == scaleout_rank_idx ?
                 stored_owner_tail : stored_grouped_tail;
