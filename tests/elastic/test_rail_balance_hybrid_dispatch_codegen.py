@@ -222,26 +222,20 @@ def _run_case(name: str) -> None:
         "rail_balance::kHybridForwardProxySlotDim] =", linked_list_overwrite)
     assert proxy_snapshot < linked_list_overwrite < metadata_snapshot
 
-    # Moved copies change the source-rank buffer that owns a token.  The
-    # epilogue prefix must therefore be rebuilt from the post-forward sender
-    # counters. Counters are cleared after the opening Tag0 and remain stable
-    # until the next epoch, avoiding a peer-snapshot/reset race.
+    # Moved copies change the source-rank buffer that owns a token. The
+    # epilogue prefix must therefore be rebuilt from the per-channel tails
+    # published to the target GPU. Counters are still cleared after the
+    # opening Tag0 so slot allocation starts from zero for each epoch.
     counter_clear = header.index(
         "ptx::st_relaxed_sys(\n"
         "            workspace_layout.get_scaleup_atomic_sender_counter()"
     )
     role_begin = header.index("// Different warp roles")
     assert counter_clear < role_begin
-    counter_local_acquire = header.index(
-        "const int final_count = ptx::ld_acquire_sys<int>(counter)"
-    )
-    counter_publish = header.index(
-        "ptx::st_release_sys(counter, final_count)"
-    )
     first_arrival_barrier = header.index(
-        "comm::kHybridDispatchTag1", counter_publish)
+        "comm::kHybridDispatchTag1", role_begin)
     peer_count_snapshot = header.index(
-        "workspace_layout.get_scaleup_atomic_sender_counter() +",
+        "workspace_layout.get_channel_scaleup_tail_ptr(",
         first_arrival_barrier,
     )
     prefix_write = header.index(
@@ -251,9 +245,11 @@ def _run_case(name: str) -> None:
     epilogue_trigger = header.index(
         "cudaTriggerProgrammaticLaunchCompletion()", prefix_write)
     assert (
-        counter_local_acquire < counter_publish < first_arrival_barrier <
-        peer_count_snapshot < prefix_write < epilogue_trigger
+        first_arrival_barrier < peer_count_snapshot < prefix_write <
+        epilogue_trigger
     )
+    assert "const int encoded_count = encoded_tail - encoded_base" in header
+    assert "actual_count += encoded_count / kNumScaleupRanks" in header
     assert "kRailBalanceHybridDispatchCountTag" not in header
 
     # After the opening Tag0 epoch boundary the release specialization trusts
