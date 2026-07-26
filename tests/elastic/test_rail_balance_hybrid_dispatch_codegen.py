@@ -239,7 +239,8 @@ def _run_case(name: str) -> None:
         first_arrival_barrier,
     )
     prefix_write = header.index(
-        "psum_num_recv_tokens_per_scaleup_rank[lane_idx] = actual_prefix",
+        "ptx::st_release_sys(\n"
+        "                psum_num_recv_tokens_per_scaleup_rank + lane_idx",
         peer_count_snapshot,
     )
     epilogue_trigger = header.index(

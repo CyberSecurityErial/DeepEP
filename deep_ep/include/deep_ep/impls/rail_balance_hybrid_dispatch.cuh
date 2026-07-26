@@ -909,18 +909,22 @@ rail_balance_hybrid_dispatch_impl(
         }
         const int actual_prefix =
             ptx::warp_inclusive_sum(actual_count, lane_idx);
-        if (lane_idx < kNumScaleupRanks) {
-            printf("RB_COUNT node=%d target=%d source=%d count=%d prefix=%d notify_total=%d\n",
-                   scaleout_rank_idx, scaleup_rank_idx, lane_idx,
-                   actual_count, actual_prefix,
-                   psum_num_recv_tokens_per_scaleup_rank[
-                       kNumScaleupRanks - 1]);
-            psum_num_recv_tokens_per_scaleup_rank[lane_idx] = actual_prefix;
-        }
+        if (lane_idx < kNumScaleupRanks)
+            ptx::st_release_sys(
+                psum_num_recv_tokens_per_scaleup_rank + lane_idx,
+                actual_prefix);
     }
 
     // Order the local prefix write before any SM triggers the epilogue.
     cooperative_groups::this_grid().sync();
+    if (sm_idx == 0 and warp_idx == 0 and
+        lane_idx < kNumScaleupRanks) {
+        const int published_prefix = ptx::ld_acquire_sys<int>(
+            psum_num_recv_tokens_per_scaleup_rank + lane_idx);
+        printf("RB_PREFIX node=%d target=%d source=%d prefix=%d\n",
+               scaleout_rank_idx, scaleup_rank_idx, lane_idx,
+               published_prefix);
+    }
 
     // Trigger the copy epilogue kernel
     cudaTriggerProgrammaticLaunchCompletion();
