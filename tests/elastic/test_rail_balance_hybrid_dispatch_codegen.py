@@ -181,6 +181,8 @@ def _run_case(name: str) -> None:
     assert header.count("rail_balance_proxy_required") == 1
     retained_threshold = header.index(
         "if (stored_old_slot_idx < retained_count)")
+    retained_terminator = header.index(
+        "stored_is_last_retained_put ? 0 :", retained_threshold)
     proxy_begin = header.index("const int proxy_begin =")
     proxy_loop = header.index("for (int proxy_slot = proxy_begin;")
     retained_flush = header.index(
@@ -191,7 +193,10 @@ def _run_case(name: str) -> None:
         "const int ready = ptx::ld_acquire_sys<int>(", proxy_loop
     )
     final_tail = header.index("const auto signaled_tail =", proxy_put)
-    assert retained_threshold < retained_flush < proxy_begin < proxy_loop
+    assert (
+        retained_threshold < retained_terminator < retained_flush <
+        proxy_begin < proxy_loop
+    )
     assert "if (stored_num_retained_puts > 0)" in header[
         retained_threshold:retained_flush]
     assert (

@@ -452,6 +452,7 @@ rail_balance_hybrid_dispatch_impl(
             // this physical rail.  Local-destination traffic is deliberately
             // outside the rail plan and preserves the legacy bypass.
             int stored_dst_slot_idx = -1;
+            bool stored_is_last_retained_put = false;
             const auto stored_old_slot_idx = ptx::exchange(
                 stored_owner_tail,
                 stored_dst_scaleout_rank_idx >= 0 ?
@@ -470,8 +471,11 @@ rail_balance_hybrid_dispatch_impl(
                             kNumChannels, kNumScaleoutRanks);
                     const int retained_count =
                         __ldg(rail_balance_retained + plan_offset);
-                    if (stored_old_slot_idx < retained_count)
+                    if (stored_old_slot_idx < retained_count) {
                         stored_dst_slot_idx = stored_old_slot_idx;
+                        stored_is_last_retained_put =
+                            stored_old_slot_idx + 1 == retained_count;
+                    }
                 }
             }
 
@@ -517,7 +521,8 @@ rail_balance_hybrid_dispatch_impl(
                         scaleout_send_buffer.get_token_buffer(token_idx).get_base_ptr(),
                         tma_buffer.get_num_bytes<false>(),
                         stored_dst_scaleout_rank_idx,
-                        ncclGinOptFlagsAggregateRequests);
+                        stored_is_last_retained_put ? 0 :
+                            ncclGinOptFlagsAggregateRequests);
                 ++stored_num_retained_puts;
             }
             __syncwarp();
