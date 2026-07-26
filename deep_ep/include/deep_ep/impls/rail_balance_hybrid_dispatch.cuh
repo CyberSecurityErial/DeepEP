@@ -745,7 +745,8 @@ rail_balance_hybrid_dispatch_impl(
                             const bool& is_last_check) {
                         const uint32_t encoded_proxy =
                             ptx::ld_acquire_sys<uint32_t>(
-                                token_buffer.get_linked_list_idx_ptr());
+                                reinterpret_cast<const uint32_t*>(
+                                    token_buffer.get_linked_list_idx_ptr()));
                         const uint32_t decoded_proxy =
                             encoded_proxy - forward_ready_epoch_base;
                         const bool ready =
