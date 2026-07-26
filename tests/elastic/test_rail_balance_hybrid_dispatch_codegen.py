@@ -205,8 +205,14 @@ def _run_case(name: str) -> None:
 
     # Moved copies change the source-rank buffer that owns a token.  The
     # epilogue prefix must therefore be rebuilt from the post-forward sender
-    # counters, and a second local barrier must protect those counters from an
-    # early peer reset.
+    # counters. Counters are cleared after the opening Tag0 and remain stable
+    # until the next epoch, avoiding a peer-snapshot/reset race.
+    counter_clear = header.index(
+        "ptx::st_relaxed_sys(\n"
+        "            workspace_layout.get_scaleup_atomic_sender_counter()"
+    )
+    role_begin = header.index("// Different warp roles")
+    assert counter_clear < role_begin
     counter_local_acquire = header.index(
         "const int final_count = ptx::ld_acquire_sys<int>(counter)"
     )
@@ -223,19 +229,13 @@ def _run_case(name: str) -> None:
         "psum_num_recv_tokens_per_scaleup_rank[lane_idx] = actual_prefix",
         peer_count_snapshot,
     )
-    count_barrier = header.index(
-        "comm::kRailBalanceHybridDispatchCountTag", prefix_write)
     epilogue_trigger = header.index(
-        "cudaTriggerProgrammaticLaunchCompletion()", count_barrier)
-    counter_reset = header.index(
-        "workspace_layout.get_scaleup_atomic_sender_counter()[thread_idx] = 0",
-        epilogue_trigger,
-    )
+        "cudaTriggerProgrammaticLaunchCompletion()", prefix_write)
     assert (
         counter_local_acquire < counter_publish < first_arrival_barrier <
-        peer_count_snapshot < prefix_write < count_barrier < epilogue_trigger <
-        counter_reset
+        peer_count_snapshot < prefix_write < epilogue_trigger
     )
+    assert "kRailBalanceHybridDispatchCountTag" not in header
 
     # After the opening Tag0 epoch boundary the release specialization trusts
     # immutable Gate2 state. Compare with legacy instead of banning `return;`

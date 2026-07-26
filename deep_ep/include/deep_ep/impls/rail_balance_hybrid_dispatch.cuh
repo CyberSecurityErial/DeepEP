@@ -118,6 +118,17 @@ rail_balance_hybrid_dispatch_impl(
                       kNumSMs, kNumThreads, kNumQPs, kNumTimeoutCycles, comm::kHybridDispatchTag0, false, false, true>(
         gin, workspace_layout, scaleout_rank_idx, scaleup_rank_idx, sm_idx, thread_idx);
 
+    // Sender counters are an epoch snapshot: clear them before any forward
+    // warp can increment, then leave the completed values stable until the
+    // next Tag0.  Resetting at the previous epoch's tail races peer readers.
+    if (not kReuseSlotIndices and sm_idx == 0 and
+        thread_idx < kNumScaleupRanks)
+        ptx::st_relaxed_sys(
+            workspace_layout.get_scaleup_atomic_sender_counter() +
+                thread_idx,
+            0);
+    cooperative_groups::this_grid().sync();
+
     // The golden layout during the whole process for both scale-out and forward warps
     const auto token_layout = layout::TokenLayout(kNumHiddenBytes, kNumSFPacks * sizeof(sf_pack_t), kNumTopk, true);
     const auto tma_buffer = layout::BufferLayout<true>(token_layout, kNumScaleoutWarps + kNumForwardWarps, 1,
@@ -860,24 +871,13 @@ rail_balance_hybrid_dispatch_impl(
         }
     }
 
-    // No egress may clear its sender counters until every target has consumed
-    // the peer snapshot above.  The barrier's opening grid sync also orders
-    // the local prefix write before programmatic epilogue launch.
-    comm::gpu_barrier<true, kNumScaleoutRanks, kNumScaleupRanks,
-                      kNumSMs, kNumThreads, kNumQPs, kNumTimeoutCycles,
-                      comm::kRailBalanceHybridDispatchCountTag,
-                      false, true, false>(
-        gin, workspace_layout, scaleout_rank_idx, scaleup_rank_idx,
-        sm_idx, thread_idx, /* do not scale-out */ false, true);
+    // Order the local prefix write before any SM triggers the epilogue. Peer
+    // counters remain immutable for the rest of this epoch, so no second LSA
+    // barrier is required.
+    cooperative_groups::this_grid().sync();
 
     // Trigger the copy epilogue kernel
     cudaTriggerProgrammaticLaunchCompletion();
-
-    // Clean scale-up counters
-    // All scale-out counters should be cleaned before
-    EP_STATIC_ASSERT(kNumScaleupRanks <= kNumThreads, "Insufficient threads");
-    if (not kReuseSlotIndices and sm_idx == 0 and thread_idx < kNumScaleupRanks)
-        workspace_layout.get_scaleup_atomic_sender_counter()[thread_idx] = 0;
 }
 
 }  // namespace deep_ep::elastic

@@ -23,7 +23,6 @@ static constexpr int kHybridDispatchTag0 = 6;
 static constexpr int kHybridDispatchTag1 = 7;
 static constexpr int kHybridCombineTag0 = 8;
 static constexpr int kHybridCombineTag1 = 9;
-static constexpr int kRailBalanceHybridDispatchCountTag = 10;
 
 // Some reserved count
 static constexpr int kFlushAllAllocatedQPs = -1;
