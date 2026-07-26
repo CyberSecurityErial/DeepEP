@@ -930,29 +930,10 @@ rail_balance_hybrid_dispatch_impl(
         __syncwarp();
     }
 
-    // Forward warps allocate dense destination slots with local atomics. Once
-    // every warp has stopped incrementing them, publish one count per target
-    // into that target's completion-request scratch. The publishing thread is
-    // also the thread that sends Tag1 to the same target, so the release store
-    // is ordered before the NVLink barrier signal without a cross-thread
-    // hand-off of peer state.
+    // Forward warps allocate dense destination slots with local atomics. Their
+    // per-peer values stay frozen through Tag1 and are reset only at the next
+    // Tag0, so receivers can snapshot them directly after the barrier.
     cooperative_groups::this_grid().sync();
-    auto scaleup_count_mailbox = static_cast<int*>(
-        workspace_layout.get_scaleout_channel_gin_request_ptr(0, 0));
-    if (sm_idx == 0 and thread_idx < kNumScaleupRanks) {
-        const int final_count = atomicAdd(
-            workspace_layout.get_scaleup_atomic_sender_counter() +
-                thread_idx,
-            0);
-        auto peer_mailbox = gin.get_sym_ptr<ncclTeamTagLsa>(
-            scaleup_count_mailbox + scaleup_rank_idx,
-            thread_idx);
-        // A release store to peer memory may still be sitting in the NVLink
-        // proxy when the following barrier signal becomes observable.  The
-        // system-scope atomic is the publication point: it completes at the
-        // target before this thread can enter Tag1.
-        atomicExch_system(peer_mailbox, final_count);
-    }
 
     // Scale-up barrier to ensure data arrival
     // As scale-out tokens have already been consumed by forwarders, no need to do scale-out barrier again
@@ -962,13 +943,17 @@ rail_balance_hybrid_dispatch_impl(
 
     // Notify counted tokens by their original owner rail, but source shuffle
     // changes the rank-buffer owner for moved copies. Rebuild the rank prefix
-    // from the sender-owned dense counts published into this target before
-    // Tag1 instead of taking a racy remote snapshot of sender atomics.
+    // from the frozen sender-owned dense counts after Tag1.
     if (sm_idx == 0 and warp_idx == 0) {
         int actual_count = 0;
-        if (lane_idx < kNumScaleupRanks)
+        if (lane_idx < kNumScaleupRanks) {
+            const auto peer_count = gin.get_sym_ptr<ncclTeamTagLsa>(
+                workspace_layout.get_scaleup_atomic_sender_counter() +
+                    scaleup_rank_idx,
+                lane_idx);
             actual_count = ptx::ld_acquire_sys<int>(
-                scaleup_count_mailbox + lane_idx);
+                peer_count);
+        }
         const int actual_prefix =
             ptx::warp_inclusive_sum(actual_count, lane_idx);
         if (lane_idx < kNumScaleupRanks)
