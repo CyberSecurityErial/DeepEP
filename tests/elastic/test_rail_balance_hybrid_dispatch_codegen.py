@@ -262,7 +262,7 @@ def _run_case(name: str) -> None:
         epilogue_trigger
     )
     assert "const int final_count = atomicAdd(" in header
-    assert "ptx::st_release_sys(peer_mailbox, final_count)" in header
+    assert "atomicExch_system(peer_mailbox, final_count)" in header
     assert mailbox_publish < first_arrival_barrier < peer_count_snapshot
     assert "kRailBalanceHybridDispatchCountTag" not in header
 

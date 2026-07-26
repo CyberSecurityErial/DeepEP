@@ -944,13 +944,14 @@ rail_balance_hybrid_dispatch_impl(
             workspace_layout.get_scaleup_atomic_sender_counter() +
                 thread_idx,
             0);
-        printf("RB_COUNT node=%d source=%d target=%d count=%d\n",
-               scaleout_rank_idx, scaleup_rank_idx, thread_idx,
-               final_count);
         auto peer_mailbox = gin.get_sym_ptr<ncclTeamTagLsa>(
             scaleup_count_mailbox + scaleup_rank_idx,
             thread_idx);
-        ptx::st_release_sys(peer_mailbox, final_count);
+        // A release store to peer memory may still be sitting in the NVLink
+        // proxy when the following barrier signal becomes observable.  The
+        // system-scope atomic is the publication point: it completes at the
+        // target before this thread can enter Tag1.
+        atomicExch_system(peer_mailbox, final_count);
     }
 
     // Scale-up barrier to ensure data arrival
