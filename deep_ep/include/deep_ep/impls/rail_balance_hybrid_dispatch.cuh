@@ -528,6 +528,8 @@ rail_balance_hybrid_dispatch_impl(
                 const int& num_tokens_in_put,
                 const auto& completion_token,
                 const int& dst_scaleout_rank_idx) {
+            if (num_tokens_in_put <= 0)
+                return;
             if (lane_idx == dst_scaleout_rank_idx) {
                 gin.put<ncclTeamTagRail>(
                     recv_token.get_base_ptr(), send_ptr,
