@@ -306,7 +306,8 @@ def _run_case(name: str) -> None:
     assert "if (lane_idx == dst_scaleout_rank_idx)" in scaleout_body
     assert "flush_async<ncclTeamTagRail" not in scaleout_body
     assert "gin.wait(*completion_request);" not in scaleout_body
-    assert scaleout_body.count("gin.flush<ncclCoopWarp>();") == 1
+    assert scaleout_body.count("gin.flush<ncclCoopWarp>();") == 2
+    assert "if (++num_remote_groups_since_flush == 2)" in scaleout_body
     assert "stored_old_slot_idx < retained_count" in scaleout_body
     assert "for (int proxy_slot = proxy_begin;" in scaleout_body
 
