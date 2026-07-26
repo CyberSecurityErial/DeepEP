@@ -1454,3 +1454,48 @@ This does not establish full-MoE/training step speedup, production overlap,
 real Gin/RDMA/QP/NIC behavior or stable tail latency.  Transfer-matrix and
 compute-interference experiments remain local C100 work.  C080-H/C110 still
 own truthful multi-node activation and performance.
+
+### O079 transfer-matrix contract
+
+O079 prepares the next local C100 evidence without changing production
+kernels.  The named matrix fixtures are:
+
+```text
+c100_matrix_fanout_h256    c100_matrix_fanout_h7168
+c100_matrix_fanin_h256     c100_matrix_fanin_h7168
+c100_matrix_mesh_h256      c100_matrix_mesh_h7168
+c100_matrix_rot1_h256      c100_matrix_rot1_h7168
+c100_matrix_rot4_h256      c100_matrix_rot4_h7168
+```
+
+All use G8/D9/N2048-per-rank/K4/C256/Pcap7168 and 7,168 moved records.  The
+CPU oracle asserts the exact owner-to-egress moved-copy matrix for each case:
+fan-out, fan-in, full mesh, and rotations by 1 and 4.  The benchmark report
+schema is version 3 and records:
+
+```text
+owner_to_egress_moved_copies
+outgoing_moved_copies_per_rank
+incoming_moved_copies_per_egress
+selected_moved_copies_per_rank
+outgoing_logical_bytes_per_rank
+incoming_logical_bytes_per_egress
+logical_bytes_per_rank
+```
+
+For source measurements, `logical_bytes_per_rank` aliases outgoing owner row
+sums.  For return measurements, it aliases incoming proxy-egress column sums.
+The aggregate numerator still counts every moved TokenLayout record once and
+does not claim physical NVLink/HBM transaction bytes.
+
+The validation run includes `py_compile`, C080-D source oracle, C080-F return
+oracle on `c100_matrix_rot4_h7168`, normal C080-F return oracle, and `git diff
+--check`.  All ten named matrix cases also pass true 8-GPU LSA source and
+return functionality gates.  Source validates moved=7168, per-owner/egress=896,
+legacy TokenLayout bytes and immutable inputs.  Return validates moved=7168,
+exact owner row/token bytes and poison-preserved non-targets.
+
+No O079 no-profiler, Nsys or NCU performance result has been accepted.  The
+GPU functionality run is explicitly not performance evidence because
+`nvidia-smi` reported visible GPU model `NVIDIA L20X` and GPU0 had a
+co-tenant non-megatron Python process using about 15 GiB.

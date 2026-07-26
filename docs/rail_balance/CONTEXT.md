@@ -988,3 +988,31 @@ Out of scope until evidence expands the project:
   experiments; do not reopen resolver/TMA/ABI design without new evidence.
   Real D>1 Rail/Gin runtime remains C080-H/C110's external environment gate and
   is not inferred from LSA/vnode results.
+
+## C100 O079 transfer-matrix fixture context (2026-07-26)
+
+- O079 stays intentionally narrow: Python C100 fixture/report instrumentation
+  only, no production kernel, JIT ABI, buffer identity, capability bit or
+  public API change.
+- The transfer-matrix family is fixed at G8/D9/N2048-per-rank/K4/C256/Pcap7168,
+  moved=7168, H256/H7168.  Named cases are fan-out, fan-in, full mesh, rot1
+  and rot4.  These are matrix-shape controls; they are not new performance
+  claims.
+- The CPU oracle asserts exact owner-to-egress matrices.  Source reports now
+  use outgoing owner row sums for rank-local logical bytes; return reports use
+  incoming proxy-egress column sums.  The aggregate moved-record numerator is
+  unchanged and still excludes physical transaction amplification.
+- Retained mistakes: an early row builder repeated a destination within one
+  token, which destination deduplication collapsed; it now selects distinct
+  destinations per token.  A return highest-lane assertion was too broad and
+  is restricted to the original wide-destination oracle.
+- Current local evidence: `py_compile`, source oracle, return oracle on
+  `c100_matrix_rot4_h7168`, normal return oracle, and `git diff --check` pass.
+  All ten named matrix cases also pass true 8-GPU LSA source and return
+  functionality gates.  These runs validate payload/route semantics only.
+  They are not performance evidence because the visible GPUs were reported as
+  `NVIDIA L20X` and GPU0 had a non-megatron Python co-tenant using about
+  15 GiB.  Ruff and pyrefly are missing from the active/pinned environments
+  and are recorded as missing tool evidence.  Next work is O080 compute
+  interference or a separate lint-tool setup/formatting slice, not another
+  O079 fixture change.

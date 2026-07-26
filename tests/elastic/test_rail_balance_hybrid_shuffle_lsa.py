@@ -75,7 +75,33 @@ _C100_NUM_TOKENS = 1024
 _C100_NUM_CHANNELS = 256
 _C100_NUM_DESTINATIONS = _WORLD_SIZE + 1
 _C100_PROXY_CAPACITY = _C100_NUM_TOKENS * (_WORLD_SIZE - 1) // _WORLD_SIZE
-_C100_CASE_NAMES = ("c100_volume_h256", "c100_volume_h7168")
+_C100_MATRIX_NUM_TOKENS = 2048
+_C100_MATRIX_PROXY_CAPACITY = 7168
+_C100_MATRIX_MOVED_COPIES = _C100_MATRIX_PROXY_CAPACITY
+_C100_MATRIX_QUOTA_PER_DESTINATION = (
+    _C100_MATRIX_MOVED_COPIES // _WORLD_SIZE
+)
+_C100_MATRIX_FAN_DESTINATIONS = tuple(range(1, 5))
+_C100_MATRIX_FAN_EDGE = (
+    len(_C100_MATRIX_FAN_DESTINATIONS) *
+    _C100_MATRIX_NUM_TOKENS // _WORLD_SIZE
+)
+_C100_MATRIX_MESH_EDGE = (
+    _C100_MATRIX_NUM_TOKENS // 2 // _WORLD_SIZE
+)
+_C100_MATRIX_ROT_SOURCE_COUNT = 2 * _C100_MATRIX_QUOTA_PER_DESTINATION
+_C100_MATRIX_PATTERNS = ("fanout", "fanin", "mesh", "rot1", "rot4")
+_C100_MATRIX_HIDDENS = (_SMALL_HIDDEN, _LARGE_HIDDEN)
+_C100_MATRIX_CASE_NAMES = tuple(
+    f"c100_matrix_{pattern}_h{hidden}"
+    for pattern in _C100_MATRIX_PATTERNS
+    for hidden in _C100_MATRIX_HIDDENS
+)
+_C100_CASE_NAMES = (
+    "c100_volume_h256",
+    "c100_volume_h7168",
+    *_C100_MATRIX_CASE_NAMES,
+)
 _TMA_ALIGNMENT = 32
 _STREAM_DELAY_CYCLES = 2_000_000
 _OPERATION = "rail_balance_hybrid_source_shuffle"
@@ -117,6 +143,15 @@ def _moved_copies(
             _mapped_destinations(case), schedule)
         if record.resolution.moved
     )
+
+
+def _owner_to_egress_matrix(
+    records: Sequence[ResolvedHybridDestinationCopy],
+) -> tuple[tuple[int, ...], ...]:
+    matrix = [[0 for _ in range(_WORLD_SIZE)] for _ in range(_WORLD_SIZE)]
+    for record in records:
+        matrix[record.copy.owner][record.resolution.egress] += 1
+    return tuple(tuple(row) for row in matrix)
 
 
 def _wide_destination_case() -> PlanCase:
@@ -215,7 +250,136 @@ def _c100_volume_case(name: str) -> PlanCase:
     )
 
 
-def _c100_profile_cases() -> tuple[ShuffleCase, ShuffleCase]:
+def _c100_matrix_expected_owner_to_egress(
+    pattern: str,
+) -> tuple[tuple[int, ...], ...]:
+    matrix = [[0 for _ in range(_WORLD_SIZE)] for _ in range(_WORLD_SIZE)]
+    if pattern in ("fanout", "fanin"):
+        owners = (0,) if pattern == "fanout" else range(1, _WORLD_SIZE)
+        egresses = range(1, _WORLD_SIZE) if pattern == "fanout" else (0,)
+        for owner in owners:
+            for egress in egresses:
+                matrix[owner][egress] = _C100_MATRIX_FAN_EDGE
+    elif pattern == "mesh":
+        for owner in range(_WORLD_SIZE):
+            for egress in range(_WORLD_SIZE):
+                if egress != owner:
+                    matrix[owner][egress] = _C100_MATRIX_MESH_EDGE
+    elif pattern.startswith("rot"):
+        shift = _c100_rotation_shift(pattern)
+        for owner in range(_WORLD_SIZE):
+            matrix[owner][(owner + shift) % _WORLD_SIZE] = \
+                _C100_MATRIX_QUOTA_PER_DESTINATION
+    else:
+        raise AssertionError(f"unknown C100 matrix pattern {pattern!r}")
+    assert sum(sum(row) for row in matrix) == _C100_MATRIX_MOVED_COPIES
+    return tuple(tuple(row) for row in matrix)
+
+
+def _c100_rotation_shift(pattern: str) -> int:
+    if not pattern.startswith("rot"):
+        raise AssertionError(f"not a C100 rotation pattern: {pattern!r}")
+    shift = int(pattern.removeprefix("rot"))
+    assert 0 < shift < _WORLD_SIZE
+    return shift
+
+
+def _c100_matrix_remote_counts(
+    pattern: str,
+    owner: int,
+) -> tuple[int, ...]:
+    counts = [0 for _ in range(_C100_NUM_DESTINATIONS)]
+    if pattern in ("fanout", "fanin"):
+        active = owner == 0 if pattern == "fanout" else owner != 0
+        if active:
+            for destination in _C100_MATRIX_FAN_DESTINATIONS:
+                counts[destination] = _C100_MATRIX_NUM_TOKENS
+    elif pattern == "mesh":
+        counts[owner + 1] = _C100_MATRIX_NUM_TOKENS // 2
+    elif pattern.startswith("rot"):
+        shift = _c100_rotation_shift(pattern)
+        for source in range(_WORLD_SIZE):
+            destination = source + 1
+            target = (source + shift) % _WORLD_SIZE
+            if owner == source:
+                counts[destination] = _C100_MATRIX_ROT_SOURCE_COUNT
+            elif owner != target:
+                counts[destination] = _C100_MATRIX_QUOTA_PER_DESTINATION
+    else:
+        raise AssertionError(f"unknown C100 matrix pattern {pattern!r}")
+    assert sum(counts[1:]) <= _C100_MATRIX_NUM_TOKENS * _NUM_TOPK
+    assert max(counts[1:]) <= _C100_MATRIX_NUM_TOKENS
+    return tuple(counts)
+
+
+def _c100_rows_from_remote_counts(
+    counts: Sequence[int],
+) -> tuple[tuple[int, ...], ...]:
+    remaining = list(counts)
+    assert len(remaining) == _C100_NUM_DESTINATIONS
+    rows = []
+    for _ in range(_C100_MATRIX_NUM_TOKENS):
+        destinations = []
+        for _lane in range(_NUM_TOPK):
+            candidates = [
+                destination for destination in range(1, _C100_NUM_DESTINATIONS)
+                if destination not in destinations
+            ]
+            destination = max(
+                candidates,
+                key=lambda value: (remaining[value], -value),
+            )
+            if remaining[destination] == 0:
+                break
+            destinations.append(destination)
+            remaining[destination] -= 1
+        destinations.extend([0] * (_NUM_TOPK - len(destinations)))
+        rows.append(tuple(destinations))
+    assert not any(remaining[1:])
+    return _encode_destination_rows(
+        rows,
+        num_destinations=_C100_NUM_DESTINATIONS,
+        experts_per_destination=_WORLD_SIZE,
+    )
+
+
+def _c100_matrix_case(pattern: str) -> PlanCase:
+    owners = tuple(
+        _c100_rows_from_remote_counts(
+            _c100_matrix_remote_counts(pattern, owner))
+        for owner in range(_WORLD_SIZE)
+    )
+    return PlanCase(
+        name=f"c100_matrix_{pattern}",
+        topk_idx=owners,
+        num_topk=_NUM_TOPK,
+        num_channels=_C100_NUM_CHANNELS,
+        num_max_tokens_per_rank=_C100_MATRIX_NUM_TOKENS,
+        num_experts=_C100_NUM_DESTINATIONS * _WORLD_SIZE,
+        num_scaleout_ranks=_C100_NUM_DESTINATIONS,
+        local_scaleout_rank=0,
+        proxy_capacity_per_egress=_C100_MATRIX_PROXY_CAPACITY,
+        remainder_seed=170,
+    )
+
+
+def _c100_matrix_profile_cases() -> tuple[ShuffleCase, ...]:
+    cases = []
+    for pattern_index, pattern in enumerate(_C100_MATRIX_PATTERNS):
+        base = _c100_matrix_case(pattern)
+        for hidden_index, hidden in enumerate(_C100_MATRIX_HIDDENS):
+            plan = replace(base, name=f"{base.name}_h{hidden}")
+            cases.append(ShuffleCase(
+                plan,
+                hidden,
+                200 + pattern_index * 2 + hidden_index,
+                False,
+                _C100_MATRIX_MOVED_COPIES,
+            ))
+    return tuple(cases)
+
+
+def _c100_profile_cases() -> tuple[ShuffleCase, ...]:
     small_plan = _c100_volume_case("c100_volume_h256")
     large_plan = replace(small_plan, name="c100_volume_h7168")
     small = ShuffleCase(
@@ -258,7 +422,26 @@ def _c100_profile_cases() -> tuple[ShuffleCase, ShuffleCase]:
             _C100_NUM_TOKENS
         assert small_schedule.keep_count[owner][destination] == \
             _C100_NUM_TOKENS // _WORLD_SIZE
-    return small, large
+    matrix_cases = _c100_matrix_profile_cases()
+    for spec in matrix_cases:
+        pattern = spec.plan.name.removeprefix(
+            "c100_matrix_").rsplit("_h", 1)[0]
+        schedule = _schedule(spec.plan)
+        records = _moved_copies(spec.plan, schedule)
+        assert spec.plan.num_tokens_per_rank == \
+            (_C100_MATRIX_NUM_TOKENS,) * _WORLD_SIZE
+        assert spec.plan.num_channels == _C100_NUM_CHANNELS
+        assert spec.plan.num_scaleout_ranks == _C100_NUM_DESTINATIONS
+        assert spec.plan.proxy_capacity_per_egress == \
+            _C100_MATRIX_PROXY_CAPACITY
+        assert schedule.enabled and schedule.failure_reason is None
+        assert schedule.moved_copies == _C100_MATRIX_MOVED_COPIES
+        assert len(records) == _C100_MATRIX_MOVED_COPIES
+        assert _owner_to_egress_matrix(records) == \
+            _c100_matrix_expected_owner_to_egress(pattern)
+        assert max(schedule.proxy_required) <= _C100_MATRIX_PROXY_CAPACITY
+        assert sum(schedule.proxy_required) == _C100_MATRIX_MOVED_COPIES
+    return (small, large, *matrix_cases)
 
 
 def _copies_by_egress(
@@ -1003,10 +1186,14 @@ def main() -> None:
         c100_small = by_name["c100_volume_h256"]
         c100_large = by_name["c100_volume_h7168"]
         assert _schedule(c100_small.plan) == _schedule(c100_large.plan)
+        matrix_case_count = len(_C100_MATRIX_CASE_NAMES)
         message += (
-            f"; C100 controlled H256/H7168 "
+            f"; C100 volume H256/H7168 "
             f"moved={c100_small.expected_moved_copies}, "
-            f"Pcap={c100_small.plan.proxy_capacity_per_egress} (named only)"
+            f"Pcap={c100_small.plan.proxy_capacity_per_egress}; "
+            f"C100 matrix cases={matrix_case_count}, "
+            "G8/D9/N2048/K4/C256/Pcap7168, moved=7168 "
+            "(named only)"
         )
     print(message, flush=True)
     if arguments.oracle_only:

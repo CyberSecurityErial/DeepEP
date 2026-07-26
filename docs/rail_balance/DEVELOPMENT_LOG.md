@@ -5553,3 +5553,122 @@ Resume by pre-registering O079's exact report schema and gates, then add only
 Python fixture/report instrumentation and functional oracles.  Do not change
 the production kernel before matrix evidence exists.  O080 compute
 interference follows O079 rather than being bundled with it.
+
+## 2026-07-26 — D097: O079 transfer-matrix fixture and report instrumentation
+
+The resumed worktree contained three uncommitted O079 files only:
+
+```text
+tests/elastic/test_rail_balance_hybrid_shuffle_lsa.py
+tests/elastic/test_rail_balance_hybrid_unshuffle_lsa.py
+tests/elastic/bench_rail_balance_hybrid_lsa.py
+```
+
+No production CUDA, JIT, ABI, buffer, capability bit or public API file was
+changed.  O079 implements the D096 transfer-matrix contract as Python fixture
+and report instrumentation for the local checked adapters:
+
+- C100 keeps the existing volume fixtures `c100_volume_h256` and
+  `c100_volume_h7168`.
+- It adds ten named matrix fixtures:
+  `c100_matrix_{fanout,fanin,mesh,rot1,rot4}_h{256,7168}`.
+- Every matrix fixture uses G8/D9/N2048-per-rank/K4/C256/Pcap7168 and exactly
+  7,168 moved copies.  Hidden width is the only H256/H7168 difference.
+- The CPU oracle proves the full owner-to-egress matrix, not just aggregate
+  moved bytes.  Fan-out, fan-in, full-mesh and rotation therefore cannot be
+  accidentally conflated into the old symmetric volume case.
+- The benchmark report schema moves from version 2 to version 3 and records
+  `owner_to_egress_moved_copies`, outgoing moved copies/bytes and incoming
+  moved copies/bytes.  Source stage rank-local logical bytes now mean owner
+  outgoing records; return stage rank-local logical bytes mean proxy-egress
+  incoming records.  Aggregate logical moved bytes remain unchanged.
+
+The user added a stronger engineering constraint during this slice:
+high-performance code should be high-cohesion/low-coupling, keep one source of
+truth, throw direct errors instead of adding fallbacks, and stay easy to
+audit.  The O079 matrix code was therefore tightened before committing:
+matrix moved/quota/fan/mesh/rotation values are named constants, rotation
+parsing is centralized, and the benchmark now types the schedule as
+`HybridRailSchedule` instead of an opaque object.
+
+Retained failures and fixes:
+
+- The first C100 matrix row builder repeated the same remote destination
+  inside one token.  DeepEP's destination-server deduplication then reduced
+  effective counts and hid the intended transfer matrix.  The fix is to fill
+  each token row with distinct remote destinations and assert all requested
+  remote counts are consumed.
+- The return oracle reused an old `D > K` highest-lane assertion for all named
+  C100 cases.  Matrix fixtures intentionally do not all target lane 3, so the
+  assertion is now limited to the original `all_owner_c1024_d32_k4` oracle.
+- The source CPU PASS message initially still described only the old C100
+  volume pair.  It now reports the ten matrix cases and their fixed
+  G8/D9/N2048/K4/C256/Pcap7168 contract.
+
+Validated without starting GPU work:
+
+```text
+PYTHONPATH=tests:tests/elastic:. /home/chen/.cache/deepep-sjlgpt/bin/python \
+  -m py_compile \
+  tests/elastic/test_rail_balance_hybrid_shuffle_lsa.py \
+  tests/elastic/bench_rail_balance_hybrid_lsa.py \
+  tests/elastic/test_rail_balance_hybrid_unshuffle_lsa.py
+
+PYTHONPATH=tests:tests/elastic:. /home/chen/.cache/deepep-sjlgpt/bin/python \
+  tests/elastic/test_rail_balance_hybrid_shuffle_lsa.py --oracle-only
+
+PYTHONPATH=tests:tests/elastic:. /home/chen/.cache/deepep-sjlgpt/bin/python \
+  tests/elastic/test_rail_balance_hybrid_unshuffle_lsa.py \
+  --oracle-only --case-name c100_matrix_rot4_h7168
+
+PYTHONPATH=tests:tests/elastic:. /home/chen/.cache/deepep-sjlgpt/bin/python \
+  tests/elastic/test_rail_balance_hybrid_unshuffle_lsa.py --oracle-only
+
+git diff --check
+```
+
+All five checks passed.  The source oracle reported the C080-D cases plus
+C100 volume H256/H7168 and ten C100 matrix named cases.  The return oracle
+reported `c100_matrix_rot4_h7168`, moved=7168 and Pcap=7168; the normal
+C080-F CPU oracle also passed.
+
+Post-commit GPU functionality gates were then run with:
+
+```text
+PYTHONPATH=tests:tests/elastic:. EP_DISABLE_GIN=1 \
+  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/test_rail_balance_hybrid_shuffle_lsa.py \
+  --case-name <c100_matrix_case> --watchdog-seconds 900 --timeout 180
+
+PYTHONPATH=tests:tests/elastic:. EP_DISABLE_GIN=1 \
+  CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/test_rail_balance_hybrid_unshuffle_lsa.py \
+  --case-name <c100_matrix_case> --watchdog-seconds 900 --timeout 180
+```
+
+Every one of the ten named matrix cases passed both source and return:
+
+```text
+c100_matrix_fanout_h256    c100_matrix_fanout_h7168
+c100_matrix_fanin_h256     c100_matrix_fanin_h7168
+c100_matrix_mesh_h256      c100_matrix_mesh_h7168
+c100_matrix_rot1_h256      c100_matrix_rot1_h7168
+c100_matrix_rot4_h256      c100_matrix_rot4_h7168
+```
+
+Source PASS lines report true 8-GPU LSA, moved=7168, per-owner/egress=896,
+exact legacy TokenLayout bytes and immutable inputs.  Return PASS lines report
+true 8-GPU LSA, moved=7168, exact owner row/token bytes and poison-preserved
+non-targets.  These are functionality-only gates.  At collection time
+`nvidia-smi` reported the visible GPUs as `NVIDIA L20X`, not H200, and GPU0
+had another user's non-megatron `python trl_stuff.py` process using about
+15 GiB.  The process was not killed and no profiler-free performance,
+Nsight Systems or Nsight Compute result is accepted from this run.
+
+Missing static-tool evidence: neither `ruff` nor `pyrefly` is installed in the
+active shell or the pinned `/home/chen/.cache/deepep-sjlgpt` environment.
+This checkpoint therefore records that gap instead of fabricating lint/type
+results.  Full-repo `ruff format .` is intentionally not run in this slice
+because it would create broad mechanical churn unrelated to O079.

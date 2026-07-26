@@ -50,6 +50,7 @@ import deep_ep
 import deep_ep._C as _C
 from deep_ep.utils.envs import init_dist
 from deep_ep.utils.math import align
+from rail_balance_hybrid_reference import HybridRailSchedule
 from test_rail_balance_hybrid_plan_lsa import (
     _gather_objects,
     _local_topk,
@@ -607,6 +608,52 @@ def _stats(values: Sequence[float]) -> dict[str, float | int]:
     }
 
 
+def _movement_accounting(
+    schedule: HybridRailSchedule,
+    *,
+    logical_token_bytes: int,
+    stage: str,
+) -> dict[str, object]:
+    owner_to_egress = [
+        [0 for _ in range(_WORLD_SIZE)] for _ in range(_WORLD_SIZE)
+    ]
+    for bucket in schedule.segments:
+        for segment in bucket:
+            owner_to_egress[int(segment.owner)][int(segment.egress)] += \
+                int(segment.count)
+    outgoing_counts = [sum(row) for row in owner_to_egress]
+    incoming_counts = [
+        sum(owner_to_egress[owner][egress] for owner in range(_WORLD_SIZE))
+        for egress in range(_WORLD_SIZE)
+    ]
+    assert tuple(incoming_counts) == tuple(int(value)
+                                           for value in schedule.proxy_required)
+    assert sum(outgoing_counts) == sum(incoming_counts) == \
+        int(schedule.moved_copies)
+    selected_counts = outgoing_counts if stage == "source" else incoming_counts
+    return {
+        "owner_to_egress_moved_copies": owner_to_egress,
+        "outgoing_moved_copies_per_rank": outgoing_counts,
+        "incoming_moved_copies_per_egress": incoming_counts,
+        "selected_moved_copies_per_rank": selected_counts,
+        "outgoing_logical_bytes_per_rank": [
+            value * logical_token_bytes for value in outgoing_counts
+        ],
+        "incoming_logical_bytes_per_egress": [
+            value * logical_token_bytes for value in incoming_counts
+        ],
+        "selected_logical_bytes_per_rank": [
+            value * logical_token_bytes for value in selected_counts
+        ],
+        "selected_logical_bytes_aggregate": (
+            sum(selected_counts) * logical_token_bytes),
+        "selected_rank_scope": (
+            "source-owner outgoing moved records"
+            if stage == "source"
+            else "proxy-egress incoming moved records"),
+    }
+
+
 def _steady_summary(
     records: Sequence[dict[str, object]],
 ) -> dict[str, object]:
@@ -941,6 +988,11 @@ def _build_report(
     )
     logical_token_bytes = int(
         layout[5] if args.stage == "source" else layout[7])
+    movement = _movement_accounting(
+        schedule,
+        logical_token_bytes=logical_token_bytes,
+        stage=args.stage,
+    )
     created = datetime.now(timezone.utc)
     for key in ("git", "extension", "loaded_libraries", "sources"):
         assert pre_identity[key] == post_identity[key], key
@@ -991,6 +1043,12 @@ def _build_report(
             spec.plan.proxy_capacity_per_egress,
         "moved_copies_global": schedule.moved_copies,
         "proxy_required_per_egress": list(schedule.proxy_required),
+        "owner_to_egress_moved_copies":
+            movement["owner_to_egress_moved_copies"],
+        "outgoing_moved_copies_per_rank":
+            movement["outgoing_moved_copies_per_rank"],
+        "incoming_moved_copies_per_egress":
+            movement["incoming_moved_copies_per_egress"],
         "dtype": "bfloat16",
     }
     layout_manifest = {
@@ -1059,16 +1117,28 @@ def _build_report(
         not unexpected_app_pids and measurement_depth_ok and
         persistent_report_requested and not args.nvtx
     )
-    logical_bytes_by_rank = [
-        int(required) * logical_token_bytes
-        for required in schedule.proxy_required
-    ]
+    logical_bytes_by_rank = list(
+        movement["selected_logical_bytes_per_rank"])
+    assert logical_bytes == movement["selected_logical_bytes_aggregate"]
     traffic_accounting: dict[str, object] = {
         "logical_numerator_scope": (
             "moved TokenLayout record bytes counted once, aggregated across "
             "all 8 ranks; not physical link or memory-controller traffic"),
+        "stage_rank_scope": movement["selected_rank_scope"],
         "logical_bytes_per_rank": logical_bytes_by_rank,
         "logical_bytes_aggregate": logical_bytes,
+        "owner_to_egress_moved_copies":
+            movement["owner_to_egress_moved_copies"],
+        "outgoing_moved_copies_per_rank":
+            movement["outgoing_moved_copies_per_rank"],
+        "incoming_moved_copies_per_egress":
+            movement["incoming_moved_copies_per_egress"],
+        "selected_moved_copies_per_rank":
+            movement["selected_moved_copies_per_rank"],
+        "outgoing_logical_bytes_per_rank":
+            movement["outgoing_logical_bytes_per_rank"],
+        "incoming_logical_bytes_per_egress":
+            movement["incoming_logical_bytes_per_egress"],
     }
     if args.stage == "return":
         num_reduce_rows = min(
@@ -1088,7 +1158,7 @@ def _build_report(
             "full reduce-seed and snapshot copies, status D2H, barrier "
             "traffic, and any physical peer/HBM transaction amplification")
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "run_id": (
             f"{created.strftime('%Y%m%dT%H%M%S.%fZ')}-"
             f"{args.stage}-{spec.plan.name}-p{os.getpid()}"),
@@ -1341,11 +1411,16 @@ def _worker(local_rank: int, num_local_ranks: int,
         logical_token_bytes = layout[
             5 if args.stage == "source" else 7]
         schedule = _schedule(case)
-        logical_bytes_by_rank = tuple(
-            required * logical_token_bytes
-            for required in schedule.proxy_required
+        movement = _movement_accounting(
+            schedule,
+            logical_token_bytes=logical_token_bytes,
+            stage=args.stage,
         )
-        logical_bytes = sum(logical_bytes_by_rank)
+        logical_bytes_by_rank = tuple(
+            int(value)
+            for value in movement["selected_logical_bytes_per_rank"]
+        )
+        logical_bytes = int(movement["selected_logical_bytes_aggregate"])
         assert logical_bytes == \
             spec.expected_moved_copies * logical_token_bytes
         buffer_init_rows = _gather_objects({

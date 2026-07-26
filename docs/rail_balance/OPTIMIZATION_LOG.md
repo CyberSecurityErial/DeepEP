@@ -1945,3 +1945,33 @@ step.  O078 does not authorize a TMA pipeline, queue, block geometry, ABI,
 buffer or fusion change.  The next local work must first freeze a transfer-
 matrix/compute-interference measurement contract; real D>1 Gin/RDMA remains
 an external gate.
+
+## Measurement preparation O079 — transfer-matrix fixtures and source/return byte scopes
+
+Status: **FUNCTIONAL_FIXTURE_PASS / PERFORMANCE_PENDING**.
+
+O079 is not a new device-kernel optimization.  It makes the next C100
+measurements falsifiable by separating four transfer shapes that the old
+symmetric volume fixture could not distinguish:
+
+- `fanout`: owner 0 sends 1,024 moved records to each other egress.
+- `fanin`: owners 1--7 each send 1,024 moved records to egress 0.
+- `mesh`: every owner sends 128 moved records to every non-owner egress.
+- `rot1` and `rot4`: every owner sends 896 moved records to one rotated
+  egress.
+
+Each fixture is fixed at G8/D9/N2048-per-rank/K4/C256/Pcap7168 and 7,168
+moved records.  This keeps scan count, destination count, top-k, channel
+count, capacity and arena geometry fixed while changing only the owner-to-
+egress matrix.  The benchmark schema now records the full matrix plus
+outgoing and incoming sums.  For source shuffle, rank-local logical bytes are
+the outgoing row sums because the source owner performs those moves.  For
+return-unshuffle, rank-local logical bytes are the incoming column sums because
+the proxy egress receives and returns those records.
+
+All ten named matrix fixtures pass true 8-GPU LSA source and return
+functionality.  No performance result is accepted from O079 yet: the run had a
+GPU0 co-tenant and the visible GPU model string was `NVIDIA L20X`, so the data
+cannot satisfy the no-profiler contract.  Ruff and pyrefly are missing in the
+current environment; their absence is a tooling gap, not a pass.  Full-repo
+formatting is deferred to a separate mechanical commit if it is needed.

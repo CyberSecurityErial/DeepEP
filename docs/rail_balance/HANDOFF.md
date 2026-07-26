@@ -1,6 +1,6 @@
 # Rail Balance Session Handoff
 
-Last updated: 2026-07-22 UTC
+Last updated: 2026-07-26 UTC
 Branch: `feat/rail-balance-prototype`
 Repository: `/home/chen/workspace/source_code/DeepEP`
 
@@ -28,6 +28,13 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
   84-pair SASS/cubin-resource audit manifest.  O078 is
   accepted for the local checked adapter; C100 remains open only for transfer-
   matrix and compute-interference evidence, not another resolver redesign.
+- O079 has a functionality-validated transfer-matrix fixture/report-
+  instrumentation slice.  It adds named C100 fan-out, fan-in, mesh, rot1 and
+  rot4 H256/H7168 fixtures without touching production kernels, fixes the
+  benchmark's source/return logical-byte scope by recording the full
+  owner-to-egress matrix plus outgoing and incoming sums, and passes true
+  8-GPU LSA source and return checks for all ten named matrix cases.  These
+  are functionality gates only, not performance evidence.
 - Both capability bits remain false and no result claims real Gin/RDMA
   behavior. The local activation evidence is complete, but the public methods
   deliberately remain unreachable through a normal force construction until a
@@ -277,11 +284,14 @@ No C070 timing is performance evidence.
    immutable-plan contract and all current fault recovery.  Do not add an O(C)
    validation pass, TMA rewrite, queue/atomic, new workspace, block-geometry,
    barrier, ABI, capability or default-off change without a new evidence chain.
-10. Resume at D096.  First pre-register O079, then add only Python fixtures and
-   report instrumentation for the matched G8/D9/N2048/K4/C256/Pcap7168,
-   moved-7168 fan-out/fan-in/full-mesh/rotation matrices.  Record outgoing and
-   incoming bytes separately; the current asymmetric source rank-local byte
-   field is not valid.  Do not bundle production-kernel changes.
+10. Resume at D097.  O079's Python fixture/report instrumentation is
+   functionally validated for all ten named matrix cases: G8/D9/N2048/K4/C256/
+   Pcap7168, moved=7168 fan-out, fan-in, full mesh, rot1 and rot4, each at
+   H256 and H7168.  The benchmark now records outgoing and incoming bytes
+   separately; source uses outgoing owner rows and return uses incoming
+   proxy-egress columns.  Production-kernel changes remain out of scope for
+   O079.  No O079 performance result is accepted because the run had a GPU0
+   co-tenant and the visible GPU model string was `NVIDIA L20X`.
 11. After O079, pre-register O080's default-off, same-allocation H7168
    stage-only/compute-only/concurrent GEMM experiment.  Performance work still
    requires idle GPUs.  C105 packages the fastest real-cluster bring-up;

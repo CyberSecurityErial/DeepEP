@@ -111,7 +111,8 @@ def _selected_cases(
         assert profile_case_name in _C100_CASE_NAMES
         profile_case = by_name[profile_case_name]
         assert profile_case.expected_moved_copies == 7_168
-        assert profile_case.plan.proxy_capacity_per_egress == 896
+        assert max(_schedule(profile_case.plan).proxy_required) <= \
+            profile_case.plan.proxy_capacity_per_egress
         cases += (profile_case,)
     return cases
 
@@ -233,7 +234,7 @@ def _assert_cpu_oracle(
                     spec.iteration, egress, probe_slot)
                 assert int.from_bytes(bytes(row[:8].tolist()), "little") == \
                     _fingerprint(spec.iteration, egress, probe_slot)
-        if spec.plan.num_scaleout_ranks > spec.plan.num_topk:
+        if spec.plan.name == "all_owner_c1024_d32_k4":
             assert {key[1] for key in targets} == {3}
     return cases
 
