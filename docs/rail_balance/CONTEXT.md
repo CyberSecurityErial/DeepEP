@@ -1116,3 +1116,28 @@ Out of scope until evidence expands the project:
 - `active` reduces the set of rails that carry payload for a destination. It
   does not claim to destroy NCCL/Gin teams or pre-created QPs. Real connection
   setup and network benefit remain C080-H/C110 evidence.
+
+## C107 DeepEP V2 baseline harness context (2026-07-26)
+
+- The production baseline is now unambiguous: public Hybrid
+  `rail_balance='off'`, not local vnode, checked LSA, or force `all/0`.
+- `tests/elastic/bench_rail_balance_hybrid_multinode.py` runs one real D>1 job
+  containing symmetric off/force blocks.  Each force dispatch ticket is
+  consumed by the matching combine before the next iteration.
+- The primary metric is the per-ordinal maximum rank-local current-stream CUDA
+  event envelope for public dispatch+combine.  It includes host/world-gate
+  idle gaps and is not a kernel-time sum.  Cross-node absolute clocks are never
+  subtracted.
+- One official-reference probe per mode and a second same-input timed-path
+  probe are untimed.  Every measured block's last rank digest must equal its
+  corresponding timed-path probe.
+- WORLD consensus now covers warmup, steady count, symmetric order, timeout,
+  profiler declaration, co-tenant override, run ID and output identity in
+  addition to the C105 source/extension/topology/config identity.
+- Formal reports require clean identical pre/post source and extension,
+  10+100 samples per block, direct unwrapped execution, stable GPU identity,
+  P0/no throttle, MIG/MPS off, default compute mode, and no unexpected GPU
+  process.  A diagnostic override preserves samples but forbids a claim.
+- CPU evidence is 5/5 new benchmark contracts plus the unchanged C105 23/23
+  suite.  The current workspace cannot execute real D>1 Gin, so the report
+  schema and commands are ready but no DeepEP V2 speedup number exists yet.

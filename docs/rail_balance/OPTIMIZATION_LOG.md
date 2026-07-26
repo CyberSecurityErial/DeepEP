@@ -2123,3 +2123,28 @@ had co-tenants. Functional CUDA/LSA/vnode and spill-free codegen results prove
 semantic viability only. The first useful comparison matrix on idle hardware
 is `all/0`, `active/0`, `active/20`, and `adaptive/20`, with profiler-free
 latency and moved bytes recorded before Nsys/NCU attribution.
+
+## Scope decision O086 — DeepEP V2 off is the only production baseline
+
+The final optimization question is intentionally narrower than the local
+policy microbenchmarks: does the complete public force dispatch/combine path
+beat native DeepEP V2 Hybrid with `rail_balance='off'`?  Local `all/0`, vnode,
+and checked-LSA measurements remain diagnostic controls and cannot answer that
+question because they omit real Gin, QP, NIC, and fabric behavior.
+
+The new D>1 benchmark changes only the constructor mode between alternating
+fresh-buffer blocks.  Input, topology, precision, SM/QP selection, route,
+source, extension and runtime remain fixed.  `balanced` measures fixed
+overhead, `one_hot` measures maximum redistribution opportunity, `two_hot`
+measures a narrower active set, and separate all/active/adaptive runs expose
+the connection-spread versus tail tradeoff.  Every policy job contains its own
+DeepEP V2 off blocks, so results never compare different machines or commits.
+
+The decisive ratio is baseline median divided by candidate median.  A value
+above one is only accepted when correctness, identity, environment, sample
+depth and direct-unwrapped gates all pass.  A losing balanced or low-skew case
+is not hidden: it becomes evidence for bypass/auto policy.  Nsys and NCU may
+explain a result later, but cannot replace this profiler-free A/B truth.
+
+No kernel optimization or speedup claim was made in O086.  Real numbers remain
+blocked on C080-H/C110 hardware.

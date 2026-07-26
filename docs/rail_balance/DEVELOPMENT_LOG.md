@@ -6123,3 +6123,65 @@ Retained failures and corrections:
 
 GPU 0/1 had non-Megatron co-tenants during functional testing. No process was
 killed, and no timing or performance claim was made.
+
+## 2026-07-26 — D106: add a DeepEP V2 off/force performance baseline
+
+Added a dedicated real-D>1 profiler-free runner,
+`tests/elastic/bench_rail_balance_hybrid_multinode.py`.  Its only production
+baseline is public Hybrid `rail_balance='off'`, labelled the native DeepEP V2
+data path.  The candidate is public `force` with one constructor-fixed policy.
+The runner changes no production Python, C++, CUDA, JIT key, buffer, or kernel.
+
+Each timed iteration performs dispatch followed immediately by combine with
+that dispatch's handle, so every force ticket is consumed once.  CUDA events
+record dispatch, combine, and the complete current-stream call envelope.  A
+steady block has no per-iteration synchronize; it synchronizes once after the
+loop, gathers rank-local elapsed values, and uses the maximum rank duration for
+each ordinal.  Host/GPU absolute timestamps are never compared across nodes.
+Fresh buffers follow ABBA then BAAB ordering.  Reports retain every rank/sample,
+block and pooled median/p95/p99/mean/population-std/CV/min/max, pairwise ratios,
+and direct DeepEP-V2-over-force speedup.
+
+Correctness is outside timing.  Both modes first pass the existing official
+dispatch/combine reference and exact off/force comparison.  The exact data
+path used in steady measurement is then probed separately; every block's last
+output digest must match its same-mode probe.  The final traffic oracle is
+rebuilt with the observed force channel count rather than the capacity-only
+C=1 geometry.
+
+The first review found one Blocker and four High issues: benchmark-only
+arguments were absent from WORLD consensus, profiler absence was overstated,
+timed outputs were not checked, only pre-run code identity was captured, and
+environment allowlists were keyed only by hostname.  The accepted runner adds
+a complete benchmark manifest gate, a declared direct/unwrapped profiler
+contract, timed-path digests, identical pre/post Git/extension identity,
+node-rank-qualified PID gates, static GPU identity drift checks, and pre/post
+P-state/throttle/MIG/MPS/compute-process evidence.  Co-tenants reject timing by
+default; an explicit smoke override always makes the report diagnostic-only.
+
+Validation after those fixes:
+
+- new CPU benchmark contract 5/5;
+- existing C105 contract 23/23;
+- Ruff check and Ruff format check for both new files;
+- py_compile, `--help`, and `git diff --check`;
+- independent final audit confirmed ticket lifetime, stream-event ordering,
+  block-end synchronization, symmetric order, watchdog cleanup, and atomic
+  JSON behavior.
+
+Retained failures/corrections:
+
+1. The first shell check used an unavailable `python`; all accepted commands
+   use `/home/chen/.cache/deepep-sjlgpt/bin/python`.
+2. An early uncommitted runner draft reached 921 lines while duplicating
+   environment/report machinery.  It was discarded before commit and reduced
+   to one test-only runner that reuses the C105 correctness facts.
+3. The initial concise draft could mark a report eligible while listing power,
+   clock, throttle and profiler state as missing.  It was not committed; the
+   final gate records those states, fails closed on actionable conditions, and
+   calls external profiler detection a residual risk rather than proof.
+4. No real multi-node Gin/RDMA machine is present in this workspace.  Only CPU
+   and static contracts ran; no latency, throughput, or speedup number exists.
+
+The exact human-labelled two-node commands and result interpretation are in
+`docs/rail_balance/BASELINE_BENCHMARK.md`.
