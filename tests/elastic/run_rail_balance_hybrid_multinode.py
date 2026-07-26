@@ -82,11 +82,17 @@ def _phase(
     operation: Callable[[], Any],
 ) -> Any:
     """Run one rank-local phase and report every failure before proceeding."""
+    rank = dist.get_rank(group)
+    print(f"PHASE_BEGIN rank={rank} label={label}", flush=True)
     result, error = None, None
     try:
         result = operation()
     except BaseException:
         error = traceback.format_exc()
+    print(
+        f"PHASE_LOCAL_END rank={rank} label={label} error={error is not None}",
+        flush=True,
+    )
     gathered: list[str | None] = [None] * dist.get_world_size(group)
     dist.all_gather_object(gathered, error, group=group)
     failures = [
@@ -101,6 +107,7 @@ def _phase(
         timeout=timedelta(seconds=timeout),
         wait_all_ranks=True,
     )
+    print(f"PHASE_END rank={rank} label={label}", flush=True)
     return result
 
 
