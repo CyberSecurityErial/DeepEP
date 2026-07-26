@@ -14,6 +14,18 @@ static constexpr int kNumHybridMaxChannels = deep_ep::kNumMaxChannels;
 static constexpr int kNumHybridMaxDestinations = 32;
 static constexpr int64_t kNumHybridBufferAlignmentBytes = 2 * 1024 * 1024;
 
+// Force-forward metadata adds one proxy slot to the legacy two-field header.
+// Keep its ABI here so host allocation and both persistent kernels cannot
+// drift independently.
+static constexpr int kHybridForwardSrcTokenDim = 0;
+static constexpr int kHybridForwardLastTokenDim = 1;
+static constexpr int kHybridForwardProxySlotDim = 2;
+static constexpr int kHybridForwardRouteBaseDim = 3;
+__forceinline__ __device__ __host__ constexpr int
+get_num_hybrid_forward_metadata_dims(const int num_topk) {
+    return kHybridForwardRouteBaseDim + 2 * num_topk;
+}
+
 // Stable force-v1 device status shared by host transaction code and the JIT
 // planner/shuffle kernels.
 enum class HybridPlanError : int {
@@ -37,6 +49,18 @@ struct alignas(ptx::kNumTMAAlignBytes) HybridControl {
 
 EP_STATIC_ASSERT(sizeof(HybridControl) == ptx::kNumTMAAlignBytes,
                  "Hybrid control ABI must occupy one TMA-aligned unit");
+
+// Capacity-independent force-arena prefix.
+static constexpr int64_t kHybridChannelCountOffsetBytes =
+    math::constexpr_align<int64_t>(
+        sizeof(HybridControl), ptx::kNumTMAAlignBytes);
+static constexpr int64_t kHybridChannelCountBytes =
+    static_cast<int64_t>(kNumHybridMaxChannels) *
+        kNumHybridMaxDestinations * sizeof(int32_t);
+static constexpr int64_t kHybridProxyDispatchOffsetBytes =
+    math::constexpr_align<int64_t>(
+        kHybridChannelCountOffsetBytes + kHybridChannelCountBytes,
+        ptx::kNumTMAAlignBytes);
 
 __forceinline__ __device__ __host__ int64_t checked_add_i64(
         const int64_t lhs, const int64_t rhs) {
@@ -99,15 +123,9 @@ struct HybridArenaLayout {
         combine_token_bytes = combine_layout.get_num_bytes<false, int64_t>();
 
         control_offset = 0;
-        channel_count_offset = checked_align_i64(
-            sizeof(HybridControl), ptx::kNumTMAAlignBytes);
-        channel_count_bytes = checked_mul_i64(
-            checked_mul_i64(kNumHybridMaxChannels,
-                            kNumHybridMaxDestinations),
-            sizeof(int32_t));
-        proxy_dispatch_offset = checked_align_i64(
-            checked_add_i64(channel_count_offset, channel_count_bytes),
-            ptx::kNumTMAAlignBytes);
+        channel_count_offset = kHybridChannelCountOffsetBytes;
+        channel_count_bytes = kHybridChannelCountBytes;
+        proxy_dispatch_offset = kHybridProxyDispatchOffsetBytes;
         proxy_return_offset = checked_align_i64(
             checked_add_i64(
                 proxy_dispatch_offset,

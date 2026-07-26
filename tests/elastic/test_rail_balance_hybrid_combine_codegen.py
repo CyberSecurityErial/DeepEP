@@ -88,6 +88,11 @@ def _replace_once(source: str, old: str, new: str) -> str:
 def _normalize_force_to_legacy(force: str) -> str:
     """Undo exactly the audited force edits; no unrelated drift is accepted."""
     force = _replace_once(
+        force,
+        "#include <deep_ep/common/rail_balance_hybrid_layout.cuh>\n",
+        "",
+    )
+    force = _replace_once(
         force, "rail_balance_hybrid_combine_impl(", "hybrid_combine_impl(")
     force = _replace_once(
         force, "                    void* rail_balance_proxy_return_base,\n", "")
@@ -137,29 +142,37 @@ def _normalize_force_to_legacy(force: str) -> str:
         legacy_expanded_assert + "        // Tail issuer\n")
     force = _replace_once(
         force,
-        "constexpr int kNumForwardMetadataDims = 3 + kNumTopk * 2;",
+        "constexpr int kNumForwardMetadataDims =\n"
+        "            rail_balance::get_num_hybrid_forward_metadata_dims(kNumTopk);",
         "constexpr int kNumForwardMetadataDims = 2 + kNumTopk * 2;")
 
-    force_replay = '''            const auto src_token_global_idx = __ldg(token_metadata_at_forward + i * kNumForwardMetadataDims);
+    force_replay = '''            const auto metadata_ptr =
+                token_metadata_at_forward + i * kNumForwardMetadataDims;
+            const auto src_token_global_idx = __ldg(
+                metadata_ptr + rail_balance::kHybridForwardSrcTokenDim);
             // The ending marker is warp-uniform. Stop before reading the added
             // p field (or the legacy 2K fields) from the otherwise unused
             // sentinel row.
             if (src_token_global_idx < 0)
                 break;
-            const auto is_token_last_in_chunk = __ldg(token_metadata_at_forward + i * kNumForwardMetadataDims + 1);
+            const auto is_token_last_in_chunk = __ldg(
+                metadata_ptr + rail_balance::kHybridForwardLastTokenDim);
             // Force dispatch snapshots p before overwriting linked-list transit
             // scratch. Gate #2 and the one-live force handle make this metadata
             // immutable for the committed combine epoch: do not add a post-Tag0
             // bounds check, clamp, status branch, trap, or early return here.
             const auto proxy_slot = __ldg(
-                token_metadata_at_forward + i * kNumForwardMetadataDims + 2);
+                metadata_ptr + rail_balance::kHybridForwardProxySlotDim);
             const auto src_rank_idx = src_token_global_idx / kNumMaxTokensPerRank;
             const auto src_scaleout_rank_idx = src_rank_idx / kNumScaleupRanks;
             const auto src_token_idx = src_token_global_idx % kNumMaxTokensPerRank;
             auto stored_src_scaleup_rank_idx = lane_idx < kNumTopk ?
-                __ldg(token_metadata_at_forward + i * kNumForwardMetadataDims + 3 + lane_idx) : -1;
+                __ldg(metadata_ptr +
+                      rail_balance::kHybridForwardRouteBaseDim + lane_idx) : -1;
             auto stored_src_slot_idx = lane_idx < kNumTopk ?
-                __ldg(token_metadata_at_forward + i * kNumForwardMetadataDims + 3 + kNumTopk + lane_idx) : -1;
+                __ldg(metadata_ptr +
+                      rail_balance::kHybridForwardRouteBaseDim +
+                          kNumTopk + lane_idx) : -1;
 '''
     legacy_replay = '''            const auto src_token_global_idx = __ldg(token_metadata_at_forward + i * kNumForwardMetadataDims);
             const auto is_token_last_in_chunk = __ldg(token_metadata_at_forward + i * kNumForwardMetadataDims + 1);
@@ -305,10 +318,13 @@ def _run_case(name: str) -> None:
         "EP_HOST_ASSERT(",
     ):
         assert forbidden not in launch_adapter
-    assert "constexpr int kNumForwardMetadataDims = 3 + kNumTopk * 2;" in header
-    assert "i * kNumForwardMetadataDims + 2);" in header
-    assert "i * kNumForwardMetadataDims + 3 + lane_idx" in header
-    assert "i * kNumForwardMetadataDims + 3 + kNumTopk + lane_idx" in header
+    assert (
+        "rail_balance::get_num_hybrid_forward_metadata_dims(kNumTopk)"
+        in header
+    )
+    assert "rail_balance::kHybridForwardProxySlotDim" in header
+    assert "rail_balance::kHybridForwardRouteBaseDim + lane_idx" in header
+    assert "kNumTopk + lane_idx" in header
     assert header.count("rail_balance_proxy_return_base") == 2
 
     # The sentinel break must precede every force-only p/2K read.

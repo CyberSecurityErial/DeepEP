@@ -4,6 +4,7 @@
 #include <deep_ep/common/layout.cuh>
 #include <deep_ep/common/math.cuh>
 #include <deep_ep/common/ptx.cuh>
+#include <deep_ep/common/rail_balance_hybrid_layout.cuh>
 #include <deep_ep/impls/combine_utils.cuh>
 
 namespace deep_ep::elastic {
@@ -389,7 +390,8 @@ rail_balance_hybrid_combine_impl(nv_bfloat16* x,
         scaleout_send_buffer = scaleout_send_buffer.get_channel_buffer<kNumScaleoutRanks * kNumMaxTokensPerChannel>(channel_idx);
 
         // Shape of `token_metadata_at_forward`: `[kNumChannels, kNumScaleoutRanks * kNumMaxTokensPerChannel + 1, kNumForwardMetadataDims]`
-        constexpr int kNumForwardMetadataDims = 3 + kNumTopk * 2;
+        constexpr int kNumForwardMetadataDims =
+            rail_balance::get_num_hybrid_forward_metadata_dims(kNumTopk);
         token_metadata_at_forward += channel_idx * ((kNumScaleoutRanks * kNumMaxTokensPerChannel + 1) * kNumForwardMetadataDims);
 
         // Overlap TMA stores and reduction
@@ -418,26 +420,33 @@ rail_balance_hybrid_combine_impl(nv_bfloat16* x,
         // Replay the dispatch
         int stored_num_tokens_recv[kNumScaleupRanksPerLane] = {}, stored_cached_scaleup_tail[kNumScaleupRanksPerLane] = {};
         for (int i = 0; ; ++ i) {
-            const auto src_token_global_idx = __ldg(token_metadata_at_forward + i * kNumForwardMetadataDims);
+            const auto metadata_ptr =
+                token_metadata_at_forward + i * kNumForwardMetadataDims;
+            const auto src_token_global_idx = __ldg(
+                metadata_ptr + rail_balance::kHybridForwardSrcTokenDim);
             // The ending marker is warp-uniform. Stop before reading the added
             // p field (or the legacy 2K fields) from the otherwise unused
             // sentinel row.
             if (src_token_global_idx < 0)
                 break;
-            const auto is_token_last_in_chunk = __ldg(token_metadata_at_forward + i * kNumForwardMetadataDims + 1);
+            const auto is_token_last_in_chunk = __ldg(
+                metadata_ptr + rail_balance::kHybridForwardLastTokenDim);
             // Force dispatch snapshots p before overwriting linked-list transit
             // scratch. Gate #2 and the one-live force handle make this metadata
             // immutable for the committed combine epoch: do not add a post-Tag0
             // bounds check, clamp, status branch, trap, or early return here.
             const auto proxy_slot = __ldg(
-                token_metadata_at_forward + i * kNumForwardMetadataDims + 2);
+                metadata_ptr + rail_balance::kHybridForwardProxySlotDim);
             const auto src_rank_idx = src_token_global_idx / kNumMaxTokensPerRank;
             const auto src_scaleout_rank_idx = src_rank_idx / kNumScaleupRanks;
             const auto src_token_idx = src_token_global_idx % kNumMaxTokensPerRank;
             auto stored_src_scaleup_rank_idx = lane_idx < kNumTopk ?
-                __ldg(token_metadata_at_forward + i * kNumForwardMetadataDims + 3 + lane_idx) : -1;
+                __ldg(metadata_ptr +
+                      rail_balance::kHybridForwardRouteBaseDim + lane_idx) : -1;
             auto stored_src_slot_idx = lane_idx < kNumTopk ?
-                __ldg(token_metadata_at_forward + i * kNumForwardMetadataDims + 3 + kNumTopk + lane_idx) : -1;
+                __ldg(metadata_ptr +
+                      rail_balance::kHybridForwardRouteBaseDim +
+                          kNumTopk + lane_idx) : -1;
             // Scaleup rank mask
             EP_STATIC_ASSERT(kNumScaleupRanks <= 64, "Too many scale-up peers");
             using mask_t = std::conditional_t<kNumScaleupRanks <= 32, unsigned, unsigned long long>;

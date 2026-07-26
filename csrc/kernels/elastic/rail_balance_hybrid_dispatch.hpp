@@ -617,7 +617,8 @@ static pybind11::dict rail_balance_hybrid_dispatch_codegen_test(
     result["legacy_code"] = legacy_code;
     result["num_threads"] = args.launch_args.num_threads;
     result["num_channels"] = num_sms * num_channels_per_sm;
-    result["num_forward_metadata_dims"] = 3 + 2 * num_topk;
+    result["num_forward_metadata_dims"] =
+        rail_balance::get_num_hybrid_forward_metadata_dims(num_topk);
     result["reuse_slot_indices"] = false;
     result["num_sf_packs"] = 0;
     result["proxy_capacity"] = proxy_capacity;

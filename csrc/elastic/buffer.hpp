@@ -709,7 +709,8 @@ public:
         auto token_metadata_at_forward = torch::empty(
             {num_channels,
              num_destinations * num_max_tokens_per_channel + 1,
-             3 + num_topk * 2}, int_options);
+             rail_balance::get_num_hybrid_forward_metadata_dims(num_topk)},
+            int_options);
         auto channel_linked_list = torch::empty(
             {num_channels,
              num_destinations * num_max_tokens_per_channel + 1,
@@ -1012,7 +1013,7 @@ public:
             num_gpu_timeout_cycles,
             arena_offset,
             arena_layout.arena_bytes,
-            3 + num_topk * 2,
+            rail_balance::get_num_hybrid_forward_metadata_dims(num_topk),
         };
     }
 

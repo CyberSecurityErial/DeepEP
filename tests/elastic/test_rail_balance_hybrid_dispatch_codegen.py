@@ -156,10 +156,17 @@ def _run_case(name: str) -> None:
     ):
         assert forbidden not in adapter
 
-    assert "constexpr int kNumForwardMetadataDims = 3 + kNumTopk * 2;" in header
-    assert "metadata_ptr[2] = stored_proxy_slot;" in header
-    assert "metadata_ptr[3 + lane_idx]" in header
-    assert "metadata_ptr[3 + kNumTopk + lane_idx]" in header
+    assert (
+        "rail_balance::get_num_hybrid_forward_metadata_dims(kNumTopk)"
+        in header
+    )
+    assert "rail_balance::kHybridForwardProxySlotDim" in header
+    assert "rail_balance::kHybridForwardRouteBaseDim + lane_idx" in header
+    assert (
+        "rail_balance::kHybridForwardRouteBaseDim +\n"
+        "                                kNumTopk + lane_idx"
+        in header
+    )
     assert "rail_balance_group_prefix" in header
     for workspace_limit in (
         "layout::WorkspaceLayout::kNumMaxRanks",
@@ -190,7 +197,7 @@ def _run_case(name: str) -> None:
         proxy_snapshot,
     )
     metadata_snapshot = header.index(
-        "metadata_ptr[2] = stored_proxy_slot;", linked_list_overwrite)
+        "rail_balance::kHybridForwardProxySlotDim] =", linked_list_overwrite)
     assert proxy_snapshot < linked_list_overwrite < metadata_snapshot
 
     # After the opening Tag0 epoch boundary the release specialization trusts

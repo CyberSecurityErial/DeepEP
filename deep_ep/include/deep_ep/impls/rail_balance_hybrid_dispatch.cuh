@@ -364,15 +364,8 @@ rail_balance_hybrid_dispatch_impl(
     } else if (warp_idx < kNumNotifyWarps + kNumScaleoutWarps) {
         const int scaleout_warp_idx = warp_idx - kNumNotifyWarps;
         const int channel_idx = sm_idx * kNumChannelsPerSM + scaleout_warp_idx;
-        // Keep force-only arena address arithmetic out of notify and forward
-        // roles. The dispatch payload offset is independent of Pcap; Gate #2
-        // has already validated every p before Tag0, so the committed kernel
-        // does unchecked arithmetic and cannot strand peers in a device trap.
-        constexpr int64_t kProxyDispatchOffset = math::constexpr_align<int64_t>(
-            sizeof(rail_balance::HybridControl) +
-                static_cast<int64_t>(rail_balance::kNumHybridMaxChannels) *
-                    rail_balance::kNumHybridMaxDestinations * sizeof(int32_t),
-            ptx::kNumTMAAlignBytes);
+        // Gate #2 has already validated every p before Tag0, so the committed
+        // kernel uses the shared ABI offset without a fallible device check.
         scaleout_recv_buffer = scaleout_recv_buffer.get_rank_buffer(scaleout_rank_idx);
         scaleout_recv_buffer = scaleout_recv_buffer.get_channel_buffer<kNumMaxTokensPerChannel>(channel_idx);
 
@@ -543,7 +536,7 @@ rail_balance_hybrid_dispatch_impl(
                         .get_base_ptr(),
                     math::advance_ptr(
                         rail_balance_arena,
-                        kProxyDispatchOffset +
+                        rail_balance::kHybridProxyDispatchOffsetBytes +
                             static_cast<int64_t>(proxy_slot) *
                                 token_layout.get_num_bytes<false>()),
                     token_layout.get_num_bytes<false>(), lane_idx,
@@ -585,7 +578,8 @@ rail_balance_hybrid_dispatch_impl(
         scaleup_buffer = scaleup_buffer.get_rank_buffer(scaleup_rank_idx);
 
         // Shape of `token_metadata_at_forward`: `[kNumChannels, kNumScaleoutRanks * kNumMaxTokensPerChannel + 1, kNumForwardMetadataDims]`
-        constexpr int kNumForwardMetadataDims = 3 + kNumTopk * 2;
+        constexpr int kNumForwardMetadataDims =
+            rail_balance::get_num_hybrid_forward_metadata_dims(kNumTopk);
         token_metadata_at_forward += channel_idx * ((kNumScaleoutRanks * kNumMaxTokensPerChannel + 1) * kNumForwardMetadataDims);
 
         // Shape of `dst_buffer_slot_idx`: `[kNumChannels, kNumScaleoutRanks, kNumMaxTokensPerChannel, kNumTopk]`
@@ -751,15 +745,22 @@ rail_balance_hybrid_dispatch_impl(
 
                     // Source token index and last token index flag
                     if (ptx::elect_one_sync()) {
-                        metadata_ptr[0] = tma_buffer.get_src_token_global_idx_ptr()[0];
-                        metadata_ptr[1] = slot_idx == (end_slot_idx - 1);
-                        metadata_ptr[2] = stored_proxy_slot;
+                        metadata_ptr[rail_balance::kHybridForwardSrcTokenDim] =
+                            tma_buffer.get_src_token_global_idx_ptr()[0];
+                        metadata_ptr[rail_balance::kHybridForwardLastTokenDim] =
+                            slot_idx == (end_slot_idx - 1);
+                        metadata_ptr[rail_balance::kHybridForwardProxySlotDim] =
+                            stored_proxy_slot;
                     }
 
                     // Second, original top-k indices and destination slots
                     if (lane_idx < kNumTopk) {
-                        metadata_ptr[3 + lane_idx] = stored_dst_scaleup_rank_idx;
-                        metadata_ptr[3 + kNumTopk + lane_idx] = stored_dst_slot_idx;
+                        metadata_ptr[
+                            rail_balance::kHybridForwardRouteBaseDim + lane_idx] =
+                            stored_dst_scaleup_rank_idx;
+                        metadata_ptr[
+                            rail_balance::kHybridForwardRouteBaseDim +
+                                kNumTopk + lane_idx] = stored_dst_slot_idx;
                         dst_slot_idx_ptr[lane_idx] = stored_dst_slot_idx;
                     }
                 }
@@ -770,7 +771,9 @@ rail_balance_hybrid_dispatch_impl(
 
         // Assign the source token index part of the metadata into `-1` as an ending mark
         if (not kReuseSlotIndices and ptx::elect_one_sync())
-            token_metadata_at_forward[num_tokens_processed * kNumForwardMetadataDims] = -1;
+            token_metadata_at_forward[
+                num_tokens_processed * kNumForwardMetadataDims +
+                    rail_balance::kHybridForwardSrcTokenDim] = -1;
         __syncwarp();
 
         // Update linked list's ending position

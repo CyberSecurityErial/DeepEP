@@ -220,7 +220,9 @@ def _assert_owning_bundle_contract() -> None:
     # tail must never make an undersized legacy dispatch layout appear valid.
     # One occurrence sizes the owning Tensor and one exports the frozen Gate1
     # field; there is no separately recomputed legacy-width variable.
-    assert prepare.count("3 + num_topk * 2") == 2
+    assert prepare.count(
+        "rail_balance::get_num_hybrid_forward_metadata_dims(num_topk)"
+    ) == 2
     dispatch_size = prepare.index("get_dispatch_buffer_size(")
     arena_bound = prepare.index("arena_offset", dispatch_size)
     assert dispatch_size < arena_bound
@@ -281,7 +283,7 @@ def _assert_owning_bundle_contract() -> None:
         "num_gpu_timeout_cycles",
         "arena_offset",
         "arena_layout.arena_bytes",
-        "3 + num_topk * 2",
+        "rail_balance::get_num_hybrid_forward_metadata_dims(num_topk)",
     ))
     for rank_local in (
         "num_tokens",

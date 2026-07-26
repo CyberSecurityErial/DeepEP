@@ -400,7 +400,8 @@ static pybind11::dict rail_balance_hybrid_combine_codegen_test(
     result["legacy_code"] = legacy_code;
     result["num_threads"] = force_args.launch_args.num_threads;
     result["num_channels"] = num_sms * num_channels_per_sm;
-    result["num_forward_metadata_dims"] = 3 + 2 * num_topk;
+    result["num_forward_metadata_dims"] =
+        rail_balance::get_num_hybrid_forward_metadata_dims(num_topk);
     result["combine_token_bytes"] = token_layout.get_num_bytes<false>();
     result["legacy_reduce_rows"] = std::min(num_scaleup_ranks, num_topk);
     result["legacy_reduce_buffer_offset_bytes"] =
