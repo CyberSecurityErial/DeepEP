@@ -236,13 +236,15 @@ def _run_case(name: str) -> None:
     first_arrival_barrier = header.index(
         "comm::kHybridDispatchTag1", role_begin)
     mailbox_reset = header.index(
-        "ptx::st_relaxed_sys(scaleup_count_mailbox + thread_idx, 0)")
+        "ptx::st_relaxed_sys(scaleup_count_mailbox + thread_idx, int64_t(0))")
     mailbox_publish = header.index(
-        "ptx::red_add_rel_sys(peer_mailbox, final_count);",
+        "ptx::red_add_rel_sys(\n"
+        "            peer_mailbox,\n"
+        "            math::pack2<int, int64_t>(1, final_count));",
         role_begin,
     )
     mailbox_snapshot = header.index(
-        "scaleup_count_mailbox + lane_idx",
+        "published_count = ptx::ld_acquire_sys<int64_t>(",
         first_arrival_barrier,
     )
     tail_publish = header.index(
@@ -267,6 +269,7 @@ def _run_case(name: str) -> None:
         epilogue_trigger
     )
     assert "const int final_count = atomicAdd(" in header
+    assert "DeepEP rail count timeout" in header
     assert "kRailBalanceHybridDispatchCountTag" not in header
 
     # After the opening Tag0 epoch boundary the release specialization trusts

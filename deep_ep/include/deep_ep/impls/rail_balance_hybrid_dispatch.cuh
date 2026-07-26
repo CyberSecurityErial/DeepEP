@@ -97,7 +97,7 @@ rail_balance_hybrid_dispatch_impl(
     // Workspaces
     const auto workspace_layout = layout::WorkspaceLayout(workspace, kNumScaleoutRanks, kNumScaleupRanks, kNumExperts);
     const auto host_workspace_layout = layout::WorkspaceLayout(mapped_host_workspace, kNumScaleoutRanks, kNumScaleupRanks, kNumExperts);
-    auto scaleup_count_mailbox = static_cast<int*>(
+    auto scaleup_count_mailbox = static_cast<int64_t*>(
         workspace_layout.get_scaleout_channel_gin_request_ptr(0, 0));
 
     // The kernel uses a fixed space of dynamic shared memory (no static shared memory)
@@ -118,7 +118,7 @@ rail_balance_hybrid_dispatch_impl(
     // Reset the target-local mailbox before Tag0. No peer can publish the next
     // epoch until every rank has entered and left that barrier.
     if (sm_idx == 0 and thread_idx < kNumScaleupRanks)
-        ptx::st_relaxed_sys(scaleup_count_mailbox + thread_idx, 0);
+        ptx::st_relaxed_sys(scaleup_count_mailbox + thread_idx, int64_t(0));
     cooperative_groups::this_grid().sync();
 
     // Global parallel barriers for scale-out subteam and scale-up subteam
@@ -951,7 +951,9 @@ rail_balance_hybrid_dispatch_impl(
         // Use the same release reduction path as the proven NVLink barrier;
         // ordinary peer stores are not guaranteed to reach the target before
         // the subsequent barrier signal on this platform.
-        ptx::red_add_rel_sys(peer_mailbox, final_count);
+        ptx::red_add_rel_sys(
+            peer_mailbox,
+            math::pack2<int, int64_t>(1, final_count));
     }
 
     // Scale-up barrier to ensure data arrival
@@ -965,9 +967,23 @@ rail_balance_hybrid_dispatch_impl(
     // from sender-owned dense counts reduced into this target before Tag1.
     if (sm_idx == 0 and warp_idx == 0) {
         int actual_count = 0;
+        int64_t published_count = 0;
+        comm::timeout_while<kNumTimeoutCycles>(
+            lane_idx < kNumScaleupRanks,
+            [&](const bool& is_last_check) {
+                published_count = ptx::ld_acquire_sys<int64_t>(
+                    scaleup_count_mailbox + lane_idx);
+                if (static_cast<uint64_t>(published_count) >> 32ull == 1)
+                    return true;
+                if (is_last_check)
+                    printf("DeepEP rail count timeout, scale-out: %d, "
+                           "scale-up: %d, source: %d, status: %lld\n",
+                           scaleout_rank_idx, scaleup_rank_idx, lane_idx,
+                           static_cast<long long>(published_count));
+                return false;
+            });
         if (lane_idx < kNumScaleupRanks)
-            actual_count = ptx::ld_acquire_sys<int>(
-                scaleup_count_mailbox + lane_idx);
+            actual_count = static_cast<int>(published_count);
         const int actual_prefix =
             ptx::warp_inclusive_sum(actual_count, lane_idx);
         if (lane_idx < kNumScaleupRanks)
