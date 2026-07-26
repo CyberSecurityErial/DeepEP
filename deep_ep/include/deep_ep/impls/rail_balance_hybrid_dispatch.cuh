@@ -569,13 +569,20 @@ rail_balance_hybrid_dispatch_impl(
                         proxy_token.get_linked_list_idx_ptr());
                     const int embedded_generation = ptx::ld_acquire_sys<int>(
                         proxy_token.get_linked_list_idx_ptr() + 1);
+                    const int embedded_remote_slot =
+                        kNumTopk > 2 ? ptx::ld_acquire_sys<int>(
+                            proxy_token.get_linked_list_idx_ptr() + 2) :
+                            remote_slot;
                     if (embedded_proxy != proxy_slot or
-                        embedded_generation != invocation_key) {
+                        embedded_generation != invocation_key or
+                        embedded_remote_slot != remote_slot) {
                         printf("RB_PROXY_BAD node=%d rail=%d channel=%d "
-                               "proxy=%d embedded_proxy=%d generation=%d "
+                               "proxy=%d embedded_proxy=%d remote_slot=%d "
+                               "embedded_remote_slot=%d generation=%d "
                                "expected_generation=%d src=%d topk0=%d\n",
                                scaleout_rank_idx, scaleup_rank_idx, channel_idx,
-                               proxy_slot, embedded_proxy, embedded_generation,
+                               proxy_slot, embedded_proxy, remote_slot,
+                               embedded_remote_slot, embedded_generation,
                                invocation_key,
                                *proxy_token.get_src_token_global_idx_ptr(),
                                *proxy_token.get_topk_idx_ptr());
