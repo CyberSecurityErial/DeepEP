@@ -20,7 +20,7 @@ template <bool kDoCPUSync,
           int kNumHiddenBytes, int kNumSFPacks,
           int kNumMaxTokensPerRank,
           int kNumExperts, int kNumTopk, int kExpertAlignment,
-          int kNumQPs, int64_t kNumTimeoutCycles,
+          int kNumQPs, int64_t kNumTimeoutCycles, int kProxyCapacity,
           int kNumScaleupRanksPerLane = math::constexpr_ceil_div(kNumScaleupRanks, 32),
           int kNumChannelsPerSM = kNumScaleoutWarps,
           int kNumChannels = kNumScaleoutWarps * kNumSMs,
@@ -525,32 +525,23 @@ rail_balance_hybrid_dispatch_impl(
             const int proxy_begin =
                 __ldg(rail_balance_group_prefix + plan_offset);
             const int proxy_end = proxy_begin + moved_count;
+            const auto arena_layout = rail_balance::HybridArenaLayout(
+                kNumHiddenBytes / static_cast<int>(sizeof(nv_bfloat16)),
+                kNumTopk, kProxyCapacity, rail_balance_arena);
+            const int invocation_key = ptx::ld_acquire_sys<int>(
+                &arena_layout.get_control_ptr()->invocation_id);
 
             #pragma unroll 1
             for (int proxy_slot = proxy_begin;
                  proxy_slot < proxy_end; ++proxy_slot) {
                 const int remote_slot =
                     retained_count + proxy_slot - proxy_begin;
-                const auto proxy_token = layout::TokenLayout(
-                    kNumHiddenBytes, 0, kNumTopk, true,
-                    math::advance_ptr(
-                        rail_balance_arena,
-                        rail_balance::kHybridProxyDispatchOffsetBytes +
-                            static_cast<int64_t>(proxy_slot) *
-                                token_layout.get_num_bytes<false>()));
-                const auto control =
-                    static_cast<rail_balance::HybridControl*>(
-                        rail_balance_arena);
-                const auto proxy_ready = math::advance_ptr<int32_t>(
-                    rail_balance_arena,
-                    rail_balance::kHybridChannelCountOffsetBytes) +
-                    proxy_slot;
-                const int invocation_key = ptx::ld_acquire_sys<int>(
-                    &control->invocation_id);
+                const auto proxy_token =
+                    arena_layout.get_proxy_dispatch_layout(proxy_slot);
                 comm::timeout_while<kNumTimeoutCycles>([&](
                         const bool& is_last_check) {
                     const int ready = ptx::ld_acquire_sys<int>(
-                        proxy_ready);
+                        arena_layout.get_proxy_ready_ptr(proxy_slot));
                     if (ready == invocation_key)
                         return true;
                     if (is_last_check)

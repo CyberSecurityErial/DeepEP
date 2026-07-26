@@ -72,7 +72,7 @@ static constexpr int64_t kHybridChannelCountOffsetBytes =
 static constexpr int64_t kHybridChannelCountBytes =
     static_cast<int64_t>(kNumHybridMaxChannels) *
         kNumHybridMaxDestinations * sizeof(int32_t);
-static constexpr int64_t kHybridProxyDispatchOffsetBytes =
+static constexpr int64_t kHybridProxyReadyOffsetBytes =
     math::constexpr_align<int64_t>(
         kHybridChannelCountOffsetBytes + kHybridChannelCountBytes,
         ptx::kNumTMAAlignBytes);
@@ -108,6 +108,8 @@ struct HybridArenaLayout {
     int64_t control_offset;
     int64_t channel_count_offset;
     int64_t channel_count_bytes;
+    int64_t proxy_ready_offset;
+    int64_t proxy_ready_bytes;
     int64_t proxy_dispatch_offset;
     int64_t dispatch_token_bytes;
     int64_t proxy_return_offset;
@@ -129,9 +131,6 @@ struct HybridArenaLayout {
                                    static_cast<int>(sizeof(nv_bfloat16)));
         EP_UNIFIED_ASSERT(num_topk >= 1 and num_topk <= 32);
         EP_UNIFIED_ASSERT(proxy_capacity > 0);
-        EP_UNIFIED_ASSERT(
-            proxy_capacity <=
-                kNumHybridMaxChannels * kNumHybridMaxDestinations);
 
         const auto dispatch_layout = layout::TokenLayout(
             hidden * sizeof(nv_bfloat16), 0, num_topk, true);
@@ -143,7 +142,12 @@ struct HybridArenaLayout {
         control_offset = 0;
         channel_count_offset = kHybridChannelCountOffsetBytes;
         channel_count_bytes = kHybridChannelCountBytes;
-        proxy_dispatch_offset = kHybridProxyDispatchOffsetBytes;
+        proxy_ready_offset = kHybridProxyReadyOffsetBytes;
+        proxy_ready_bytes = checked_mul_i64(
+            proxy_capacity, static_cast<int64_t>(sizeof(int32_t)));
+        proxy_dispatch_offset = checked_align_i64(
+            checked_add_i64(proxy_ready_offset, proxy_ready_bytes),
+            ptx::kNumTMAAlignBytes);
         proxy_return_offset = checked_align_i64(
             checked_add_i64(
                 proxy_dispatch_offset,
@@ -156,6 +160,7 @@ struct HybridArenaLayout {
             raw_bytes, kNumHybridBufferAlignmentBytes);
 
         EP_UNIFIED_ASSERT(channel_count_offset % ptx::kNumTMAAlignBytes == 0);
+        EP_UNIFIED_ASSERT(proxy_ready_offset % ptx::kNumTMAAlignBytes == 0);
         EP_UNIFIED_ASSERT(proxy_dispatch_offset % ptx::kNumTMAAlignBytes == 0);
         EP_UNIFIED_ASSERT(proxy_return_offset % ptx::kNumTMAAlignBytes == 0);
         EP_UNIFIED_ASSERT(arena_bytes % kNumHybridBufferAlignmentBytes == 0);
@@ -174,7 +179,8 @@ struct HybridArenaLayout {
     __forceinline__ __device__ __host__ int32_t*
     get_proxy_ready_ptr(const int proxy_slot) const {
         EP_UNIFIED_ASSERT(proxy_slot >= 0 and proxy_slot < proxy_capacity);
-        return get_channel_count_ptr() + proxy_slot;
+        return math::advance_ptr<int32_t>(base, proxy_ready_offset) +
+            proxy_slot;
     }
 
     __forceinline__ __device__ __host__ layout::TokenLayout

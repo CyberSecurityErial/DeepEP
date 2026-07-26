@@ -42,8 +42,10 @@ def _reference_layout(hidden: int, num_topk: int,
                       proxy_capacity: int) -> tuple[int, ...]:
     channel_count_offset = _align(CONTROL_BYTES, TMA_ALIGNMENT)
     channel_count_bytes = MAX_CHANNELS * MAX_DESTINATIONS * 4
-    proxy_dispatch_offset = _align(
+    proxy_ready_offset = _align(
         channel_count_offset + channel_count_bytes, TMA_ALIGNMENT)
+    proxy_dispatch_offset = _align(
+        proxy_ready_offset + proxy_capacity * 4, TMA_ALIGNMENT)
     dispatch_token_bytes = _token_bytes(hidden, num_topk, True)
     proxy_return_offset = _align(
         proxy_dispatch_offset + proxy_capacity * dispatch_token_bytes,
@@ -105,14 +107,14 @@ def test_control_block_fields_and_fixed_capacity_are_frozen():
 def test_cpp_layout_matches_independent_formula_and_goldens():
     goldens = {
         (256, 1, 1):
-            (0, 32, 32, 131072, 131104, 544,
-             131648, 544, 132192, 2097152),
+            (0, 32, 32, 131072, 131136, 544,
+             131680, 544, 132224, 2097152),
         (1024, 4, 32):
-            (0, 32, 32, 131072, 131104, 2112,
-             198688, 2080, 265248, 2097152),
+            (0, 32, 32, 131072, 131232, 2112,
+             198816, 2080, 265376, 2097152),
         (7168, 8, 32):
-            (0, 32, 32, 131072, 131104, 14464,
-             593952, 14400, 1054752, 2097152),
+            (0, 32, 32, 131072, 131232, 14464,
+             594080, 14400, 1054880, 2097152),
     }
     for arguments, expected in goldens.items():
         assert _reference_layout(*arguments) == expected
