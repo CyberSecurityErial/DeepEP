@@ -543,13 +543,14 @@ rail_balance_hybrid_dispatch_impl(
                 const auto retained_token =
                     arena_layout.get_retained_rail_staging_layout(
                         retained_begin + retained_ordinal);
-                if (ptx::elect_one_sync())
+                if (lane_idx == dst_scaleout_rank_idx)
                     gin.put<ncclTeamTagRail>(
                         scaleout_recv_buffer
                             .get_token_buffer(retained_ordinal)
                             .get_base_ptr(),
                         retained_token.get_base_ptr(), token_bytes,
-                        dst_scaleout_rank_idx);
+                        dst_scaleout_rank_idx,
+                        ncclGinOptFlagsAggregateRequests);
             }
             const int proxy_begin =
                 __ldg(rail_balance_group_prefix + plan_offset);
@@ -588,21 +589,13 @@ rail_balance_hybrid_dispatch_impl(
                 __syncwarp();
                 __threadfence_system();
                 __syncwarp();
-                if (ptx::elect_one_sync())
+                if (lane_idx == dst_scaleout_rank_idx)
                     gin.put<ncclTeamTagRail>(
-                    scaleout_recv_buffer.get_token_buffer(remote_slot)
-                        .get_base_ptr(),
-                    staged_token.get_base_ptr(), token_bytes,
-                    dst_scaleout_rank_idx);
-            }
-            const auto moved_put_request =
-                static_cast<ncclGinRequest_t*>(
-                    workspace_layout.get_scaleout_channel_gin_request_ptr(
-                        channel_idx, dst_scaleout_rank_idx));
-            if (ptx::elect_one_sync()) {
-                gin.flush_async<ncclTeamTagRail, ncclCoopThread>(
-                    dst_scaleout_rank_idx, moved_put_request);
-                gin.wait(*moved_put_request);
+                        scaleout_recv_buffer.get_token_buffer(remote_slot)
+                            .get_base_ptr(),
+                        staged_token.get_base_ptr(), token_bytes,
+                        dst_scaleout_rank_idx,
+                        ncclGinOptFlagsAggregateRequests);
             }
             __syncwarp();
         }
@@ -614,6 +607,10 @@ rail_balance_hybrid_dispatch_impl(
         // one final dense tail per (channel,destination); it intentionally
         // gives up the legacy interval overlap until C100 can measure a safe
         // grouped alternative.
+        // Each destination lane releases the tail for the aggregate queue it
+        // populated above. This preserves the legacy GIN ordering edge:
+        // receiver forwarders cannot observe a dense tail before every
+        // retained and moved payload for that destination is visible.
         if (lane_idx < kNumScaleoutRanks) {
             int final_tail = stored_owner_tail;
             if (lane_idx != scaleout_rank_idx) {

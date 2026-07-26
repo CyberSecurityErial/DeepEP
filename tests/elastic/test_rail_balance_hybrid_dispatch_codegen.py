@@ -199,7 +199,7 @@ def _run_case(name: str) -> None:
     proxy_copy = header[proxy_acquire:proxy_put]
     assert "ptx::ld_acquire_sys(src + i)" in proxy_copy
     assert "__ldg(src + i)" not in proxy_copy
-    assert "ncclGinOptFlagsAggregateRequests" not in header[
+    assert "ncclGinOptFlagsAggregateRequests" in header[
         proxy_put:final_tail
     ]
     assert "retained_count + proxy_slot - proxy_begin" in header[
@@ -274,7 +274,9 @@ def _run_case(name: str) -> None:
     # Exactly two payload put sites exist: retained owner traffic and grouped
     # proxy traffic. Local destination remains a TMA bypass.
     assert scaleout_body.count("gin.put<ncclTeamTagRail>(") == 2
-    assert "ncclGinOptFlagsAggregateRequests" not in scaleout_body
+    assert scaleout_body.count("ncclGinOptFlagsAggregateRequests") == 2
+    assert "if (lane_idx == dst_scaleout_rank_idx)" in scaleout_body
+    assert "gin.flush_async<ncclTeamTagRail" not in scaleout_body
     assert "stored_old_slot_idx < retained_count" in scaleout_body
     assert "for (int proxy_slot = proxy_begin;" in scaleout_body
 
