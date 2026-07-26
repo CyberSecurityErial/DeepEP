@@ -332,6 +332,8 @@ def _source_schedule(
     num_experts: int,
     num_channels: int,
     proxy_slots_per_rank: int,
+    policy: str,
+    threshold_percent: int,
 ):
     start = source_server * num_scaleup_ranks
     stop = start + num_scaleup_ranks
@@ -344,6 +346,8 @@ def _source_schedule(
         num_channels=num_channels,
         num_max_tokens_per_rank=num_tokens_per_rank,
         proxy_capacity_per_egress=proxy_slots_per_rank,
+        policy=policy,
+        threshold_percent=threshold_percent,
     )
 
 
@@ -357,6 +361,8 @@ def _build_schedules(
     num_experts: int,
     num_channels: int,
     proxy_slots_per_rank: int,
+    policy: str,
+    threshold_percent: int,
 ):
     return [
         _source_schedule(
@@ -369,6 +375,8 @@ def _build_schedules(
             num_experts=num_experts,
             num_channels=num_channels,
             proxy_slots_per_rank=proxy_slots_per_rank,
+            policy=policy,
+            threshold_percent=threshold_percent,
         )
         for source_server in range(num_scaleout_ranks)
     ]
@@ -388,6 +396,8 @@ def build_validation_bundle(
     num_channels: int,
     payload_dtype: str = "bf16",
     proxy_slots_per_rank: Optional[int] = None,
+    policy: str = "all",
+    threshold_percent: int = 0,
 ) -> Dict[str, Any]:
     """Build a deterministic C105 JSON bundle without claiming runtime success."""
     modes_tuple = _require_modes(modes)
@@ -428,6 +438,8 @@ def build_validation_bundle(
         num_experts=num_experts,
         num_channels=num_channels,
         proxy_slots_per_rank=safe_capacity,
+        policy=policy,
+        threshold_percent=threshold_percent,
     )
     max_required = max(
         max(schedule.proxy_required)
@@ -452,6 +464,8 @@ def build_validation_bundle(
         num_experts=num_experts,
         num_channels=num_channels,
         proxy_slots_per_rank=proxy_slots_per_rank,
+        policy=policy,
+        threshold_percent=threshold_percent,
     )
     capacity_failed = any(not schedule.enabled for schedule in schedules)
     if case == "capacity" and not capacity_failed:
@@ -472,6 +486,8 @@ def build_validation_bundle(
         "payload_dtype": payload_dtype,
         "num_channels": num_channels,
         "proxy_slots_per_rank": proxy_slots_per_rank,
+        "rail_balance_policy": policy,
+        "rail_balance_threshold_percent": threshold_percent,
     }
 
     total_remote_copies = _total_remote_copies(counts)

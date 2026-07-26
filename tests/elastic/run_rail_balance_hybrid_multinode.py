@@ -178,6 +178,8 @@ def _local_identity(args: argparse.Namespace, extension: Any) -> dict:
             "num_sms": args.num_sms,
             "num_allocated_qps": args.num_allocated_qps,
             "proxy_slots_per_rank": args.proxy_slots_per_rank,
+            "rail_balance_policy": args.rail_policy,
+            "rail_balance_threshold_percent": args.rail_threshold_percent,
             "sl_idx": args.sl_idx,
             "seed": args.seed,
         },
@@ -398,6 +400,10 @@ def _constructor_kwargs(args: argparse.Namespace, mode: str, capacity: int) -> d
         "explicitly_destroy": True,
         "rail_balance": mode,
         "rail_balance_proxy_slots_per_rank": capacity if mode == "force" else 0,
+        "rail_balance_policy": args.rail_policy if mode == "force" else "all",
+        "rail_balance_threshold_percent": (
+            args.rail_threshold_percent if mode == "force" else 0
+        ),
     }
 
 
@@ -634,6 +640,8 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> 
                 hidden=args.hidden,
                 num_channels=1,
                 proxy_slots_per_rank=args.proxy_slots_per_rank,
+                policy=args.rail_policy,
+                threshold_percent=args.rail_threshold_percent,
             ),
         )
         capacity = capacity_bundle["config"]["proxy_slots_per_rank"]
@@ -745,6 +753,8 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> 
                     hidden=args.hidden,
                     num_channels=force_channels,
                     proxy_slots_per_rank=capacity,
+                    policy=args.rail_policy,
+                    threshold_percent=args.rail_threshold_percent,
                 ),
             )
             _mark_completed(bundle["records"]["off"], off_result)
@@ -868,6 +878,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--num-sms", type=int, default=2)
     parser.add_argument("--num-allocated-qps", type=int, default=1)
     parser.add_argument("--proxy-slots-per-rank", type=int)
+    parser.add_argument(
+        "--rail-policy", choices=("all", "active", "adaptive"), default="all"
+    )
+    parser.add_argument(
+        "--rail-threshold-percent", type=int, default=0,
+        help="strict minimum tail improvement; 0 disables the threshold gate",
+    )
     parser.add_argument("--sl-idx", type=int, default=3)
     parser.add_argument("--seed", type=int, default=105)
     parser.add_argument("--timeout", type=int, default=300)
@@ -888,6 +905,12 @@ def _parse_args() -> argparse.Namespace:
         parser.error("tokens must be positive and hidden a positive multiple of 256")
     if args.num_topk <= 0 or args.num_sms < 2 or args.num_allocated_qps <= 0:
         parser.error("top-k, SM count, and allocated QP count are invalid")
+    if not 0 <= args.rail_threshold_percent <= 3100:
+        parser.error("rail threshold percent must be in [0, 3100]")
+    if args.case == "capacity" and (
+        args.rail_policy != "all" or args.rail_threshold_percent != 0
+    ):
+        parser.error("capacity case requires --rail-policy all --rail-threshold-percent 0")
     return args
 
 

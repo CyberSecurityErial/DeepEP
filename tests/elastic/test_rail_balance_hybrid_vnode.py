@@ -77,6 +77,7 @@ _TAIL_CANARY = 0xC001D00D
 _PLAN_FAULT_CASE = "hybrid_vnode_plan_faults_h256"
 _TRANSIT_LIVENESS_CASE = "hybrid_vnode_transit_liveness_h256"
 _STREAM_DELAY_CYCLES = 2_000_000
+_POLICY_IDS = {"all": 0, "active": 1, "adaptive": 2}
 _TYPE = TypeVar("_TYPE")
 
 
@@ -88,6 +89,8 @@ class GpuCase:
     generation: int
     non_default_stream: bool = False
     repetitions: int = 1
+    policy: str = "all"
+    threshold_percent: int = 0
 
 
 @dataclass(frozen=True)
@@ -200,7 +203,13 @@ def _expanded_case(spec: GpuCase) -> VnodeRoundTripCase:
             )
             for owner in range(base.topology.rails_per_node)
         )
-    return replace(base, name=spec.name, source_values=source_values)
+    return replace(
+        base,
+        name=spec.name,
+        source_values=source_values,
+        policy=spec.policy,
+        threshold_percent=spec.threshold_percent,
+    )
 
 
 def _oracle(spec: GpuCase) -> VnodeRoundTripResult:
@@ -217,6 +226,8 @@ def _oracle(spec: GpuCase) -> VnodeRoundTripResult:
             proxy_capacity_per_egress=
                 expanded.proxy_capacity_per_egress,
             remainder_seed=expanded.remainder_seed,
+            policy=expanded.policy,
+            threshold_percent=expanded.threshold_percent,
         )
         result = VnodeRoundTripResult(
             case=expanded,
@@ -240,12 +251,13 @@ def _oracle(spec: GpuCase) -> VnodeRoundTripResult:
     assert all(route.destination > 0 for route in result.routes)
     assert all(route.final_owner_physical == route.owner
                for route in result.routes)
-    if spec.fixture == "4x2":
+    default_policy = spec.policy == "all" and spec.threshold_percent == 0
+    if spec.fixture == "4x2" and default_policy:
         assert (g, d, case.num_topk) == (4, 2, 4)
         assert d <= case.num_topk
         assert case.num_tokens_per_owner == (4, 2, 1, 1)
         assert result.schedule.moved_copies == 2
-    elif spec.fixture == "4x2_empty_egress":
+    elif spec.fixture == "4x2_empty_egress" and default_policy:
         assert (g, d, case.num_topk) == (4, 2, 4)
         assert case.num_tokens_per_owner == (4, 0, 0, 0)
         assert result.schedule.quota == (
@@ -259,7 +271,7 @@ def _oracle(spec: GpuCase) -> VnodeRoundTripResult:
             route.owner == 0
             for route in result.routes if route.moved
         )
-    elif spec.fixture == "2x4":
+    elif spec.fixture == "2x4" and default_policy:
         assert (g, d, case.num_topk) == (2, 4, 2)
         assert d > case.num_topk
         assert case.num_tokens_per_owner == (6, 6)
@@ -275,7 +287,7 @@ def _oracle(spec: GpuCase) -> VnodeRoundTripResult:
         assert result.schedule.moved_copies == 0
         assert not result.routes and not result.contributions
         assert result.combined == result.direct == ((), ())
-    else:
+    elif spec.fixture == "rounding":
         assert (g, d, case.num_topk) == (2, 4, 3)
         assert case.num_tokens_per_owner == (1, 0)
         assert result.schedule.moved_copies == 0
@@ -1087,6 +1099,8 @@ def _run_transaction(
                     source_arena_offset,
                     source_invocation,
                     case.remainder_seed,
+                    _POLICY_IDS[case.policy],
+                    case.threshold_percent,
                 ))
 
         source_status = _checked_phase(
@@ -1268,6 +1282,8 @@ def _run_transaction(
                         generation,
                         world_invocation,
                         case.remainder_seed,
+                        _POLICY_IDS[case.policy],
+                        case.threshold_percent,
                     ))
             assert len(values) == 3
             assert int(values[0]) == 0
@@ -1587,12 +1603,14 @@ def _worker(
     )
     assert rank == local_rank and world_size == _WORLD_SIZE
     result = _oracle(GpuCase(
-        args.case_name,
-        args.fixture,
-        args.hidden,
-        args.generation,
-        args.non_default_stream,
-        args.repetitions,
+        name=args.case_name,
+        fixture=args.fixture,
+        hidden=args.hidden,
+        generation=args.generation,
+        non_default_stream=args.non_default_stream,
+        repetitions=args.repetitions,
+        policy=args.rail_policy,
+        threshold_percent=args.rail_threshold_percent,
     ))
     case = result.case
     g = case.topology.rails_per_node
@@ -1714,6 +1732,8 @@ def _worker(
             case.num_max_tokens_per_rank,
             case.num_experts,
             case.proxy_capacity_per_egress,
+            case.policy,
+            case.threshold_percent,
             source_arena_offset,
             world_arena_offset,
             layout.vnode_arena_bytes,
@@ -1856,6 +1876,8 @@ def _run_watchdog(
         "--timeout", str(arguments.timeout),
         "--master-port", str(port),
         "--watchdog-seconds", str(arguments.watchdog_seconds),
+        "--rail-policy", spec.policy,
+        "--rail-threshold-percent", str(spec.threshold_percent),
     ]
     if arguments.nvtx:
         command.append("--nvtx")
@@ -1902,18 +1924,38 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--generation", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--repetitions", type=int, default=1,
                         help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--rail-policy", choices=tuple(_POLICY_IDS), default="all")
+    parser.add_argument("--rail-threshold-percent", type=int, default=0)
     arguments = parser.parse_args()
     if arguments.num_processes != _WORLD_SIZE:
         parser.error("C080-D Hybrid vnode requires exactly 8 processes")
     if arguments.timeout <= 0 or arguments.watchdog_seconds <= 0 or \
             arguments.repetitions <= 0:
         parser.error("timeouts must be positive")
+    if not 0 <= arguments.rail_threshold_percent <= 3100:
+        parser.error("rail threshold percent must be in [0, 3100]")
+    if (arguments.rail_policy != "all" or
+            arguments.rail_threshold_percent != 0) and \
+            arguments.case_name is None:
+        parser.error("non-default policy runs require --case-name")
+    if arguments.case_name in (_PLAN_FAULT_CASE, _TRANSIT_LIVENESS_CASE) and \
+            (arguments.rail_policy != "all" or
+             arguments.rail_threshold_percent != 0):
+        parser.error("fault cases require the default all/0 policy")
     return arguments
 
 
 def main() -> None:
     arguments = _parse_args()
-    all_specs = _specs()
+    all_specs = tuple(
+        replace(
+            spec,
+            policy=arguments.rail_policy,
+            threshold_percent=arguments.rail_threshold_percent,
+        )
+        for spec in _specs()
+    )
     by_name = {spec.name: spec for spec in all_specs}
     if arguments.case_name is not None:
         if arguments.case_name not in by_name:
@@ -1932,6 +1974,8 @@ def main() -> None:
         assert arguments.generation == spec.generation
         assert arguments.non_default_stream == spec.non_default_stream
         assert arguments.repetitions == spec.repetitions
+        assert arguments.rail_policy == spec.policy
+        assert arguments.rail_threshold_percent == spec.threshold_percent
     _assert_cpu_oracle(selected)
     print(
         "PASS C080-D Hybrid vnode CPU oracle: "
