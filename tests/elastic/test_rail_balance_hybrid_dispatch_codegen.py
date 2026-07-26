@@ -244,6 +244,10 @@ def _run_case(name: str) -> None:
         "const auto peer_count = gin.get_sym_ptr<ncclTeamTagLsa>(",
         first_arrival_barrier,
     )
+    peer_count_atomic_snapshot = header.index(
+        "actual_count = atomicAdd_system(peer_count, 0);",
+        peer_count_snapshot,
+    )
     tail_publish = header.index(
         "ptx::st_release_sys(\n"
         "                        gin.get_sym_ptr<ncclTeamTagLsa>(tail_ptr, j)"
@@ -266,6 +270,7 @@ def _run_case(name: str) -> None:
         first_arrival_barrier < peer_count_snapshot < prefix_write <
         epilogue_trigger
     )
+    assert peer_count_snapshot < peer_count_atomic_snapshot < prefix_write
     assert "peer_mailbox" not in header
     assert first_arrival_barrier < peer_count_snapshot
     assert "kRailBalanceHybridDispatchCountTag" not in header

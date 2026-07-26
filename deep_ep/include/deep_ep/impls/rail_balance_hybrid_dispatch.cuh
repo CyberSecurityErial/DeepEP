@@ -956,8 +956,7 @@ rail_balance_hybrid_dispatch_impl(
                 workspace_layout.get_scaleup_atomic_sender_counter() +
                     scaleup_rank_idx,
                 lane_idx);
-            actual_count = ptx::ld_acquire_sys<int>(
-                peer_count);
+            actual_count = atomicAdd_system(peer_count, 0);
         }
         const int actual_prefix =
             ptx::warp_inclusive_sum(actual_count, lane_idx);
