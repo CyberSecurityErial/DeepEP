@@ -1,16 +1,20 @@
 """CPU-only contracts shared by the C105 rail-balance validation tests."""
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from rail_balance_hybrid_reference import build_hybrid_rail_schedule
 
 
 RESULT_SCHEMA_VERSION = 1
-CANONICAL_CASES = ("balanced", "two_hot", "one_hot")
+CANONICAL_CASES = ("balanced", "two_hot", "one_hot", "capacity")
+VALIDATION_MODES = ("off", "force")
 EVIDENCE_LABEL = "REAL_HYBRID_RUNTIME_UNTESTED"
 _MAX_FORCE_V1_DIM = 32
 _MAX_FORCE_V1_EXPERTS = 2048
 _MAX_FORCE_V1_EXPERTS_PER_RANK = 256
 _MAX_INT32 = (1 << 31) - 1
+_PAYLOAD_DTYPE_BYTES = {"bf16": 2}
 
 
 def _require_exact_int(name: str, value: Any, minimum: int, maximum: int) -> None:
@@ -81,6 +85,7 @@ def build_deterministic_topk(
         "balanced": num_scaleup_ranks,
         "two_hot": 2,
         "one_hot": 1,
+        "capacity": 1,
     }[case]
 
     routes: List[List[List[int]]] = []
@@ -270,3 +275,253 @@ def new_result_record(
         "error": None,
         "claim_scope": "validation_only",
     }
+
+
+def _require_modes(modes: Sequence[str]) -> Tuple[str, ...]:
+    if isinstance(modes, (str, bytes)) or not isinstance(modes, Sequence):
+        raise ValueError("modes must be a sequence")
+    normalized = tuple(modes)
+    if not normalized:
+        raise ValueError("modes must not be empty")
+    for mode in normalized:
+        if type(mode) is not str or mode not in VALIDATION_MODES:
+            raise ValueError("every mode must be 'off' or 'force'")
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("modes must not contain duplicates")
+    return normalized
+
+
+def _payload_bytes_per_token(hidden: int, payload_dtype: str) -> int:
+    _require_exact_int("hidden", hidden, 1, _MAX_INT32)
+    if type(payload_dtype) is not str or payload_dtype not in _PAYLOAD_DTYPE_BYTES:
+        raise ValueError("payload_dtype must be exactly 'bf16'")
+    bytes_per_element = _PAYLOAD_DTYPE_BYTES[payload_dtype]
+    if hidden > _MAX_INT32 // bytes_per_element:
+        raise ValueError("hidden payload bytes exceed int32")
+    return hidden * bytes_per_element
+
+
+def _total_remote_copies(counts: List[List[List[int]]]) -> int:
+    return sum(
+        count
+        for source_server in counts
+        for source_rail in source_server
+        for count in source_rail
+    )
+
+
+def _scale_matrix_bytes(matrix: Sequence[Sequence[int]],
+                        bytes_per_token: int) -> List[List[int]]:
+    return [
+        [int(value) * bytes_per_token for value in row]
+        for row in matrix
+    ]
+
+
+def _source_schedule(
+    topk_idx: List[List[List[int]]],
+    *,
+    source_server: int,
+    num_scaleout_ranks: int,
+    num_scaleup_ranks: int,
+    num_tokens_per_rank: int,
+    num_topk: int,
+    num_experts: int,
+    num_channels: int,
+    proxy_slots_per_rank: int,
+):
+    start = source_server * num_scaleup_ranks
+    stop = start + num_scaleup_ranks
+    return build_hybrid_rail_schedule(
+        topk_idx[start:stop],
+        num_topk=num_topk,
+        num_experts=num_experts,
+        num_scaleout_ranks=num_scaleout_ranks,
+        local_scaleout_rank=source_server,
+        num_channels=num_channels,
+        num_max_tokens_per_rank=num_tokens_per_rank,
+        proxy_capacity_per_egress=proxy_slots_per_rank,
+    )
+
+
+def _build_schedules(
+    topk_idx: List[List[List[int]]],
+    *,
+    num_scaleout_ranks: int,
+    num_scaleup_ranks: int,
+    num_tokens_per_rank: int,
+    num_topk: int,
+    num_experts: int,
+    num_channels: int,
+    proxy_slots_per_rank: int,
+):
+    return [
+        _source_schedule(
+            topk_idx,
+            source_server=source_server,
+            num_scaleout_ranks=num_scaleout_ranks,
+            num_scaleup_ranks=num_scaleup_ranks,
+            num_tokens_per_rank=num_tokens_per_rank,
+            num_topk=num_topk,
+            num_experts=num_experts,
+            num_channels=num_channels,
+            proxy_slots_per_rank=proxy_slots_per_rank,
+        )
+        for source_server in range(num_scaleout_ranks)
+    ]
+
+
+def build_validation_bundle(
+    *,
+    run_id: str,
+    case: str,
+    modes: Sequence[str],
+    num_scaleout_ranks: int,
+    num_scaleup_ranks: int,
+    num_tokens_per_rank: int,
+    num_topk: int,
+    num_experts: int,
+    hidden: int,
+    num_channels: int,
+    payload_dtype: str = "bf16",
+    proxy_slots_per_rank: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Build a deterministic C105 JSON bundle without claiming runtime success."""
+    modes_tuple = _require_modes(modes)
+    _validate_topology(
+        num_scaleout_ranks=num_scaleout_ranks,
+        num_scaleup_ranks=num_scaleup_ranks,
+        num_tokens_per_rank=num_tokens_per_rank,
+        num_topk=num_topk,
+        num_experts=num_experts,
+    )
+    _require_exact_int("num_channels", num_channels, 1, _MAX_INT32)
+    if num_tokens_per_rank == 0:
+        raise ValueError("C105 validation bundles require nonzero token capacity")
+    bytes_per_token = _payload_bytes_per_token(hidden, payload_dtype)
+
+    topk_idx = build_deterministic_topk(
+        case,
+        num_scaleout_ranks=num_scaleout_ranks,
+        num_scaleup_ranks=num_scaleup_ranks,
+        num_tokens_per_rank=num_tokens_per_rank,
+        num_topk=num_topk,
+        num_experts=num_experts,
+    )
+    counts = count_distinct_remote_destinations(
+        topk_idx,
+        num_scaleout_ranks=num_scaleout_ranks,
+        num_scaleup_ranks=num_scaleup_ranks,
+        num_experts=num_experts,
+    )
+
+    safe_capacity = max(1, num_scaleout_ranks * num_tokens_per_rank)
+    required_schedules = _build_schedules(
+        topk_idx,
+        num_scaleout_ranks=num_scaleout_ranks,
+        num_scaleup_ranks=num_scaleup_ranks,
+        num_tokens_per_rank=num_tokens_per_rank,
+        num_topk=num_topk,
+        num_experts=num_experts,
+        num_channels=num_channels,
+        proxy_slots_per_rank=safe_capacity,
+    )
+    max_required = max(
+        max(schedule.proxy_required)
+        for schedule in required_schedules
+    )
+    if case == "capacity":
+        if proxy_slots_per_rank is None:
+            proxy_slots_per_rank = max_required - 1
+        if max_required <= 1 or proxy_slots_per_rank >= max_required:
+            raise ValueError("capacity case must exceed proxy_slots_per_rank")
+    elif proxy_slots_per_rank is None:
+        proxy_slots_per_rank = max(1, max_required)
+    _require_exact_int(
+        "proxy_slots_per_rank", proxy_slots_per_rank, 1, _MAX_INT32)
+
+    schedules = _build_schedules(
+        topk_idx,
+        num_scaleout_ranks=num_scaleout_ranks,
+        num_scaleup_ranks=num_scaleup_ranks,
+        num_tokens_per_rank=num_tokens_per_rank,
+        num_topk=num_topk,
+        num_experts=num_experts,
+        num_channels=num_channels,
+        proxy_slots_per_rank=proxy_slots_per_rank,
+    )
+    capacity_failed = any(not schedule.enabled for schedule in schedules)
+    if case == "capacity" and not capacity_failed:
+        raise ValueError("capacity case did not fail closed")
+    if case != "capacity" and capacity_failed:
+        raise ValueError("non-capacity case exceeded proxy capacity")
+
+    topology = {
+        "world_size": num_scaleout_ranks * num_scaleup_ranks,
+        "num_scaleout_ranks": num_scaleout_ranks,
+        "num_scaleup_ranks": num_scaleup_ranks,
+    }
+    config = {
+        "num_tokens_per_rank": num_tokens_per_rank,
+        "num_topk": num_topk,
+        "num_experts": num_experts,
+        "hidden": hidden,
+        "payload_dtype": payload_dtype,
+        "num_channels": num_channels,
+        "proxy_slots_per_rank": proxy_slots_per_rank,
+    }
+
+    total_remote_copies = _total_remote_copies(counts)
+    moved_copies = sum(schedule.moved_copies for schedule in schedules)
+    plan = {
+        "source": "cpu_oracle",
+        "count": [schedule.count for schedule in schedules],
+        "quota": [schedule.quota for schedule in schedules],
+        "original_rail_bytes": [
+            _scale_matrix_bytes(schedule.count, bytes_per_token)
+            for schedule in schedules
+        ],
+        "balanced_rail_bytes": [
+            _scale_matrix_bytes(schedule.quota, bytes_per_token)
+            for schedule in schedules
+        ],
+        "moved_copies": moved_copies,
+        "moved_bytes": moved_copies * bytes_per_token,
+        "proxy_required": [schedule.proxy_required for schedule in schedules],
+        "group_count": [schedule.moved for schedule in schedules],
+        "num_segments": [schedule.num_segments for schedule in schedules],
+    }
+    traffic = {
+        "source": "cpu_oracle_expected",
+        "scope": "payload_only",
+        "expected_gin_puts": total_remote_copies,
+        "expected_gin_bytes": total_remote_copies * bytes_per_token,
+    }
+    records = {}
+    for mode in modes_tuple:
+        record = new_result_record(
+            run_id=run_id,
+            case=case,
+            mode=mode,
+            topology=topology,
+            config=config,
+        )
+        record["plan"] = plan
+        record["traffic"] = traffic
+        records[mode] = record
+
+    bundle = {
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "run_id": run_id,
+        "evidence_label": EVIDENCE_LABEL,
+        "case": case,
+        "modes": modes_tuple,
+        "topology": topology,
+        "config": config,
+        "remote_counts": counts,
+        "total_remote_copies": total_remote_copies,
+        "max_proxy_required": max_required,
+        "capacity_failed": capacity_failed,
+        "records": records,
+    }
+    return _json_roundtrip_dict("validation_bundle", bundle)

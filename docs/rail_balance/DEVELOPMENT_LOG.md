@@ -5787,3 +5787,52 @@ stage reference bytes, per-rank `rank_raw[*].compute_stream_id`, and
 and stream IDs, `py_compile`, `git diff --check`, the schema/stream JSON check
 and a source concurrent smoke were rerun and passed.  These smoke numbers are
 not performance evidence for the co-tenant/hardware reasons above.
+
+## 2026-07-26 — D101: C105 validation bundle entry point
+
+C105 now has a narrow JSON bundle generator for real-cluster bring-up.  The
+implementation deliberately stays validation-only:
+
+- `tests/elastic/rail_balance_validation_common.py` now exposes
+  `build_validation_bundle()`.
+- The bundle reuses `rail_balance_hybrid_reference.build_hybrid_rail_schedule`
+  for count, quota, segment, moved-copy, group-count, and proxy-capacity facts.
+  No second quota implementation was introduced.
+- `capacity` is a canonical C105 case.  It uses the one-hot routing pattern but
+  deliberately selects insufficient `proxy_slots_per_rank`; if that does not
+  fail closed, bundle construction raises `ValueError`.
+- `tests/elastic/run_rail_balance_validation_bundle.py` emits stable JSON for
+  `balanced`, `two_hot`, `one_hot`, and `capacity`, with off/force records and
+  fixed `REAL_HYBRID_RUNTIME_UNTESTED` labels.
+- Expected Gin puts/bytes are payload-only CPU-oracle expectations.  Runtime
+  QP/NIC/wait counters remain unavailable and no correctness bit is marked
+  passed.
+
+Validated:
+
+```text
+/home/chen/.cache/deepep-sjlgpt/bin/python -m py_compile \
+  tests/elastic/rail_balance_validation_common.py \
+  tests/elastic/test_rail_balance_validation_contract.py \
+  tests/elastic/run_rail_balance_validation_bundle.py
+
+/home/chen/.cache/deepep-sjlgpt/bin/python \
+  tests/elastic/test_rail_balance_validation_contract.py
+
+/home/chen/.cache/deepep-sjlgpt/bin/python \
+  tests/elastic/run_rail_balance_validation_bundle.py \
+  --run-id c105-smoke --case all --mode both \
+  --num-scaleout-ranks 3 --num-scaleup-ranks 4 \
+  --num-tokens-per-rank 8 --num-topk 4 --num-experts 48 \
+  --hidden 256 --num-channels 2 \
+  --output .cache/rail_balance/c105/smoke-bundle.json
+```
+
+The contract suite is now 16/16.  The smoke bundle contains four cases:
+`balanced` has zero proxy requirement, `two_hot` and `one_hot` have positive
+moved-copy plans, and `capacity` is the only expected fail-closed plan.
+
+Still missing for C105: the actual public multi-node off/force execution
+harness, temporary validation-only force capability enablement with restoration,
+real runtime error/counter capture, and one-command build/JIT warmup.  Those
+must not be inferred from this CPU bundle.

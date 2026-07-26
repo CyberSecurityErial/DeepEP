@@ -2,11 +2,16 @@
 
 import copy
 import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 import unittest
 
 from rail_balance_validation_common import (
     CANONICAL_CASES,
     RESULT_SCHEMA_VERSION,
+    build_validation_bundle,
     build_deterministic_topk,
     count_distinct_remote_destinations,
     new_result_record,
@@ -31,7 +36,12 @@ class DeterministicRouteTest(unittest.TestCase):
         )
 
     def test_routes_are_deterministic_valid_and_distinct(self):
-        expected_active_rails = {"balanced": self.G, "two_hot": 2, "one_hot": 1}
+        expected_active_rails = {
+            "balanced": self.G,
+            "two_hot": 2,
+            "one_hot": 1,
+            "capacity": 1,
+        }
         experts_per_server = self.E // self.D
         for case in CANONICAL_CASES:
             with self.subTest(case=case):
@@ -57,7 +67,12 @@ class DeterministicRouteTest(unittest.TestCase):
                         )
 
     def test_canonical_remote_counts_and_server_deduplication(self):
-        expected_active_rails = {"balanced": 4, "two_hot": 2, "one_hot": 1}
+        expected_active_rails = {
+            "balanced": 4,
+            "two_hot": 2,
+            "one_hot": 1,
+            "capacity": 1,
+        }
         for case, active_rails in expected_active_rails.items():
             with self.subTest(case=case):
                 counts = count_distinct_remote_destinations(
@@ -76,7 +91,12 @@ class DeterministicRouteTest(unittest.TestCase):
     def test_canonical_cases_intentionally_have_different_remote_totals(self):
         # Future traffic records must report these different payload volumes;
         # the fixtures must not be padded to make their Gin traffic equal.
-        expected_totals = {"balanced": 36, "two_hot": 18, "one_hot": 9}
+        expected_totals = {
+            "balanced": 36,
+            "two_hot": 18,
+            "one_hot": 9,
+            "capacity": 9,
+        }
         actual_totals = {}
         for case in CANONICAL_CASES:
             counts = count_distinct_remote_destinations(
@@ -369,7 +389,7 @@ class ResultContractTest(unittest.TestCase):
             {"run_id": True},
             {"run_id": "   "},
             {"case": True},
-            {"case": "capacity"},
+            {"case": "unknown"},
             {"mode": True},
             {"mode": "auto"},
         )
@@ -423,6 +443,126 @@ class ResultContractTest(unittest.TestCase):
                         topology=topology,
                         config=config,
                     )
+
+
+class ValidationBundleTest(unittest.TestCase):
+    def test_bundle_uses_hybrid_oracle_and_expected_payload_traffic(self):
+        bundle = build_validation_bundle(
+            run_id="bundle",
+            case="two_hot",
+            modes=("off", "force"),
+            num_scaleout_ranks=3,
+            num_scaleup_ranks=4,
+            num_tokens_per_rank=8,
+            num_topk=4,
+            num_experts=48,
+            hidden=256,
+            num_channels=2,
+        )
+        self.assertEqual(bundle["schema_version"], RESULT_SCHEMA_VERSION)
+        self.assertEqual(bundle["evidence_label"], "REAL_HYBRID_RUNTIME_UNTESTED")
+        self.assertEqual(bundle["modes"], ["off", "force"])
+        self.assertFalse(bundle["capacity_failed"])
+        self.assertEqual(bundle["total_remote_copies"], 3 * 2 * 8)
+        self.assertEqual(set(bundle["records"]), {"off", "force"})
+
+        force = bundle["records"]["force"]
+        self.assertEqual(force["claim_scope"], "validation_only")
+        self.assertEqual(force["plan"]["source"], "cpu_oracle")
+        self.assertEqual(force["traffic"]["source"], "cpu_oracle_expected")
+        self.assertEqual(force["traffic"]["expected_gin_puts"], 48)
+        self.assertEqual(force["traffic"]["expected_gin_bytes"], 48 * 256 * 2)
+        self.assertGreater(force["plan"]["moved_copies"], 0)
+        json.dumps(bundle, sort_keys=True)
+
+    def test_capacity_bundle_fails_closed_before_runtime(self):
+        bundle = build_validation_bundle(
+            run_id="capacity",
+            case="capacity",
+            modes=("force",),
+            num_scaleout_ranks=3,
+            num_scaleup_ranks=4,
+            num_tokens_per_rank=8,
+            num_topk=4,
+            num_experts=48,
+            hidden=256,
+            num_channels=2,
+        )
+        self.assertTrue(bundle["capacity_failed"])
+        self.assertLess(
+            bundle["config"]["proxy_slots_per_rank"],
+            bundle["max_proxy_required"],
+        )
+        force = bundle["records"]["force"]
+        self.assertFalse(force["runtime"]["completed"])
+        self.assertEqual(force["evidence_label"], "REAL_HYBRID_RUNTIME_UNTESTED")
+
+    def test_bundle_metadata_is_strict(self):
+        defaults = {
+            "run_id": "bundle",
+            "case": "balanced",
+            "modes": ("force",),
+            "num_scaleout_ranks": 3,
+            "num_scaleup_ranks": 4,
+            "num_tokens_per_rank": 8,
+            "num_topk": 4,
+            "num_experts": 48,
+            "hidden": 256,
+            "num_channels": 2,
+        }
+        invalid = (
+            {"modes": "force"},
+            {"modes": ()},
+            {"modes": ("force", "force")},
+            {"modes": ("auto",)},
+            {"hidden": 0},
+            {"hidden": True},
+            {"payload_dtype": "fp8"},
+            {"num_channels": 0},
+            {"num_tokens_per_rank": 0},
+            {"case": "capacity", "proxy_slots_per_rank": 64},
+        )
+        for override in invalid:
+            with self.subTest(override=override):
+                args = dict(defaults)
+                args.update(override)
+                with self.assertRaises(ValueError):
+                    build_validation_bundle(**args)
+
+    def test_cli_emits_stable_json_bundle(self):
+        script = Path(__file__).with_name("run_rail_balance_validation_bundle.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "bundle.json"
+            subprocess.check_call([
+                sys.executable,
+                str(script),
+                "--run-id",
+                "cli",
+                "--case",
+                "two_hot",
+                "--mode",
+                "both",
+                "--num-scaleout-ranks",
+                "3",
+                "--num-scaleup-ranks",
+                "4",
+                "--num-tokens-per-rank",
+                "8",
+                "--num-topk",
+                "4",
+                "--num-experts",
+                "48",
+                "--hidden",
+                "256",
+                "--num-channels",
+                "2",
+                "--output",
+                str(output),
+            ])
+            payload = json.loads(output.read_text())
+        self.assertEqual(payload["schema_version"], RESULT_SCHEMA_VERSION)
+        self.assertEqual(len(payload["bundles"]), 1)
+        self.assertEqual(payload["bundles"][0]["case"], "two_hot")
 
 
 if __name__ == "__main__":

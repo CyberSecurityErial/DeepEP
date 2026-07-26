@@ -854,6 +854,11 @@ C105 packages:
   counts, Gin puts/bytes, waits, and error status;
 - explicit local/codegen/real-runtime evidence labels.
 
+Current state: the validation-only JSON bundle generator covers the canonical
+balanced/two-hot/one-hot/capacity route cases and the stable CPU-oracle traffic
+fields.  Build/JIT warmup, live off/force A/B, real-route ingestion, runtime
+wait/error counters, and any evidence-label upgrade remain pending.
+
 ## 13. Explicitly deferred
 
 The following are not required to prove the first idea:

@@ -2028,3 +2028,18 @@ stage bytes; that was fixed before acceptance by adding separate
 `stage_logical_bytes_*` reference fields and printing `n/a` for compute-only.
 Per-rank raw records include `compute_stream_id` so a later Nsys run can match
 the diagnostic GEMM stream explicitly.
+
+## Scope decision O081 — C105 bundle is evidence packaging, not runtime proof
+
+C105 now emits a real-cluster validation bundle from the existing Hybrid CPU
+oracle.  This is intentionally not a profiler or performance artifact.
+
+The single source of truth for scheduling remains
+`rail_balance_hybrid_reference.build_hybrid_rail_schedule`.  The bundle records
+count, quota, moved bytes, group counts, proxy requirements, expected Gin puts,
+and expected payload bytes.  Runtime fields stay unavailable and the evidence
+label remains `REAL_HYBRID_RUNTIME_UNTESTED`.
+
+The capacity case is deliberately fail-closed.  It is useful because it proves
+the network package will carry an expected capacity rejection case, but it does
+not exercise a live multi-node barrier or Gin path yet.

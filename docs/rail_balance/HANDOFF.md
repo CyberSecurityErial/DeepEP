@@ -305,6 +305,13 @@ No C070 timing is performance evidence.
    functionally.  Performance work still requires idle target GPUs plus Nsys
    overlap evidence.  C105 packages the fastest real-cluster bring-up; truthful
    D>1 Gin remains C080-H/C110.
+12. C105 now has a validation-only bundle generator:
+   `tests/elastic/run_rail_balance_validation_bundle.py`.  It emits
+   balanced/two-hot/one-hot/capacity JSON bundles from the Hybrid CPU oracle,
+   including expected payload-only Gin puts/bytes and fixed
+   `REAL_HYBRID_RUNTIME_UNTESTED` labels.  Resume C105 by adding the real
+   multi-node off/force execution harness and temporary validation-only
+   capability enablement; do not mark runtime fields passed from bundle data.
 
 Pinned runtime for accepted commands:
 
