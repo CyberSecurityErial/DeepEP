@@ -6073,8 +6073,8 @@ before allocation, compilation, or launch.
 The GPU planner uses one 32-bit selected mask because the existing force ABI is
 bounded to 32 rails. `active` preserves only originally nonempty rails per
 destination. `adaptive` starts there and adds inactive rails in the existing
-seed/destination ring while each next discrete tail reduction strictly exceeds
-the threshold. All policies then enter the pre-existing quota, segment, prefix,
+seed/destination ring while the current discrete peak exceeds the next-rail
+target by more than the threshold. All policies then enter the pre-existing quota, segment, prefix,
 static-slot, dispatch, and combine path. No hot-path policy branch, new arena
 field, per-copy manifest, atomic queue, fallback, or kernel specialization was
 introduced.
@@ -6094,6 +6094,8 @@ Validation completed from an empty policy-plan JIT cache:
   active/3100 moved 0; then all nine default all/0 vnode cases passed;
 - four dispatch and six combine force/legacy codegen geometries plus 8/8
   rejection matrices; all reported zero spill;
+- independent final audit Blocker0/High0 and 132,000 random CPU/CUDA-control
+  simulations with identical quota;
 - `git diff --check`, py_compile, focused Ruff, and CPU-oracle Pyrefly pass.
 
 Retained failures and corrections:

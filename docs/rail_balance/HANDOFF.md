@@ -359,9 +359,9 @@ No C070 timing is performance evidence.
     ```
 
     `active` means only originally nonempty rails for each destination carry
-    that destination's payload. `adaptive` may add inactive rails if the next
-    predicted tail reduction is strictly larger than the threshold. Threshold
-    zero preserves the old exact `all` behavior. Compare `all/0`, `active/0`,
+    that destination's payload. `adaptive` may add inactive rails while the
+    current peak exceeds the next-rail target by more than the threshold.
+    Threshold zero preserves the old exact `all` behavior. Compare `all/0`, `active/0`,
     `active/20`, and `adaptive/20`; do not interpret local vnode timing as Gin.
 
 Pinned runtime for accepted commands:

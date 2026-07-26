@@ -764,9 +764,10 @@ class ElasticBuffer:
                 local rail, ``'active'`` keeps the original nonempty rail set,
                 and ``'adaptive'`` expands that set only when each added rail
                 clears ``rail_balance_threshold_percent``.
-            rail_balance_threshold_percent: strict minimum predicted tail
-                improvement, as an integer percentage. Zero disables the gate
-                and preserves the original exact ``'all'`` plan.
+            rail_balance_threshold_percent: tolerated integer percentage by
+                which the current peak may exceed the selected-set balanced
+                target. Zero disables the gate and preserves the original
+                exact ``'all'`` plan.
         """
         rail_balance_arena_layout = None
         rail_balance_policy_id = 0

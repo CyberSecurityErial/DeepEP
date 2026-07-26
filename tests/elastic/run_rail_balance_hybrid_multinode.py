@@ -883,7 +883,10 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--rail-threshold-percent", type=int, default=0,
-        help="strict minimum tail improvement; 0 disables the threshold gate",
+        help=(
+            "tolerated peak overload above the balanced target; "
+            "0 disables the threshold gate"
+        ),
     )
     parser.add_argument("--sl-idx", type=int, default=3)
     parser.add_argument("--seed", type=int, default=105)

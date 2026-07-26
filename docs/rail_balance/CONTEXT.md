@@ -1106,9 +1106,9 @@ Out of scope until evidence expands the project:
 - Selection is per destination. `all` targets every local rail; `active`
   targets only rails whose original count for that destination is nonzero;
   `adaptive` begins with that active set and recruits deterministic inactive
-  rails only while the next rail clears the requested marginal tail
-  improvement. Threshold zero disables the final movement gate and preserves
-  the historical exact `all` plan.
+  rails only while the current discrete peak exceeds the next-rail target by
+  more than the configured percentage. Threshold zero disables the final
+  movement gate and preserves the historical exact `all` plan.
 - This is planner-only state. Quota, compact segments, grouped static slots,
   source shuffle, persistent dispatch, combine, and return-unshuffle remain
   one shared implementation. No policy-specific buffer, descriptor, JIT

@@ -2109,10 +2109,11 @@ data path:
   threshold is zero;
 - `active`: balance only among rails already carrying that destination;
 - `adaptive`: begin with active rails and recruit an inactive rail only when
-  its predicted discrete tail reduction strictly clears the threshold.
+  the current discrete peak exceeds the next-rail target by more than the
+  threshold.
 
-The same threshold also bypasses movement when the selected-set target is
-already close enough to the observed peak. This is an integer count model, not
+The same threshold also bypasses movement when the observed peak is no more
+than that percentage above the selected-set target. This is an integer count model, not
 a measured time model; it intentionally adds no bandwidth constants, device
 telemetry, heap object, or fallback to the kernel. A later `auto` policy may
 replace the count threshold only after real Gin/RDMA evidence.
