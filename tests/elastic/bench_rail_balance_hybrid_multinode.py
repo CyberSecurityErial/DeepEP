@@ -456,6 +456,7 @@ def _benchmark_manifest(args: argparse.Namespace) -> dict[str, Any]:
         "expanded_order": [row[3] for row in _order(args.order_repeats)],
         "allow_contended_smoke": args.allow_contended_smoke,
         "diagnostic_profiler": args.diagnostic_profiler,
+        "jit_cache_dir": os.environ.get("EP_JIT_CACHE_DIR"),
         "timeout": args.timeout,
         "watchdog_seconds": args.watchdog_seconds,
     }
@@ -849,8 +850,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--hidden", type=int, default=256)
     parser.add_argument("--num-topk", type=int, default=4)
     parser.add_argument("--num-experts", type=int, default=256)
-    parser.add_argument("--num-sms", type=int, default=2)
-    parser.add_argument("--num-allocated-qps", type=int, default=1)
+    parser.add_argument("--num-sms", type=int, default=0)
+    parser.add_argument("--num-allocated-qps", type=int, default=0)
     parser.add_argument("--proxy-slots-per-rank", type=int)
     parser.add_argument(
         "--rail-policy", choices=("all", "active", "adaptive"), default="all"
@@ -890,7 +891,12 @@ def _parse_args() -> argparse.Namespace:
         parser.error(
             "tokens must be positive; hidden must be a positive multiple of 256"
         )
-    if args.num_topk <= 0 or args.num_sms < 2 or args.num_allocated_qps <= 0:
+    if (
+        args.num_topk <= 0
+        or args.num_sms < 0
+        or args.num_sms == 1
+        or args.num_allocated_qps < 0
+    ):
         parser.error("top-k, SM count, and allocated QP count are invalid")
     if not 0 <= args.rail_threshold_percent <= 3100:
         parser.error("rail threshold percent must be in [0, 3100]")
