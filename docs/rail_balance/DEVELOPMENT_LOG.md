@@ -6059,3 +6059,65 @@ The same audit identified three production-performance gaps: per-invocation
 allocation/prepared-object construction, a second read of moved payload plus
 late proxy issue, and multiple host/WORLD synchronization gates.  They do not
 invalidate the correctness prototype and were not changed without measurement.
+
+## 2026-07-26 — D105: add constructor-fixed planner strategy selection
+
+Added `rail_balance_policy='all'|'active'|'adaptive'` and
+`rail_balance_threshold_percent=0..3100` to `ElasticBuffer`. The Python enum is
+encoded once, agreed in Gate0/Gate1, stored in the owning transaction, and
+passed at runtime to one `rail_balance_hybrid_plan_v2` cubin. The v2 identity
+prevents a stale v1 cubin from accepting the longer launch ABI. C++ private
+entry points use exact Python-integer checks, rejecting bool and int subclasses
+before allocation, compilation, or launch.
+
+The GPU planner uses one 32-bit selected mask because the existing force ABI is
+bounded to 32 rails. `active` preserves only originally nonempty rails per
+destination. `adaptive` starts there and adds inactive rails in the existing
+seed/destination ring while each next discrete tail reduction strictly exceeds
+the threshold. All policies then enter the pre-existing quota, segment, prefix,
+static-slot, dispatch, and combine path. No hot-path policy branch, new arena
+field, per-copy manifest, atomic queue, fallback, or kernel specialization was
+introduced.
+
+Validation completed from an empty policy-plan JIT cache:
+
+- focused CPU policy suite 8/8, including 0-based rails 3/5/7, strict threshold
+  equality, adaptive ring determinism, conservation, shared segments, and
+  7,140 exhaustive small schedules;
+- extension rebuild for SM90; resulting local `_C` SHA256
+  `45bd1d1606f639350f72c8830aa2e2d51d28bf15461823bdcc92758c86b94675`;
+- CUDA planner 81 exact cases, 64 random seeds, legacy identities 4/4,
+  non-default stream, and strict policy/threshold rejection;
+- true 8-rank LSA plan transaction including variable/zero tokens, Gate1/Gate2
+  recovery, C1024/D32, and non-default stream;
+- corrected 8-rank vnode closed loops: active/0 moved 2, adaptive/20 moved 2,
+  active/3100 moved 0; then all nine default all/0 vnode cases passed;
+- four dispatch and six combine force/legacy codegen geometries plus 8/8
+  rejection matrices; all reported zero spill;
+- `git diff --check`, py_compile, focused Ruff, and CPU-oracle Pyrefly pass.
+
+Retained failures and corrections:
+
+1. The shell image has no default `python`; commands were pinned to
+   `/home/chen/.cache/deepep-sjlgpt/bin/python`.
+2. An obsolete `--source-contract-only` flag was rejected; the real interface
+   is `--cpu-only`.
+3. The CUDA planner takes integer `--device`; `cuda:0` was rejected and `0`
+   passed.
+4. Two rejection tests expected a later validation expression although the
+   new parser failed earlier on its integer range; expectations were corrected
+   without weakening the earlier fail-close.
+5. The first vnode policy runs were invalid evidence: the watchdog passed the
+   policy to workers, but worker-side `GpuCase` reconstruction omitted the two
+   fields and silently ran all/0. The active/3100 probe exposed this because it
+   moved 2 instead of 0. Reconstruction is now named and explicit, its
+   cross-rank signature includes both fields, and all three policy runs were
+   rerun from scratch with the expected moved counts.
+6. Whole-file Ruff sees 24 inherited warnings and historical formatting in
+   touched legacy files; no unrelated mechanical rewrite was made. The new
+   policy test is formatted and lint-clean. Pyrefly cannot resolve the
+   test-directory top-level import without repository configuration, while the
+   changed oracle itself checks with zero errors; no suppression was added.
+
+GPU 0/1 had non-Megatron co-tenants during functional testing. No process was
+killed, and no timing or performance claim was made.

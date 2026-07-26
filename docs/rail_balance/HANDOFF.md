@@ -345,6 +345,25 @@ No C070 timing is performance evidence.
    extension or use the same checkout; the live runner independently checks
    extension SHA consensus across every rank.
 
+14. C106 adds constructor-fixed planner inputs without changing the data-path
+    ABI:
+
+    ```python
+    buffer = deep_ep.ElasticBuffer(
+        ...,
+        rail_balance="force",
+        rail_balance_proxy_slots_per_rank=8192,
+        rail_balance_policy="active",       # all | active | adaptive
+        rail_balance_threshold_percent=20,  # integer [0, 3100]
+    )
+    ```
+
+    `active` means only originally nonempty rails for each destination carry
+    that destination's payload. `adaptive` may add inactive rails if the next
+    predicted tail reduction is strictly larger than the threshold. Threshold
+    zero preserves the old exact `all` behavior. Compare `all/0`, `active/0`,
+    `active/20`, and `adaptive/20`; do not interpret local vnode timing as Gin.
+
 Pinned runtime for accepted commands:
 
 ```text

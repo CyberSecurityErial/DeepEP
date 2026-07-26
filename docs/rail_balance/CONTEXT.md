@@ -1096,3 +1096,23 @@ Out of scope until evidence expands the project:
   while issuing proxy traffic earlier, and reduce per-round synchronization.
   Each needs an isolated profiler-free/nsys/ncu experiment before production
   complexity is accepted.
+
+## C106 planner policy context (2026-07-26)
+
+- Force mode now fixes two additional constructor inputs: policy
+  `all|active|adaptive` and integer threshold percent `0..3100`.  They join
+  both constructor and dispatch consensus manifests, so rank-local drift fails
+  before the owning Hybrid transaction commits.
+- Selection is per destination. `all` targets every local rail; `active`
+  targets only rails whose original count for that destination is nonzero;
+  `adaptive` begins with that active set and recruits deterministic inactive
+  rails only while the next rail clears the requested marginal tail
+  improvement. Threshold zero disables the final movement gate and preserves
+  the historical exact `all` plan.
+- This is planner-only state. Quota, compact segments, grouped static slots,
+  source shuffle, persistent dispatch, combine, and return-unshuffle remain
+  one shared implementation. No policy-specific buffer, descriptor, JIT
+  specialization, persistent-kernel branch, or fallback was added.
+- `active` reduces the set of rails that carry payload for a destination. It
+  does not claim to destroy NCCL/Gin teams or pre-created QPs. Real connection
+  setup and network benefit remain C080-H/C110 evidence.

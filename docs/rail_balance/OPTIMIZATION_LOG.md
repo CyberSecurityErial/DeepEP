@@ -2099,3 +2099,26 @@ separate experiments:
 These changes can alter overlap, lifetime, and failure semantics.  Each must
 start from an unprofiled baseline and an Nsys critical path; NCU is used only
 for a kernel already shown to contribute exposed time.
+
+## Scope decision O085 — policy selection belongs only in the planner
+
+The accepted extension exposes three policy choices without multiplying the
+data path:
+
+- `all`: exact balance across all rails, preserving the old force plan when
+  threshold is zero;
+- `active`: balance only among rails already carrying that destination;
+- `adaptive`: begin with active rails and recruit an inactive rail only when
+  its predicted discrete tail reduction strictly clears the threshold.
+
+The same threshold also bypasses movement when the selected-set target is
+already close enough to the observed peak. This is an integer count model, not
+a measured time model; it intentionally adds no bandwidth constants, device
+telemetry, heap object, or fallback to the kernel. A later `auto` policy may
+replace the count threshold only after real Gin/RDMA evidence.
+
+No performance comparison was accepted in this checkpoint because GPUs 0/1
+had co-tenants. Functional CUDA/LSA/vnode and spill-free codegen results prove
+semantic viability only. The first useful comparison matrix on idle hardware
+is `all/0`, `active/0`, `active/20`, and `adaptive/20`, with profiler-free
+latency and moved bytes recorded before Nsys/NCU attribution.
