@@ -235,8 +235,14 @@ def _run_case(name: str) -> None:
     assert counter_clear < role_begin
     first_arrival_barrier = header.index(
         "comm::kHybridDispatchTag1", role_begin)
-    tail_count_snapshot = header.index(
-        "const int encoded_tail = ptx::ld_acquire_sys<int>(",
+    mailbox_reset = header.index(
+        "ptx::st_relaxed_sys(scaleup_count_mailbox + thread_idx, 0)")
+    mailbox_publish = header.index(
+        "ptx::red_add_rel_sys(peer_mailbox, final_count);",
+        role_begin,
+    )
+    mailbox_snapshot = header.index(
+        "scaleup_count_mailbox + lane_idx",
         first_arrival_barrier,
     )
     tail_publish = header.index(
@@ -246,22 +252,21 @@ def _run_case(name: str) -> None:
     tail_completion = header.index(
         "ptx::fence_acq_rel_sys();", tail_publish)
     assert (
-        tail_publish < tail_completion < first_arrival_barrier <
-        tail_count_snapshot
+        mailbox_reset < role_begin < tail_publish < tail_completion <
+        mailbox_publish < first_arrival_barrier < mailbox_snapshot
     )
     prefix_write = header.index(
         "ptx::st_release_sys(\n"
         "                psum_num_recv_tokens_per_scaleup_rank + lane_idx",
-        tail_count_snapshot,
+        mailbox_snapshot,
     )
     epilogue_trigger = header.index(
         "cudaTriggerProgrammaticLaunchCompletion()", prefix_write)
     assert (
-        first_arrival_barrier < tail_count_snapshot < prefix_write <
+        first_arrival_barrier < mailbox_snapshot < prefix_write <
         epilogue_trigger
     )
-    assert "peer_mailbox" not in header
-    assert "peer_count" not in header
+    assert "const int final_count = atomicAdd(" in header
     assert "kRailBalanceHybridDispatchCountTag" not in header
 
     # After the opening Tag0 epoch boundary the release specialization trusts

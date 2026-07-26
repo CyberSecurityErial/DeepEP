@@ -97,6 +97,8 @@ rail_balance_hybrid_dispatch_impl(
     // Workspaces
     const auto workspace_layout = layout::WorkspaceLayout(workspace, kNumScaleoutRanks, kNumScaleupRanks, kNumExperts);
     const auto host_workspace_layout = layout::WorkspaceLayout(mapped_host_workspace, kNumScaleoutRanks, kNumScaleupRanks, kNumExperts);
+    auto scaleup_count_mailbox = static_cast<int*>(
+        workspace_layout.get_scaleout_channel_gin_request_ptr(0, 0));
 
     // The kernel uses a fixed space of dynamic shared memory (no static shared memory)
     extern __shared__ __align__(ptx::kNumTMAAlignBytes) int8_t smem[];
@@ -112,6 +114,12 @@ rail_balance_hybrid_dispatch_impl(
     const auto [qp_idx, sharing_mode] = comm::get_qp_mode<kNumSMs, kNumQPs, kNumChannelsPerSM, (kNumNotifyWarps > 0)>(
         sm_idx, (warp_idx - kNumNotifyWarps) % kNumChannelsPerSM, warp_idx < kNumNotifyWarps);
     const auto gin = handle::NCCLGin(nccl_dev_comm, nccl_window, qp_idx, sharing_mode);
+
+    // Reset the target-local mailbox before Tag0. No peer can publish the next
+    // epoch until every rank has entered and left that barrier.
+    if (sm_idx == 0 and thread_idx < kNumScaleupRanks)
+        ptx::st_relaxed_sys(scaleup_count_mailbox + thread_idx, 0);
+    cooperative_groups::this_grid().sync();
 
     // Global parallel barriers for scale-out subteam and scale-up subteam
     comm::gpu_barrier<true, kNumScaleoutRanks, kNumScaleupRanks,
@@ -930,10 +938,21 @@ rail_balance_hybrid_dispatch_impl(
         __syncwarp();
     }
 
-    // Wait until forward warps have published every destination tail.  The
-    // receiver reconstructs per-source counts from those local tails after
-    // Tag1, avoiding peer counter coherence assumptions.
+    // Wait until forward warps have finalized every local destination count.
     cooperative_groups::this_grid().sync();
+    if (sm_idx == 0 and thread_idx < kNumScaleupRanks) {
+        const int final_count = atomicAdd(
+            workspace_layout.get_scaleup_atomic_sender_counter() +
+                thread_idx,
+            0);
+        auto peer_mailbox = gin.get_sym_ptr<ncclTeamTagLsa>(
+            scaleup_count_mailbox + scaleup_rank_idx,
+            thread_idx);
+        // Use the same release reduction path as the proven NVLink barrier;
+        // ordinary peer stores are not guaranteed to reach the target before
+        // the subsequent barrier signal on this platform.
+        ptx::red_add_rel_sys(peer_mailbox, final_count);
+    }
 
     // Scale-up barrier to ensure data arrival
     // As scale-out tokens have already been consumed by forwarders, no need to do scale-out barrier again
@@ -943,25 +962,12 @@ rail_balance_hybrid_dispatch_impl(
 
     // Notify counted tokens by their original owner rail, but source shuffle
     // changes the rank-buffer owner for moved copies. Rebuild the rank prefix
-    // from the per-channel linked-list tails already delivered to this target
-    // before Tag1.
+    // from sender-owned dense counts reduced into this target before Tag1.
     if (sm_idx == 0 and warp_idx == 0) {
         int actual_count = 0;
-        if (lane_idx < kNumScaleupRanks) {
-            constexpr int kNumTokensInLinkedList =
-                kNumMaxTokensPerChannel * kNumScaleoutRanks + 1;
-            for (int channel_idx = 0; channel_idx < kNumChannels;
-                 ++channel_idx) {
-                const int encoded_tail = ptx::ld_acquire_sys<int>(
-                    workspace_layout.get_channel_scaleup_tail_ptr(
-                        channel_idx, lane_idx));
-                const int channel_base = channel_idx *
-                    kNumTokensInLinkedList * kNumScaleupRanks;
-                actual_count +=
-                    (encoded_tail - channel_base - lane_idx) /
-                    kNumScaleupRanks;
-            }
-        }
+        if (lane_idx < kNumScaleupRanks)
+            actual_count = ptx::ld_acquire_sys<int>(
+                scaleup_count_mailbox + lane_idx);
         const int actual_prefix =
             ptx::warp_inclusive_sum(actual_count, lane_idx);
         if (lane_idx < kNumScaleupRanks)
