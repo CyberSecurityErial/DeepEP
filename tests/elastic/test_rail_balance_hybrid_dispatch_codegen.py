@@ -200,6 +200,32 @@ def _run_case(name: str) -> None:
         "rail_balance::kHybridForwardProxySlotDim] =", linked_list_overwrite)
     assert proxy_snapshot < linked_list_overwrite < metadata_snapshot
 
+    # Moved copies change the source-rank buffer that owns a token.  The
+    # epilogue prefix must therefore be rebuilt from the post-forward sender
+    # counters, and a second local barrier must protect those counters from an
+    # early peer reset.
+    first_arrival_barrier = header.index("comm::kHybridDispatchTag1")
+    peer_count_snapshot = header.index(
+        "workspace_layout.get_scaleup_atomic_sender_counter() +",
+        first_arrival_barrier,
+    )
+    prefix_write = header.index(
+        "psum_num_recv_tokens_per_scaleup_rank[lane_idx] = actual_prefix",
+        peer_count_snapshot,
+    )
+    count_barrier = header.index(
+        "comm::kRailBalanceHybridDispatchCountTag", prefix_write)
+    epilogue_trigger = header.index(
+        "cudaTriggerProgrammaticLaunchCompletion()", count_barrier)
+    counter_reset = header.index(
+        "workspace_layout.get_scaleup_atomic_sender_counter()[thread_idx] = 0",
+        epilogue_trigger,
+    )
+    assert (
+        first_arrival_barrier < peer_count_snapshot < prefix_write <
+        count_barrier < epilogue_trigger < counter_reset
+    )
+
     # After the opening Tag0 epoch boundary the release specialization trusts
     # immutable Gate2 state. Compare with legacy instead of banning `return;`
     # outright: both headers retain the same safe preload-lambda early exit.

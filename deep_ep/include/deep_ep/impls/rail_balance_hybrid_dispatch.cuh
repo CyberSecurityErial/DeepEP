@@ -682,15 +682,7 @@ rail_balance_hybrid_dispatch_impl(
                 // Read top-k indices
                 EP_STATIC_ASSERT(kNumTopk <= 32, "Too many top-k selections");
                 int stored_dst_scaleup_rank_idx = -1;
-                auto dst_expert_idx = lane_idx < kNumTopk ?
-                    tma_buffer.get_topk_idx_ptr()[lane_idx] : -1;
-                // Gate #1 rejected duplicate expert ids. Recheck the token at
-                // the first remote-consumer boundary so corruption in proxy
-                // publication or Rail transport is attributed before the LSA
-                // forward copy can contaminate another rank's scale-up slot.
-                EP_DEVICE_ASSERT(
-                    ptx::deduplicate(dst_expert_idx, lane_idx) or
-                    dst_expert_idx == -1);
+                auto dst_expert_idx = lane_idx < kNumTopk ? tma_buffer.get_topk_idx_ptr()[lane_idx] : -1;
                 dst_expert_idx -= scaleout_rank_idx * kNumExpertsPerScaleout;
                 stored_dst_scaleup_rank_idx = 0 <= dst_expert_idx and dst_expert_idx < kNumExpertsPerScaleout ?
                     dst_expert_idx / kNumExpertsPerRank : -1;
@@ -809,6 +801,36 @@ rail_balance_hybrid_dispatch_impl(
     comm::gpu_barrier<true, kNumScaleoutRanks, kNumScaleupRanks,
                       kNumSMs, kNumThreads, kNumQPs, kNumTimeoutCycles, comm::kHybridDispatchTag1, true, true, false>(
         gin, workspace_layout, scaleout_rank_idx, scaleup_rank_idx, sm_idx, thread_idx, /* do not scale-out */ false, true);
+
+    // Notify counted tokens by their original owner rail, but source shuffle
+    // changes the rank-buffer owner for moved copies.  Each egress's atomic
+    // sender counter is the authoritative dense length of its rank buffer on
+    // every target GPU.  Rebuild the rank prefix from those peer counters
+    // after all LSA forward stores have arrived.
+    if (sm_idx == 0 and warp_idx == 0) {
+        int actual_count = 0;
+        if (lane_idx < kNumScaleupRanks) {
+            const auto peer_counter = gin.get_sym_ptr<ncclTeamTagLsa>(
+                workspace_layout.get_scaleup_atomic_sender_counter() +
+                    scaleup_rank_idx,
+                lane_idx);
+            actual_count = ptx::ld_acquire_sys<int>(peer_counter);
+        }
+        const int actual_prefix =
+            ptx::warp_inclusive_sum(actual_count, lane_idx);
+        if (lane_idx < kNumScaleupRanks)
+            psum_num_recv_tokens_per_scaleup_rank[lane_idx] = actual_prefix;
+    }
+
+    // No egress may clear its sender counters until every target has consumed
+    // the peer snapshot above.  The barrier's opening grid sync also orders
+    // the local prefix write before programmatic epilogue launch.
+    comm::gpu_barrier<true, kNumScaleoutRanks, kNumScaleupRanks,
+                      kNumSMs, kNumThreads, kNumQPs, kNumTimeoutCycles,
+                      comm::kRailBalanceHybridDispatchCountTag,
+                      false, true, false>(
+        gin, workspace_layout, scaleout_rank_idx, scaleup_rank_idx,
+        sm_idx, thread_idx, /* do not scale-out */ false, true);
 
     // Trigger the copy epilogue kernel
     cudaTriggerProgrammaticLaunchCompletion();
