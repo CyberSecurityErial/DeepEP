@@ -1053,7 +1053,7 @@ Out of scope until evidence expands the project:
 - Temporary force capability enablement exists only inside the validation
   worker and is explicitly restored before evidence is written.  Production
   capability bits remain false and production code is unchanged.
-- Local contract/static evidence is 22/22 plus Ruff, Pyrefly, py_compile and D1
+- Local contract/static evidence is 23/23 plus Ruff, Pyrefly, py_compile and D1
   rejection.  The runner cannot be truthfully executed on this single-node
   environment.  QP/NIC/wait counters and performance remain unavailable, not
   inferred.
@@ -1061,3 +1061,23 @@ Out of scope until evidence expands the project:
   distributed failures.  Concision and branch minimization remain strict for
   production CUDA/Hybrid hot paths, not an arbitrary line-count target for the
   validation harness.
+
+## C105 build/codegen preparation context (2026-07-26)
+
+- `run_rail_balance_build_warmup.py` is the single local preparation command.
+  It uses the existing `setup.py build_ext --inplace --force` and existing
+  compile-only dispatch/combine codegen tests; it introduces no second CUDA or
+  JIT generation path.
+- An early draft repeated the complete four-dispatch/six-combine C080 matrix and
+  duplicated its 4/4/6/6 key counts.  Simplicity review rejected that as a
+  second fact source.  The accepted script compiles only the representative
+  D2xG8/H7168/K8 force/legacy pair and records whatever fresh cache it produces.
+- Clean `a4a97ab` execution on logical CUDA device 1 rebuilt `_C.so` to SHA256
+  `9e5415128d9a3e4e926c5da4f9302a32b64ccc222cf83b994b9953a4e806dcca`.
+  Four cache directories each contain nonempty CU/CUBIN/PTX/SASS files; their
+  combined manifest tree hash is
+  `53738af2b8dcb30957353b527e05731da399159c4dabb3ee2e2c1f952ce82d0d`.
+- This preflight is deliberately labelled `HYBRID_CODEGEN_WARMUP_ONLY` with
+  `real_gin_runtime=false` and `full_force_runtime_cache=false`.  The exact
+  count/plan/prefix/barrier/shuffle/dispatch/epilogue/combine/unshuffle cache is
+  first prepared only by a live D>1 `balanced` round trip with final parameters.

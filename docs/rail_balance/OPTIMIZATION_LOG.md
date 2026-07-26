@@ -2060,3 +2060,22 @@ cycles because the current implementation exposes no trustworthy runtime
 counters.  No profiler was run and no local timing was collected in this
 checkpoint.  Performance work starts only after a live correctness result and
 a separately defined no-profiler/nsys/ncu evidence chain.
+
+## Scope decision O083 — build/codegen preflight is not runtime warmup or performance
+
+The C105 preparation entry rebuilds the current extension and compile-checks
+one representative main dispatch/combine force/legacy pair in an empty cache.
+It changes no production source and measures no performance.
+
+The rejected first draft reran the full C080 compile matrix and repeated its
+case counts.  Those extra cubins could not warm the exact production keys and
+would create a second maintenance source, so the accepted version keeps one
+D2xG8/H7168/K8 pair.  Full codegen coverage remains with the original tests.
+
+The resulting manifest says `full_force_runtime_cache=false`.  Production keys
+also include the final token capacity, SM/QP count, timeout and other geometry;
+the remaining planner, local barrier, source shuffle, epilogues and return-
+unshuffle are prepared only by the live force buffer.  Therefore the real
+cluster sequence is fixed: run `balanced` first with final parameters, then run
+the skew and capacity cases.  No build time, compile time, register count, or
+cache hit is interpreted as an end-to-end speedup.

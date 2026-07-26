@@ -47,8 +47,14 @@ Repository: `/home/chen/workspace/source_code/DeepEP`
   topology and launch configuration across ranks; compares dispatch/combine
   with the official references; validates two consecutive capacity rejections;
   restores the validation-only force capability; and writes one stable JSON
-  result.  The local contract is 22/22.  The runner has not executed here
+  result.  The local contract is 23/23.  The runner has not executed here
   because this environment has no truthful D>1 Rail/Gin topology.
+- C105 build/codegen preparation is one command through
+  `tests/elastic/run_rail_balance_build_warmup.py`.  Clean commit `a4a97ab`
+  rebuilt the in-tree extension, verified its checkout identity and disabled
+  capability bits, then emitted one representative D2xG8/H7168/K8 force/legacy
+  dispatch and combine pair into a fresh hashed cache.  This is
+  `HYBRID_CODEGEN_WARMUP_ONLY`, not the exact full runtime warmup.
 - Both capability bits remain false and no result claims real Gin/RDMA
   behavior. The local activation evidence is complete, but the public methods
   deliberately remain unreachable through a normal force construction until a
@@ -319,9 +325,25 @@ No C070 timing is performance evidence.
    node-local `RANK=<node-index>`; the script itself spawns the local GPU
    processes.  Run the balanced, two-hot, one-hot and capacity cases from one
    clean commit and matching extension.  Do not set `EP_DISABLE_GIN`.  The next
-   packaging slice is one-command build/JIT warmup and optional real-route
-   ingestion; runtime counters remain a cluster-side evidence gap rather than
-   a locally inferred value.
+   `balanced` must run first with the exact final shape because only that live
+   constructor/round trip prepares the complete production cache.  Optional
+   real-route ingestion and runtime counters remain cluster-side evidence gaps,
+   not locally inferred values.
+
+13. Before the cluster run, rebuild and preflight the current checkout once
+   (never concurrently from several nodes into the same source directory):
+
+   ```text
+   /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+     tests/elastic/run_rail_balance_build_warmup.py \
+     --run-id <id> --output-dir .cache/rail_balance/c105/<id> \
+     --cuda-device 0 --jobs 8 --timeout 3600
+   ```
+
+   The generated manifest must keep `real_gin_runtime=false` and
+   `full_force_runtime_cache=false`.  Distribute the resulting identical
+   extension or use the same checkout; the live runner independently checks
+   extension SHA consensus across every rank.
 
 Pinned runtime for accepted commands:
 

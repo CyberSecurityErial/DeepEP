@@ -5949,3 +5949,77 @@ final independent runner audit reports Blocker0/High0 after explicitly closing
 the rendezvous, collective-capability-transition, and process-group-cleanup
 findings.  A separate simplicity audit reports Blocker0/High0 and confirms that
 no production hot path or duplicate production scheduling source was added.
+
+## 2026-07-26 — D103: one-command current-checkout build and codegen preflight
+
+C105 now has `tests/elastic/run_rail_balance_build_warmup.py`.  It is a thin
+test orchestrator over the repository's existing facts:
+
+1. require a clean Git tree and a new ignored/external output directory;
+2. rebuild `deep_ep._C` from `setup.py build_ext --inplace --force` with a fresh
+   object directory;
+3. prove both `deep_ep` and `_C` import from this checkout, hash the rebuilt
+   extension, verify SM90 and both production force capability bits remain
+   false;
+4. use a new `EP_JIT_CACHE_DIR` to run the existing representative dispatch
+   `8x2_h7168_k8` and combine `8x2_h7168_k8_rank_tt` codegen cases;
+5. require exactly four nonempty CU/CUBIN/PTX/SASS sets, retain each file hash
+   and recursive DeepEP include hash, and atomically publish one JSON manifest.
+
+The script cleans its dedicated process group on timeout, any other exception,
+or a nonzero child exit.  A failed attempt keeps logs plus `FAILED.txt` and can
+never continue into a PASS manifest.  Output inside the checkout must be
+Git-ignored so the later real runner's clean-tree identity gate remains usable.
+
+The first design draft ran all 4 dispatch plus 6 combine cases and repeated
+their 4/4/6/6 internal family counts.  Simplicity review classified that as a
+second JIT fact source with no real-runtime warmup benefit.  It was removed
+before commit.  The accepted entry chooses only one production-shaped pair;
+the original tests remain authoritative for the complete C080 matrix.
+
+Another early audit raised nested-watchdog timeout and orphan risks based on
+the full-matrix draft.  Explicit `--case` now makes each old test call its
+single `_run_case` directly without opening an inner session, while the outer
+stage owns all compiler children and performs TERM, grace wait, then an
+unconditional best-effort KILL.  Final runner and simplicity reviews are both
+Blocker0/High0.
+
+Before committing the entry, its dirty-tree guard was exercised deliberately:
+it exited 1 before creating the requested output.  Static acceptance was Ruff,
+Pyrefly, py_compile, contract 23/23, safe-output checks, and diff checks.
+
+The real clean-HEAD command was:
+
+```text
+/home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/run_rail_balance_build_warmup.py \
+  --run-id c105-a4a97ab \
+  --output-dir .cache/rail_balance/c105/a4a97ab-preflight \
+  --cuda-device 1 --jobs 8 --timeout 3600
+```
+
+Result: PASS at `a4a97ab25d4e5330f060da4ce2c4a4bb394fc39a`.
+
+```text
+label                    HYBRID_CODEGEN_WARMUP_ONLY
+extension bytes          21,172,320
+extension SHA256         9e5415128d9a3e4e926c5da4f9302a32b64ccc222cf83b994b9953a4e806dcca
+cache tree SHA256        53738af2b8dcb30957353b527e05731da399159c4dabb3ee2e2c1f952ce82d0d
+dispatch force/legacy    REG64/68, STACK96, SPILL0
+combine force/legacy     REG216/216, STACK96, SPILL0
+cache artifacts          4 directories, 16 nonempty CU/CUBIN/PTX/SASS files
+toolchain                 Python 3.11.15, Torch 2.11.0+cu128,
+                          CUDA/NVCC 12.8.61, NCCL 2.28.9, driver 570.172.08
+device report             NVIDIA L20X, compute capability 9.0
+```
+
+The device name is retained exactly as reported; no performance inference is
+made from this functional compile run.  The manifest and logs are under the
+ignored `.cache/rail_balance/c105/a4a97ab-preflight/` directory.
+
+This is not a real-network result and not a complete production-cache warmup.
+The two compile probes use fixed SM64/M8192/Q9/timeout keys and cover only the
+main force/legacy-probe dispatch and combine kernels.  On the cluster, the
+first final-parameter case must be `balanced`; its live force prepare builds the
+complete planner/barrier/shuffle/epilogue/return chain before skew cases reuse
+the same cache.

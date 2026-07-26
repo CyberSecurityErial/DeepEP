@@ -861,9 +861,13 @@ D>1 off/force runner: it verifies identical Git/extension/environment identity,
 executes public dispatch/combine against the official DeepEP references, checks
 off/force equality, validates the capacity plan-gate rejection twice, restores
 the temporary validation capability, and writes one collective JSON result.
-The runner deliberately leaves QP/NIC/wait fields unavailable.  A real-cluster
-execution, one-command build/JIT warmup, real-route ingestion, hardware
-counters, and any physical-runtime evidence-label upgrade remain pending.
+The runner deliberately leaves QP/NIC/wait fields unavailable.  The one-command
+build plus representative main-kernel codegen preflight is now available as
+`run_rail_balance_build_warmup.py`; it explicitly does not claim the exact ten-
+runtime production cache is warm.  A real-cluster `balanced` round trip must
+warm that exact cache before the skew cases.  Real execution, real-route
+ingestion, hardware counters, and any physical-runtime evidence-label upgrade
+remain pending.
 
 ## 13. Explicitly deferred
 
