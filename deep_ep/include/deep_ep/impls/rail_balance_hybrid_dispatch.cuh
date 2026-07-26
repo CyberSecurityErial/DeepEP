@@ -515,10 +515,27 @@ rail_balance_hybrid_dispatch_impl(
                         scaleout_recv_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(),
                         scaleout_send_buffer.get_token_buffer(token_idx).get_base_ptr(),
                         tma_buffer.get_num_bytes<false>(),
-                        stored_dst_scaleout_rank_idx);
+                        stored_dst_scaleout_rank_idx,
+                        ncclGinOptFlagsAggregateRequests);
             }
             __syncwarp();
         }
+
+        // Retained puts are aggregated by the lane that owns their destination.
+        // A flush issued by the elected lane does not drain another lane's
+        // thread-cooperative aggregation queue, so every remote-destination
+        // lane must complete its own queue before proxy puts and the final tail
+        // can make those receive slots visible to the forwarder.
+        if (lane_idx < kNumScaleoutRanks and lane_idx != scaleout_rank_idx) {
+            const auto retained_put_request =
+                static_cast<ncclGinRequest_t*>(
+                    workspace_layout.get_scaleout_channel_gin_request_ptr(
+                        channel_idx, lane_idx));
+            gin.flush_async<ncclTeamTagRail, ncclCoopThread>(
+                lane_idx, retained_put_request);
+            gin.wait(*retained_put_request);
+        }
+        __syncwarp();
 
         // Consume the descriptor-free moved groups owned by this egress. NIC
         // reads use a dedicated egress-local staging region rather than the

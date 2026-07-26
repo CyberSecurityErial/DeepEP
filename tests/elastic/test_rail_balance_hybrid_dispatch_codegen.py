@@ -183,13 +183,22 @@ def _run_case(name: str) -> None:
         "if (stored_old_slot_idx < retained_count)")
     proxy_begin = header.index("const int proxy_begin =")
     proxy_loop = header.index("for (int proxy_slot = proxy_begin;")
+    retained_flush = header.index(
+        "const auto retained_put_request =", retained_threshold)
     remote_slot = header.index("const int remote_slot =", proxy_loop)
     proxy_put = header.index("gin.put<ncclTeamTagRail>(", proxy_loop)
     proxy_acquire = header.index(
         "const int ready = ptx::ld_acquire_sys<int>(", proxy_loop
     )
     final_tail = header.index("const auto signaled_tail =", proxy_put)
-    assert retained_threshold < proxy_begin < proxy_loop
+    assert retained_threshold < retained_flush < proxy_begin < proxy_loop
+    assert (
+        "gin.flush_async<ncclTeamTagRail, ncclCoopThread>(\n"
+        "                lane_idx, retained_put_request);"
+        in header[retained_flush:proxy_begin]
+    )
+    assert "gin.wait(*retained_put_request);" in header[
+        retained_flush:proxy_begin]
     assert proxy_loop < remote_slot < proxy_acquire < proxy_put < final_tail
     assert "ncclGinOptFlagsAggregateRequests" not in header[
         proxy_put:final_tail
