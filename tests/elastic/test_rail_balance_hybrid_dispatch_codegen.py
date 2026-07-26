@@ -192,8 +192,12 @@ def _run_case(name: str) -> None:
         "const int ready = ptx::ld_acquire_sys<int>(", proxy_loop
     )
     final_tail = header.index("const auto signaled_tail =", proxy_put)
+    final_flush = header.index("gin.flush<ncclCoopWarp>();", proxy_put)
     assert retained_threshold < retained_staging < proxy_begin < proxy_loop
-    assert proxy_loop < remote_slot < proxy_acquire < proxy_put < final_tail
+    assert (
+        proxy_loop < remote_slot < proxy_acquire < proxy_put < final_flush <
+        final_tail
+    )
     assert "RB_PROXY_BAD" not in header
     assert "embedded_proxy" not in header
     proxy_copy = header[proxy_acquire:proxy_put]
@@ -277,6 +281,7 @@ def _run_case(name: str) -> None:
     assert scaleout_body.count("ncclGinOptFlagsAggregateRequests") == 2
     assert "if (lane_idx == dst_scaleout_rank_idx)" in scaleout_body
     assert "gin.flush_async<ncclTeamTagRail" not in scaleout_body
+    assert scaleout_body.count("gin.flush<ncclCoopWarp>();") == 1
     assert "stored_old_slot_idx < retained_count" in scaleout_body
     assert "for (int proxy_slot = proxy_begin;" in scaleout_body
 

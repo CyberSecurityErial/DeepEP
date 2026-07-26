@@ -600,6 +600,12 @@ rail_balance_hybrid_dispatch_impl(
             __syncwarp();
         }
 
+        // The grouped force path has no legacy interval update to terminate
+        // the aggregate queue. Complete every payload issue before publishing
+        // the one dense tail below, matching Hybrid combine's final protocol.
+        gin.flush<ncclCoopWarp>();
+        __syncwarp();
+
         // Tag0 begins a fresh dispatch epoch and the legacy forwarder clears
         // every signaled tail before leaving the preceding epoch. Therefore
         // the value below is the complete packed value (not a delta from an
