@@ -604,6 +604,15 @@ rail_balance_hybrid_dispatch_impl(
                         dst_scaleout_rank_idx,
                         ncclGinOptFlagsAggregateRequests);
             }
+            const auto completion_request =
+                static_cast<ncclGinRequest_t*>(
+                    workspace_layout.get_scaleout_channel_gin_request_ptr(
+                        channel_idx, dst_scaleout_rank_idx));
+            if (lane_idx == dst_scaleout_rank_idx) {
+                gin.flush_async<ncclTeamTagRail, ncclCoopThread>(
+                    dst_scaleout_rank_idx, completion_request);
+                gin.wait(*completion_request);
+            }
             __syncwarp();
         }
 
