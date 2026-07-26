@@ -197,8 +197,8 @@ def _run_case(name: str) -> None:
     final_flush = header.index("gin.flush<ncclCoopWarp>();", proxy_put)
     assert retained_threshold < retained_staging < proxy_begin < proxy_loop
     assert (
-        grouped_put_helper < final_action < final_tail < proxy_loop <
-        remote_slot < proxy_acquire < proxy_put < final_flush
+        grouped_put_helper < final_action < proxy_loop < remote_slot <
+        proxy_acquire < proxy_put < final_flush < final_tail
     )
     assert "RB_PROXY_BAD" not in header
     assert "embedded_proxy" not in header
