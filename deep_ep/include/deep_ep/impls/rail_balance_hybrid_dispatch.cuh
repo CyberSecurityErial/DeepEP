@@ -502,16 +502,6 @@ rail_balance_hybrid_dispatch_impl(
             // Preload the next token (overlapping with the IBGDA issues)
             preload_next_token(token_idx + kNumChannels);
 
-            // Issue IBGDA requests
-            if (stored_dst_slot_idx >= 0 and stored_dst_scaleout_rank_idx != scaleout_rank_idx) {
-                gin.put<ncclTeamTagRail>(
-                        scaleout_recv_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(),
-                        arena_layout.get_retained_rail_staging_layout(token_idx)
-                            .get_base_ptr(),
-                        tma_buffer.get_num_bytes<false>(),
-                        stored_dst_scaleout_rank_idx);
-            }
-            __syncwarp();
         }
 
         // Consume the descriptor-free moved groups owned by this egress. NIC
@@ -533,6 +523,34 @@ rail_balance_hybrid_dispatch_impl(
             const int retained_count =
                 __ldg(rail_balance_retained + plan_offset);
             const int moved_count = __ldg(rail_balance_moved + plan_offset);
+            int retained_begin = 0;
+            for (int previous_channel = 0;
+                 previous_channel <= channel_idx; ++previous_channel) {
+                const int destination_end = previous_channel < channel_idx ?
+                    kNumScaleoutRanks : dst_scaleout_rank_idx;
+                for (int previous_destination = 0;
+                     previous_destination < destination_end;
+                     ++previous_destination) {
+                    retained_begin += __ldg(rail_balance_retained +
+                        rail_balance::hybrid_plan_detail::gcd_offset(
+                            scaleup_rank_idx, previous_channel,
+                            previous_destination, kNumChannels,
+                            kNumScaleoutRanks));
+                }
+            }
+            for (int retained_ordinal = 0;
+                 retained_ordinal < retained_count; ++retained_ordinal) {
+                const auto retained_token =
+                    arena_layout.get_retained_rail_staging_layout(
+                        retained_begin + retained_ordinal);
+                if (ptx::elect_one_sync())
+                    gin.put<ncclTeamTagRail>(
+                        scaleout_recv_buffer
+                            .get_token_buffer(retained_ordinal)
+                            .get_base_ptr(),
+                        retained_token.get_base_ptr(), token_bytes,
+                        dst_scaleout_rank_idx);
+            }
             const int proxy_begin =
                 __ldg(rail_balance_group_prefix + plan_offset);
             const int proxy_end = proxy_begin + moved_count;

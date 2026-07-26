@@ -129,7 +129,7 @@ def main() -> None:
     # before moved copies add their per-proxy diagnostic metadata.
     retained_mask = kernel_source.index("const unsigned retained_mask =")
     retained_stage = kernel_source.index(
-        "get_retained_rail_staging_layout(token)", retained_mask)
+        "get_retained_rail_staging_layout(", retained_mask)
     moved_loop = kernel_source.index("while (moved_mask != 0)", retained_stage)
     moved_generation = kernel_source.index(
         "get_linked_list_idx_ptr()[1] = invocation_key", moved_loop)

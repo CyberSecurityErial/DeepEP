@@ -227,13 +227,32 @@ void rail_balance_hybrid_source_shuffle_impl(
         }
         __syncwarp();
 
-        // Retained payloads use a stable source-shuffle staging slot instead
-        // of the dispatch kernel's transient TMA send buffer.  The token index
-        // is unique within the owner arena and proxy capacity is preflighted
-        // against the per-rank token capacity.
-        if (retained_mask != 0) {
+        // Pack retained payloads in channel-major/destination-minor order.
+        // The egress dispatch warp reconstructs the same prefix and posts both
+        // retained and moved payloads through one elected-lane completion path.
+        unsigned pending_retained_mask = retained_mask;
+        while (pending_retained_mask != 0) {
+            const int source_lane = __ffs(pending_retained_mask) - 1;
+            const int destination = source_lane;
+            const int remote_slot =
+                ptx::exchange(resolution.remote_slot, source_lane);
+            int retained_prefix = 0;
+            for (int channel = 0; channel <= source_channel; ++channel) {
+                const int destination_end = channel < source_channel ?
+                    num_destinations : destination;
+                for (int previous_destination = 0;
+                     previous_destination < destination_end;
+                     ++previous_destination) {
+                    retained_prefix += __ldg(retained +
+                        rail_balance::hybrid_plan_detail::gcd_offset(
+                            owner, channel, previous_destination,
+                            num_channels, num_destinations));
+                }
+            }
+            const int retained_slot = retained_prefix + remote_slot;
             const auto retained_token =
-                local_arena_layout.get_retained_rail_staging_layout(token);
+                local_arena_layout.get_retained_rail_staging_layout(
+                    retained_slot);
             ptx::tma_store_fence();
             __syncwarp();
             if (ptx::elect_one_sync())
@@ -244,6 +263,7 @@ void rail_balance_hybrid_source_shuffle_impl(
             ptx::tma_store_wait();
             ptx::tma_store_global_visibility_fence();
             __syncwarp();
+            pending_retained_mask &= pending_retained_mask - 1;
         }
 
         while (moved_mask != 0) {
