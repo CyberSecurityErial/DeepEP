@@ -143,6 +143,10 @@ void rail_balance_hybrid_source_shuffle_impl(
                 __ldg(topk_weights + token_offset + lane);
             staged_token.get_linked_list_idx_ptr()[lane] = -1;
         }
+        if constexpr (kNumTopk > 1) {
+            if (lane == 1)
+                staged_token.get_linked_list_idx_ptr()[1] = invocation_key;
+        }
         if (lane == 0) {
             *staged_token.get_src_token_global_idx_ptr() =
                 rank_idx * num_max_tokens_per_rank + token;

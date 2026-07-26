@@ -564,6 +564,23 @@ rail_balance_hybrid_dispatch_impl(
                                proxy_slot, ready, invocation_key);
                     return false;
                 });
+                if constexpr (kNumTopk > 1) {
+                    const int embedded_proxy = ptx::ld_acquire_sys<int>(
+                        proxy_token.get_linked_list_idx_ptr());
+                    const int embedded_generation = ptx::ld_acquire_sys<int>(
+                        proxy_token.get_linked_list_idx_ptr() + 1);
+                    if (embedded_proxy != proxy_slot or
+                        embedded_generation != invocation_key) {
+                        printf("RB_PROXY_BAD node=%d rail=%d channel=%d "
+                               "proxy=%d embedded_proxy=%d generation=%d "
+                               "expected_generation=%d src=%d topk0=%d\n",
+                               scaleout_rank_idx, scaleup_rank_idx, channel_idx,
+                               proxy_slot, embedded_proxy, embedded_generation,
+                               invocation_key,
+                               *proxy_token.get_src_token_global_idx_ptr(),
+                               *proxy_token.get_topk_idx_ptr());
+                    }
+                }
                 gin.put<ncclTeamTagRail>(
                     scaleout_recv_buffer.get_token_buffer(remote_slot)
                         .get_base_ptr(),
