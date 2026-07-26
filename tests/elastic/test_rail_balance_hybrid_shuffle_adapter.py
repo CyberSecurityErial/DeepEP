@@ -113,15 +113,16 @@ def main() -> None:
         in callsite_source
     )
 
-    # The descriptor-free handoff relies on one barrier rather than a ready
-    # word per proxy copy.  Completed TMA peer writes must cross from the
-    # async proxy into the generic-global domain before that barrier signals.
+    # Every generation-ready release must follow the async-proxy visibility
+    # fence for its payload; otherwise an egress can observe ready while the
+    # peer TMA bytes are still outside the generic-global domain.
     wait = kernel_source.index("ptx::tma_store_wait();")
-    slot_release = kernel_source.index("peer_layout.get_proxy_ready_ptr(", wait)
     visibility = kernel_source.index(
-        "ptx::tma_store_global_visibility_fence();", slot_release
+        "ptx::tma_store_global_visibility_fence();", wait
     )
-    assert wait < slot_release < visibility
+    slot_release = kernel_source.index(
+        "peer_layout.get_proxy_ready_ptr(", visibility)
+    assert wait < visibility < slot_release
     assert 'asm volatile("fence.proxy.async.global;"' in ptx_source
 
     print("PASS C080-H1b prepared source-shuffle raw submit")

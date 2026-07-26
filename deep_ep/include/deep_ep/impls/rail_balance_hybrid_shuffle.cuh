@@ -248,6 +248,9 @@ void rail_balance_hybrid_source_shuffle_impl(
             }
             ptx::tma_store_commit();
             ptx::tma_store_wait();
+            // Bridge the completed async-proxy payload into the generic
+            // global domain before publishing its release-ready word.
+            ptx::tma_store_global_visibility_fence();
             // Publish the completed async-proxy copy with an epoch-specific
             // ready key.  The plan's channel-count arena is dead after Gate #2
             // and is large enough to provide one word per proxy slot.
@@ -260,10 +263,6 @@ void rail_balance_hybrid_source_shuffle_impl(
         }
     }
 
-    // TMA stores complete through the async proxy.  The following local LSA
-    // barrier synchronizes through generic global operations, so bridge the
-    // proxy domains once per source CTA after all of its peer writes finish.
-    ptx::tma_store_global_visibility_fence();
 }
 
 }  // namespace deep_ep::elastic
