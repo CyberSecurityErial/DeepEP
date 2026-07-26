@@ -184,7 +184,7 @@ def _run_case(name: str) -> None:
     proxy_begin = header.index("const int proxy_begin =")
     proxy_loop = header.index("for (int proxy_slot = proxy_begin;")
     retained_staging = header.index(
-        "arena_layout.get_retained_rail_staging_layout(token_idx)",
+        "arena_layout.get_retained_rail_staging_layout(",
         retained_threshold)
     remote_slot = header.index("const int remote_slot =", proxy_loop)
     proxy_put = header.index("gin.put<ncclTeamTagRail>(", proxy_loop)
