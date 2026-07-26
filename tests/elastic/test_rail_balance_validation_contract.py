@@ -603,6 +603,23 @@ class ValidationBundleTest(unittest.TestCase):
         )
         self.assertEqual(process.wait.call_count, 2)
 
+    def test_build_codegen_entry_keeps_the_runtime_boundary(self):
+        source = Path(__file__).with_name(
+            "run_rail_balance_build_warmup.py"
+        ).read_text()
+        self.assertIn('"evidence_label": _LABEL', source)
+        self.assertIn('"real_gin_runtime": False', source)
+        self.assertIn('"full_force_runtime_cache": False', source)
+        self.assertIn('"--inplace"', source)
+        self.assertIn('"--force"', source)
+        self.assertIn("test_rail_balance_hybrid_dispatch_codegen.py", source)
+        self.assertIn("test_rail_balance_hybrid_combine_codegen.py", source)
+        self.assertIn('_DISPATCH_CASE = "8x2_h7168_k8"', source)
+        self.assertIn('_COMBINE_CASE = "8x2_h7168_k8_rank_tt"', source)
+        self.assertNotIn("_EXPECTED_KERNELS", source)
+        self.assertIn("_require_clean_tree()", source)
+        self.assertNotIn("_rail_balance_force_available = lambda", source)
+
     def test_multinode_runner_uses_unique_exact_weights(self):
         routes = [
             [[0, 1], [2, 3]],
