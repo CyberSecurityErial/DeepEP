@@ -523,7 +523,6 @@ rail_balance_hybrid_dispatch_impl(
             static_cast<uint32_t>(invocation_key) *
             static_cast<uint32_t>(kProxyCapacity + 1);
         int stored_grouped_tail = -1;
-        int num_remote_groups_since_flush = 0;
         const auto issue_grouped_put = [&] (
                 const auto& recv_token, void* send_ptr,
                 const int& dst_scaleout_rank_idx) {
@@ -630,13 +629,18 @@ rail_balance_hybrid_dispatch_impl(
             }
             __syncwarp();
 
-            // A two-hot route can enqueue 48 token puts per warp (six remote
-            // destinations times eight tokens), while one-hot stays below the
-            // observed queue knee at 28. Drain every two destination groups
-            // without changing the per-slot completion protocol.
-            if (++num_remote_groups_since_flush == 2) {
-                gin.flush<ncclCoopWarp>();
-                num_remote_groups_since_flush = 0;
+            // Bound the number of globally outstanding per-slot completion
+            // actions. A plain cooperative flush only doorbells the queue;
+            // waiting on the destination request prevents two-hot traffic
+            // from crossing the Gin completion-queue knee.
+            const auto completion_request =
+                static_cast<ncclGinRequest_t*>(
+                    workspace_layout.get_scaleout_channel_gin_request_ptr(
+                        channel_idx, dst_scaleout_rank_idx));
+            if (lane_idx == dst_scaleout_rank_idx) {
+                gin.flush_async<ncclTeamTagRail, ncclCoopThread>(
+                    dst_scaleout_rank_idx, completion_request);
+                gin.wait(*completion_request);
             }
             __syncwarp();
         }
