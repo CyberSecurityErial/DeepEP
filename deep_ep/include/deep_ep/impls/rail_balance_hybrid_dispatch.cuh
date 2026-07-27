@@ -525,16 +525,26 @@ rail_balance_hybrid_dispatch_impl(
         int stored_grouped_tail = -1;
         const auto issue_grouped_put = [&] (
                 const auto& recv_token, void* send_ptr,
-                const int& dst_scaleout_rank_idx) {
+                const int& dst_scaleout_rank_idx,
+                const bool& publish_completion) {
             if (lane_idx == dst_scaleout_rank_idx) {
-                gin.put<ncclTeamTagRail>(
-                    recv_token.get_base_ptr(), send_ptr, token_bytes,
-                    dst_scaleout_rank_idx, ncclGinOptFlagsDefault,
-                    ncclGin_VASignalAdd(
-                        nccl_window,
-                        gin.get_sym_offset(
-                            recv_token.get_src_token_global_idx_ptr()),
-                        static_cast<uint64_t>(ready_epoch_base) << 32));
+                if (publish_completion) {
+                    gin.put<ncclTeamTagRail>(
+                        recv_token.get_base_ptr(), send_ptr, token_bytes,
+                        dst_scaleout_rank_idx, ncclGinOptFlagsDefault,
+                        ncclGin_VASignalAdd(
+                            nccl_window,
+                            gin.get_sym_offset(
+                                recv_token
+                                    .get_src_token_global_idx_ptr()),
+                            static_cast<uint64_t>(
+                                ready_epoch_base) << 32));
+                } else {
+                    gin.put<ncclTeamTagRail>(
+                        recv_token.get_base_ptr(), send_ptr, token_bytes,
+                        dst_scaleout_rank_idx,
+                        ncclGinOptFlagsDefault);
+                }
             }
         };
         for (int dst_scaleout_rank_idx = 0;
@@ -572,11 +582,21 @@ rail_balance_hybrid_dispatch_impl(
                 const auto retained_token =
                     arena_layout.get_retained_rail_staging_layout(
                         retained_begin + retained_ordinal);
+                const bool publish_completion =
+                    (retained_ordinal + 1) %
+                            kNumSlotsPerForwardChunk == 0 or
+                    retained_ordinal + 1 == final_tail;
+                if (lane_idx == dst_scaleout_rank_idx and
+                    not publish_completion) {
+                    ptx::st_release_sys(
+                        retained_token.get_linked_list_idx_ptr(),
+                        static_cast<int>(ready_epoch_base - 1));
+                }
                 issue_grouped_put(
                     scaleout_recv_buffer
                         .get_token_buffer(retained_ordinal),
                     retained_token.get_base_ptr(),
-                    dst_scaleout_rank_idx);
+                    dst_scaleout_rank_idx, publish_completion);
             }
             const int proxy_begin =
                 __ldg(rail_balance_group_prefix + plan_offset);
@@ -622,10 +642,21 @@ rail_balance_hybrid_dispatch_impl(
                 ptx::tma_store_wait();
                 ptx::tma_store_global_visibility_fence();
                 __syncwarp();
+                const bool publish_completion =
+                    (remote_slot + 1) %
+                            kNumSlotsPerForwardChunk == 0 or
+                    remote_slot + 1 == final_tail;
+                if (lane_idx == dst_scaleout_rank_idx and
+                    not publish_completion) {
+                    ptx::st_release_sys(
+                        staged_token.get_linked_list_idx_ptr(),
+                        static_cast<int>(
+                            ready_epoch_base + proxy_slot));
+                }
                 issue_grouped_put(
                     scaleout_recv_buffer.get_token_buffer(remote_slot),
                     staged_token.get_base_ptr(),
-                    dst_scaleout_rank_idx);
+                    dst_scaleout_rank_idx, publish_completion);
             }
             __syncwarp();
         }
@@ -643,9 +674,9 @@ rail_balance_hybrid_dispatch_impl(
         // one final dense tail per (channel,destination); it intentionally
         // gives up the legacy interval overlap until C100 can measure a safe
         // grouped alternative.
-        // Remote payloads publish a per-slot epoch marker as their completion
-        // action. The dense tail may arrive first; forwarders validate that
-        // marker before consuming each advertised slot.
+        // Remote payload chunks publish an epoch marker on their final slot.
+        // Non-final slots are pre-encoded in local staging; the final action
+        // orders every default put earlier on the same Rail QP.
         if (lane_idx < kNumScaleoutRanks) {
             const int final_tail = lane_idx == scaleout_rank_idx ?
                 stored_owner_tail : stored_grouped_tail;
@@ -741,38 +772,42 @@ rail_balance_hybrid_dispatch_impl(
                 stored_scaleout_old_tail_idx = end_slot_idx;
 
             const auto recv_buffer = scaleout_recv_buffer.get_rank_buffer(recv_scaleout_rank_idx);
+            // The final slot of every forwarding chunk carries a completion
+            // action that orders all earlier default puts on this Rail QP.
+            // Gate once per chunk instead of posting and polling an action for
+            // every token.
+            if (recv_scaleout_rank_idx != scaleout_rank_idx and
+                end_slot_idx > start_slot_idx) {
+                const int completion_slot_idx = end_slot_idx - 1;
+                const auto completion_token =
+                    recv_buffer.get_token_buffer(completion_slot_idx);
+                comm::timeout_while<kNumTimeoutCycles>([&](
+                        const bool& is_last_check) {
+                    const uint32_t encoded_proxy =
+                        ptx::ld_acquire_sys<uint32_t>(
+                            reinterpret_cast<const uint32_t*>(
+                                completion_token
+                                    .get_linked_list_idx_ptr()));
+                    const uint32_t decoded_proxy =
+                        encoded_proxy - forward_ready_epoch_base;
+                    const bool ready =
+                        decoded_proxy == ~uint32_t(0) or
+                        decoded_proxy <
+                            static_cast<uint32_t>(kProxyCapacity);
+                    if (ready)
+                        return true;
+                    if (is_last_check and ptx::elect_one_sync())
+                        printf("DeepEP rail payload timeout, scale-out: %d, "
+                               "scale-up: %d, channel: %d, slot: %d, "
+                               "encoded: %u, epoch: %u\n",
+                               scaleout_rank_idx, scaleup_rank_idx,
+                               channel_idx, completion_slot_idx,
+                               encoded_proxy, forward_ready_epoch_base);
+                    return false;
+                });
+            }
             for (int slot_idx = start_slot_idx; slot_idx < end_slot_idx; ++ slot_idx) {
                 const auto token_buffer = recv_buffer.get_token_buffer(slot_idx);
-
-                // A remote dense tail may be observed before earlier payloads
-                // on the same Rail QP complete. Each put adds this invocation's
-                // epoch to the source/proxy metadata pair only after its own
-                // payload is visible, so do not consume a remote slot early.
-                if (recv_scaleout_rank_idx != scaleout_rank_idx) {
-                    comm::timeout_while<kNumTimeoutCycles>([&](
-                            const bool& is_last_check) {
-                        const uint32_t encoded_proxy =
-                            ptx::ld_acquire_sys<uint32_t>(
-                                reinterpret_cast<const uint32_t*>(
-                                    token_buffer.get_linked_list_idx_ptr()));
-                        const uint32_t decoded_proxy =
-                            encoded_proxy - forward_ready_epoch_base;
-                        const bool ready =
-                            decoded_proxy == ~uint32_t(0) or
-                            decoded_proxy <
-                                static_cast<uint32_t>(kProxyCapacity);
-                        if (ready)
-                            return true;
-                        if (is_last_check and ptx::elect_one_sync())
-                            printf("DeepEP rail payload timeout, scale-out: %d, "
-                                   "scale-up: %d, channel: %d, slot: %d, "
-                                   "encoded: %u, epoch: %u\n",
-                                   scaleout_rank_idx, scaleup_rank_idx,
-                                   channel_idx, slot_idx, encoded_proxy,
-                                   forward_ready_epoch_base);
-                        return false;
-                    });
-                }
 
                 // Wait TMA arrival
                 ptx::tma_store_wait();

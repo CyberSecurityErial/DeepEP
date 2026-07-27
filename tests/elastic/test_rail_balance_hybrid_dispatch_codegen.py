@@ -44,7 +44,7 @@ _CASES = {
 
 def _derive_static_payload_counters(
     retained: tuple[int, ...], moved: tuple[int, ...], token_bytes: int,
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int, int, int]:
     """Derive dispatch-payload counters from plan tensors, never atomics."""
     assert token_bytes > 0
     assert len(retained) == len(moved)
@@ -52,8 +52,15 @@ def _derive_static_payload_counters(
     retained_puts = sum(retained)
     moved_puts = sum(moved)
     payload_puts = retained_puts + moved_puts
+    completion_actions = sum(
+        (retained_count + moved_count + 5) // 6
+        for retained_count, moved_count in zip(retained, moved)
+    )
     payload_gin_bytes = payload_puts * token_bytes
-    return retained_puts, moved_puts, payload_puts, payload_gin_bytes
+    return (
+        retained_puts, moved_puts, payload_puts,
+        completion_actions, payload_gin_bytes,
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -295,14 +302,17 @@ def _run_case(name: str) -> None:
     scaleout_end = header.index(
         "\n    } else {\n        const int forward_warp_idx", scaleout_begin)
     scaleout_body = header[scaleout_begin:scaleout_end]
-    # The correctness-first grouped put helper doorbells every payload and
-    # publishes a per-slot epoch marker as its remote completion action. Local
-    # destination remains a TMA bypass.
-    assert scaleout_body.count("gin.put<ncclTeamTagRail>(") == 1
+    # The grouped put helper still doorbells every token payload, but only the
+    # final slot of each forwarding chunk publishes a remote completion action.
+    # Local destination remains a TMA bypass.
+    assert scaleout_body.count("gin.put<ncclTeamTagRail>(") == 2
     assert "ncclGinOptFlagsAggregateRequests" not in scaleout_body
     assert scaleout_body.count("ncclGin_VASignalAdd(") == 1
     assert "encoded_proxy - forward_ready_epoch_base" in header
     assert "DeepEP rail payload timeout" in header
+    completion_gate = header.index("const int completion_slot_idx =")
+    slot_loop = header.index("for (int slot_idx = start_slot_idx;")
+    assert completion_gate < slot_loop
     assert "if (lane_idx == dst_scaleout_rank_idx)" in scaleout_body
     assert "flush_async<ncclTeamTagRail" not in scaleout_body
     assert "gin.wait(*completion_request);" not in scaleout_body
@@ -311,7 +321,7 @@ def _run_case(name: str) -> None:
     assert "for (int proxy_slot = proxy_begin;" in scaleout_body
 
     counters = _derive_static_payload_counters((3, 0, 5), (0, 4, 2), 1024)
-    assert counters == (8, 6, 14, 14336)
+    assert counters == (8, 6, 14, 4, 14336)
 
     print(
         "PASS C080-E dispatch codegen "
