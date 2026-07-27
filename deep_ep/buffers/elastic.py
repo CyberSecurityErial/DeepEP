@@ -70,6 +70,8 @@ _RAIL_BALANCE_DISPATCH_ENCODE_ERROR = 34
 _RAIL_BALANCE_DISPATCH_PLAN_ERROR = 35
 _RAIL_BALANCE_DISPATCH_PLAN_STATUS_ERROR = 36
 _RAIL_BALANCE_DISPATCH_PLAN_ENCODE_ERROR = 37
+# Priority one is below every real error and doubles as a world-wide OR bit.
+_RAIL_BALANCE_DISPATCH_HAS_MOVES = 1
 _RAIL_BALANCE_COMBINE_VALIDATION_ERROR = 40
 _RAIL_BALANCE_COMBINE_PREPARE_ERROR = 41
 _RAIL_BALANCE_COMBINE_MANIFEST_ERROR = 42
@@ -1858,6 +1860,7 @@ class ElasticBuffer:
             raise
 
         plan_error_priority = 0
+        local_moved_copies = 0
         try:
             plan_outputs = \
                 self.runtime._rail_balance_hybrid_plan_finish(invocation_id)
@@ -1866,9 +1869,16 @@ class ElasticBuffer:
             plan_status = plan_outputs[-1].item()
             if type(plan_status) is not int or plan_status not in (0, 1):
                 raise ValueError('rail-balance plan status is invalid')
+            local_moved_copies = plan_outputs[12].item()
+            if type(local_moved_copies) is not int or \
+                    local_moved_copies < 0:
+                raise ValueError(
+                    'rail-balance moved-copy count is invalid')
             if plan_status != 0:
                 plan_error_priority = \
                     _RAIL_BALANCE_DISPATCH_PLAN_STATUS_ERROR
+            elif local_moved_copies > 0:
+                plan_error_priority = _RAIL_BALANCE_DISPATCH_HAS_MOVES
         except BaseException:
             plan_error_priority = _RAIL_BALANCE_DISPATCH_PLAN_ERROR
 
@@ -1900,9 +1910,19 @@ class ElasticBuffer:
         except BaseException:
             self._rail_balance_terminal = True
             raise
+        world_has_moves = False
         try:
-            _raise_rail_balance_world_gate_failure(
-                'dispatch-plan', gate_result)
+            if gate_result[0] != 0:
+                priority, _ = _decode_rail_balance_world_gate_error_key(
+                    gate_result[0])
+                if priority == _RAIL_BALANCE_DISPATCH_HAS_MOVES:
+                    world_has_moves = True
+                else:
+                    _raise_rail_balance_world_gate_failure(
+                        'dispatch-plan', gate_result)
+            else:
+                _raise_rail_balance_world_gate_failure(
+                    'dispatch-plan', gate_result)
         except BaseException:
             try:
                 self.runtime._rail_balance_hybrid_plan_abort(invocation_id)
@@ -1911,47 +1931,28 @@ class ElasticBuffer:
                 raise
             raise
 
-        # If the source-only plan moves no copies anywhere in the world, the
-        # native Hybrid path already has the desired rail placement. Abort the
-        # private transaction and reuse that path instead of paying the force
-        # shuffle/forward protocol. The CUDA-only guard keeps CPU lifecycle
-        # fakes on the force path while real plans make one collective decision
-        # before any rank can diverge.
-        moved_copies = plan_outputs[12]
-        if moved_copies.is_cuda:
-            global_moved_copies = moved_copies.detach().clone()
+        # Gate2's low-priority control bit computes a world-wide OR without an
+        # extra collective. If no source rank moves a copy, the native Hybrid
+        # path already has the desired rail placement.
+        if not world_has_moves:
+            self.runtime._rail_balance_hybrid_plan_abort(invocation_id)
+            original_mode = self._rail_balance_mode
+            self._rail_balance_mode = 'off'
             try:
-                dist.all_reduce(
-                    global_moved_copies, op=dist.ReduceOp.SUM,
-                    group=self.group)
-                bypass_force = global_moved_copies.item() == 0
-            except BaseException:
-                self._rail_balance_terminal = True
-                try:
-                    self.runtime._rail_balance_hybrid_plan_abort(
-                        invocation_id)
-                except BaseException:
-                    pass
-                raise
-            if bypass_force:
-                self.runtime._rail_balance_hybrid_plan_abort(invocation_id)
-                original_mode = self._rail_balance_mode
-                self._rail_balance_mode = 'off'
-                try:
-                    return self.dispatch(
-                        x, topk_idx, topk_weights,
-                        cumulative_local_expert_recv_stats,
-                        num_experts, num_max_tokens_per_rank,
-                        expert_alignment, num_sms, num_qps,
-                        previous_event,
-                        previous_event_before_epilogue,
-                        async_with_compute_stream,
-                        allocate_on_comm_stream, handle,
-                        do_handle_copy, do_cpu_sync, do_expand,
-                        do_zero_padding,
-                        use_tma_aligned_col_major_sf)
-                finally:
-                    self._rail_balance_mode = original_mode
+                return self.dispatch(
+                    x, topk_idx, topk_weights,
+                    cumulative_local_expert_recv_stats,
+                    num_experts, num_max_tokens_per_rank,
+                    expert_alignment, num_sms, num_qps,
+                    previous_event,
+                    previous_event_before_epilogue,
+                    async_with_compute_stream,
+                    allocate_on_comm_stream, handle,
+                    do_handle_copy, do_cpu_sync, do_expand,
+                    do_zero_padding,
+                    use_tma_aligned_col_major_sf)
+            finally:
+                self._rail_balance_mode = original_mode
 
         try:
             self.runtime._rail_balance_hybrid_dispatch_commit(invocation_id)

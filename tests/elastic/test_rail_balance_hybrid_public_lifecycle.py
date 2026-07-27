@@ -171,7 +171,12 @@ class _GateController:
         if self.overrides:
             return self.overrides.pop(0)
         error = int(self.host_words[0].item())
-        if error:
+        priority = (
+            elastic_module._decode_rail_balance_world_gate_error_key(error)[0]
+            if error else 0
+        )
+        if error and priority != \
+                elastic_module._RAIL_BALANCE_DISPATCH_HAS_MOVES:
             return error, -1, 0, 0
 
         width = int(self.host_words[2 + 2 * 4].item())
@@ -185,6 +190,8 @@ class _GateController:
             for index, value in enumerate(manifest)
         )
         self.accepted_manifests.append(manifest)
+        if error:
+            return error, -1, 0, 0
         return _PASS
 
     @classmethod
@@ -235,19 +242,6 @@ def _dispatch_result(
     )
 
 
-class _FakeCudaScalar:
-    is_cuda = True
-
-    def detach(self) -> "_FakeCudaScalar":
-        return self
-
-    def clone(self) -> "_FakeCudaScalar":
-        return self
-
-    def item(self) -> int:
-        return 0
-
-
 class _FakeRuntime:
     def __init__(self) -> None:
         self.trace: list[str] = []
@@ -284,8 +278,8 @@ class _FakeRuntime:
         if self.fail_plan_finish:
             raise RuntimeError("injected plan finish failure")
         outputs = [torch.zeros(1, dtype=torch.int32) for _ in range(13)]
-        if self.bypass_plan:
-            outputs[12] = _FakeCudaScalar()  # type: ignore[assignment]
+        outputs[12] = torch.tensor(
+            0 if self.bypass_plan else 1, dtype=torch.int32)
         outputs.append(torch.tensor(self.plan_status, dtype=torch.int32))
         return tuple(outputs)
 
@@ -490,24 +484,13 @@ def _assert_successful_round_trip() -> None:
 def _assert_zero_move_plan_bypasses_force() -> None:
     buffer, runtime, _ = _make_buffer(force=True)
     runtime.bypass_plan = True
-    original_all_reduce = elastic_module.dist.all_reduce
-
-    def fake_all_reduce(*args: object, **kwargs: object) -> None:
-        del args, kwargs
-        runtime.trace.append("bypass_all_reduce")
-
-    elastic_module.dist.all_reduce = fake_all_reduce
-    try:
-        recv_x, _, recv_weights, handle, _ = _force_dispatch(buffer)
-        assert getattr(handle, "_rail_balance_ticket", None) is None
-        buffer.combine(recv_x, handle, recv_weights, num_sms=4, num_qps=0)
-    finally:
-        elastic_module.dist.all_reduce = original_all_reduce
+    recv_x, _, recv_weights, handle, _ = _force_dispatch(buffer)
+    assert getattr(handle, "_rail_balance_ticket", None) is None
+    buffer.combine(recv_x, handle, recv_weights, num_sms=4, num_qps=0)
 
     assert runtime.trace == [
         "dispatch_prepare", "gate", "plan_finish", "gate",
-        "bypass_all_reduce", "dispatch_abort", "legacy_dispatch",
-        "legacy_combine",
+        "dispatch_abort", "legacy_dispatch", "legacy_combine",
     ]
 
 
