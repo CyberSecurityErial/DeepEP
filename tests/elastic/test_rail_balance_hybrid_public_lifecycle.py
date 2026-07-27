@@ -171,7 +171,12 @@ class _GateController:
         if self.overrides:
             return self.overrides.pop(0)
         error = int(self.host_words[0].item())
-        if error:
+        priority = (
+            elastic_module._decode_rail_balance_world_gate_error_key(error)[0]
+            if error else 0
+        )
+        if error and priority != \
+                elastic_module._RAIL_BALANCE_DISPATCH_HAS_MOVES:
             return error, -1, 0, 0
 
         width = int(self.host_words[2 + 2 * 4].item())
@@ -185,6 +190,8 @@ class _GateController:
             for index, value in enumerate(manifest)
         )
         self.accepted_manifests.append(manifest)
+        if error:
+            return error, -1, 0, 0
         return _PASS
 
     @classmethod
@@ -240,6 +247,7 @@ class _FakeRuntime:
         self.trace: list[str] = []
         self.buffer: ElasticBuffer | None = None
         self.plan_status = 0
+        self.bypass_plan = False
         self.fail_dispatch_prepare = False
         self.fail_plan_finish = False
         self.fail_dispatch_commit = False
@@ -270,6 +278,8 @@ class _FakeRuntime:
         if self.fail_plan_finish:
             raise RuntimeError("injected plan finish failure")
         outputs = [torch.zeros(1, dtype=torch.int32) for _ in range(13)]
+        outputs[12] = torch.tensor(
+            0 if self.bypass_plan else 1, dtype=torch.int32)
         outputs.append(torch.tensor(self.plan_status, dtype=torch.int32))
         return tuple(outputs)
 
@@ -366,6 +376,8 @@ def _make_buffer(*, force: bool) -> tuple[ElasticBuffer, _FakeRuntime, _GateCont
         buffer._rail_balance_owner_token = object()
         buffer._rail_balance_live_ticket = None
         buffer._rail_balance_terminal = False
+        buffer._rail_balance_zero_move_bypass_budget = 0
+        buffer._rail_balance_zero_move_common_fields = None
         # Epoch zero stays reserved for uninitialized/control words.
         buffer._rail_balance_next_invocation_id = 1
         # Keep aliases until the public implementation chooses one spelling;
@@ -469,6 +481,27 @@ def _assert_successful_round_trip() -> None:
             4, 1,
         ),
     ]
+
+
+def _assert_zero_move_plan_bypasses_force() -> None:
+    buffer, runtime, _ = _make_buffer(force=True)
+    runtime.bypass_plan = True
+    recv_x, _, recv_weights, handle, _ = _force_dispatch(buffer)
+    assert getattr(handle, "_rail_balance_ticket", None) is None
+    buffer.combine(recv_x, handle, recv_weights, num_sms=4, num_qps=0)
+
+    assert runtime.trace == [
+        "dispatch_prepare", "gate", "plan_finish", "gate",
+        "dispatch_abort", "legacy_dispatch", "legacy_combine",
+    ]
+
+    runtime.trace.clear()
+    recv_x, _, recv_weights, handle, _ = _force_dispatch(buffer)
+    assert getattr(handle, "_rail_balance_ticket", None) is None
+    buffer.combine(recv_x, handle, recv_weights, num_sms=4, num_qps=0)
+    assert runtime.trace == ["gate", "legacy_dispatch", "legacy_combine"]
+    assert buffer._rail_balance_zero_move_bypass_budget == \
+        elastic_module._RAIL_BALANCE_ZERO_MOVE_RECHECK_INTERVAL - 2
 
 
 def _assert_gate_rejection_is_retryable() -> None:
@@ -702,6 +735,7 @@ def main() -> None:
     try:
         _assert_source_contract()
         _assert_successful_round_trip()
+        _assert_zero_move_plan_bypasses_force()
         _assert_gate_rejection_is_retryable()
         _assert_dispatch_entry_failures_are_retryable()
         _assert_combine_prepare_failure_is_retryable()

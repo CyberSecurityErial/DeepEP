@@ -20,7 +20,7 @@ template <bool kDoCPUSync,
           int kNumHiddenBytes, int kNumSFPacks,
           int kNumMaxTokensPerRank,
           int kNumExperts, int kNumTopk, int kExpertAlignment,
-          int kNumQPs, int64_t kNumTimeoutCycles,
+          int kNumQPs, int64_t kNumTimeoutCycles, int kProxyCapacity,
           int kNumScaleupRanksPerLane = math::constexpr_ceil_div(kNumScaleupRanks, 32),
           int kNumChannelsPerSM = kNumScaleoutWarps,
           int kNumChannels = kNumScaleoutWarps * kNumSMs,
@@ -97,6 +97,8 @@ rail_balance_hybrid_dispatch_impl(
     // Workspaces
     const auto workspace_layout = layout::WorkspaceLayout(workspace, kNumScaleoutRanks, kNumScaleupRanks, kNumExperts);
     const auto host_workspace_layout = layout::WorkspaceLayout(mapped_host_workspace, kNumScaleoutRanks, kNumScaleupRanks, kNumExperts);
+    auto scaleup_count_mailbox = static_cast<int64_t*>(
+        workspace_layout.get_scaleout_channel_gin_request_ptr(0, 0));
 
     // The kernel uses a fixed space of dynamic shared memory (no static shared memory)
     extern __shared__ __align__(ptx::kNumTMAAlignBytes) int8_t smem[];
@@ -113,10 +115,27 @@ rail_balance_hybrid_dispatch_impl(
         sm_idx, (warp_idx - kNumNotifyWarps) % kNumChannelsPerSM, warp_idx < kNumNotifyWarps);
     const auto gin = handle::NCCLGin(nccl_dev_comm, nccl_window, qp_idx, sharing_mode);
 
+    // Reset the target-local mailbox before Tag0. No peer can publish the next
+    // epoch until every rank has entered and left that barrier.
+    if (sm_idx == 0 and thread_idx < kNumScaleupRanks)
+        ptx::st_relaxed_sys(scaleup_count_mailbox + thread_idx, int64_t(0));
+    cooperative_groups::this_grid().sync();
+
     // Global parallel barriers for scale-out subteam and scale-up subteam
     comm::gpu_barrier<true, kNumScaleoutRanks, kNumScaleupRanks,
                       kNumSMs, kNumThreads, kNumQPs, kNumTimeoutCycles, comm::kHybridDispatchTag0, false, false, true>(
         gin, workspace_layout, scaleout_rank_idx, scaleup_rank_idx, sm_idx, thread_idx);
+
+    // Sender counters are an epoch snapshot: clear them before any forward
+    // warp can increment, then leave the completed values stable until the
+    // next Tag0.  Resetting at the previous epoch's tail races peer readers.
+    if (not kReuseSlotIndices and sm_idx == 0 and
+        thread_idx < kNumScaleupRanks)
+        ptx::st_relaxed_sys(
+            workspace_layout.get_scaleup_atomic_sender_counter() +
+                thread_idx,
+            0);
+    cooperative_groups::this_grid().sync();
 
     // The golden layout during the whole process for both scale-out and forward warps
     const auto token_layout = layout::TokenLayout(kNumHiddenBytes, kNumSFPacks * sizeof(sf_pack_t), kNumTopk, true);
@@ -377,6 +396,9 @@ rail_balance_hybrid_dispatch_impl(
         EP_STATIC_ASSERT(kNumScaleoutRanks <= 32,
                          "Invalid number of scale-out ranks");
         int stored_owner_tail = 0;
+        const auto arena_layout = rail_balance::HybridArenaLayout(
+            kNumHiddenBytes / static_cast<int>(sizeof(nv_bfloat16)),
+            kNumTopk, kProxyCapacity, rail_balance_arena);
 
         // Preload next token
         const auto preload_next_token = [&](const int& token_idx) {
@@ -458,8 +480,9 @@ rail_balance_hybrid_dispatch_impl(
                             kNumChannels, kNumScaleoutRanks);
                     const int retained_count =
                         __ldg(rail_balance_retained + plan_offset);
-                    if (stored_old_slot_idx < retained_count)
+                    if (stored_old_slot_idx < retained_count) {
                         stored_dst_slot_idx = stored_old_slot_idx;
+                    }
                 }
             }
 
@@ -467,22 +490,11 @@ rail_balance_hybrid_dispatch_impl(
             // resolver even when this copy is not retained here.
             const auto scaleout_rank_mask = ptx::reduce_or(stored_dst_scaleout_rank_idx >= 0 ? (1u << stored_dst_scaleout_rank_idx) : 0u);
             stored_owner_tail += (scaleout_rank_mask >> lane_idx) & 1;
-            const auto retained_remote_mask = ptx::reduce_or(
-                stored_dst_slot_idx >= 0 and
-                stored_dst_scaleout_rank_idx != scaleout_rank_idx ?
-                    (1u << stored_dst_scaleout_rank_idx) : 0u);
 
-            // Wait TMA arrival and issue the TMA store into send buffer
+            // Wait for the owner payload used by the local bypass.
             if (ptx::elect_one_sync()) {
                 ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, kNumHiddenBytes);
                 ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
-
-                // One owner payload is shared by every retained remote
-                // destination. Moved copies already reside in peer proxy slots.
-                if (retained_remote_mask != 0) {
-                    ptx::tma_store_1d(scaleout_send_buffer.get_token_buffer(token_idx).get_base_ptr(),
-                                      tma_buffer.get_base_ptr(), tma_buffer.get_num_bytes<false>());
-                }
             }
             __syncwarp();
 
@@ -498,51 +510,161 @@ rail_balance_hybrid_dispatch_impl(
             // Preload the next token (overlapping with the IBGDA issues)
             preload_next_token(token_idx + kNumChannels);
 
-            // Issue IBGDA requests
-            if (stored_dst_slot_idx >= 0 and stored_dst_scaleout_rank_idx != scaleout_rank_idx) {
-                gin.put<ncclTeamTagRail>(
-                        scaleout_recv_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(),
-                        scaleout_send_buffer.get_token_buffer(token_idx).get_base_ptr(),
-                        tma_buffer.get_num_bytes<false>(),
-                        stored_dst_scaleout_rank_idx,
-                        ncclGinOptFlagsAggregateRequests);
-            }
-            __syncwarp();
         }
 
-        // Consume the descriptor-free moved groups owned by this egress.  The
-        // source slot p and destination slot are implied by static prefixes;
-        // no data-path atomic, ready word, or per-copy descriptor is needed.
-        if (lane_idx < kNumScaleoutRanks and
-            lane_idx != scaleout_rank_idx) {
+        // Consume the descriptor-free moved groups owned by this egress. NIC
+        // reads use a dedicated egress-local staging region rather than the
+        // peer-written arena directly; the cooperative copy also establishes
+        // system visibility before posting the Rail put.
+        const int invocation_key = ptx::ld_acquire_sys<int>(
+            &arena_layout.get_control_ptr()->invocation_id);
+        const int token_bytes = token_layout.get_num_bytes<false>();
+        const uint32_t ready_epoch_base =
+            static_cast<uint32_t>(invocation_key) *
+            static_cast<uint32_t>(kProxyCapacity + 1);
+        int stored_grouped_tail = -1;
+        const auto issue_grouped_put = [&] (
+                const auto& recv_token, void* send_ptr,
+                const int& dst_scaleout_rank_idx,
+                const bool& publish_completion) {
+            if (lane_idx == dst_scaleout_rank_idx) {
+                if (publish_completion) {
+                    gin.put<ncclTeamTagRail>(
+                        recv_token.get_base_ptr(), send_ptr, token_bytes,
+                        dst_scaleout_rank_idx, ncclGinOptFlagsDefault,
+                        ncclGin_VASignalAdd(
+                            nccl_window,
+                            gin.get_sym_offset(
+                                recv_token
+                                    .get_src_token_global_idx_ptr()),
+                            static_cast<uint64_t>(
+                                ready_epoch_base) << 32));
+                } else {
+                    gin.put<ncclTeamTagRail>(
+                        recv_token.get_base_ptr(), send_ptr, token_bytes,
+                        dst_scaleout_rank_idx,
+                        ncclGinOptFlagsDefault);
+                }
+            }
+        };
+        for (int dst_scaleout_rank_idx = 0;
+             dst_scaleout_rank_idx < kNumScaleoutRanks;
+             ++dst_scaleout_rank_idx) {
+            if (dst_scaleout_rank_idx == scaleout_rank_idx)
+                continue;
             const auto plan_offset =
                 rail_balance::hybrid_plan_detail::gcd_offset(
-                    scaleup_rank_idx, channel_idx, lane_idx,
+                    scaleup_rank_idx, channel_idx, dst_scaleout_rank_idx,
                     kNumChannels, kNumScaleoutRanks);
             const int retained_count =
                 __ldg(rail_balance_retained + plan_offset);
             const int moved_count = __ldg(rail_balance_moved + plan_offset);
+            const int final_tail = retained_count + moved_count;
+            if (lane_idx == dst_scaleout_rank_idx)
+                stored_grouped_tail = final_tail;
+            int retained_begin = 0;
+            for (int previous_channel = 0;
+                 previous_channel <= channel_idx; ++previous_channel) {
+                const int destination_end = previous_channel < channel_idx ?
+                    kNumScaleoutRanks : dst_scaleout_rank_idx;
+                for (int previous_destination = 0;
+                     previous_destination < destination_end;
+                     ++previous_destination) {
+                    retained_begin += __ldg(rail_balance_retained +
+                        rail_balance::hybrid_plan_detail::gcd_offset(
+                            scaleup_rank_idx, previous_channel,
+                            previous_destination, kNumChannels,
+                            kNumScaleoutRanks));
+                }
+            }
+            for (int retained_ordinal = 0;
+                 retained_ordinal < retained_count; ++retained_ordinal) {
+                const auto retained_token =
+                    arena_layout.get_retained_rail_staging_layout(
+                        retained_begin + retained_ordinal);
+                const bool publish_completion =
+                    (retained_ordinal + 1) %
+                            kNumSlotsPerForwardChunk == 0 or
+                    retained_ordinal + 1 == final_tail;
+                if (lane_idx == dst_scaleout_rank_idx and
+                    not publish_completion) {
+                    ptx::st_release_sys(
+                        retained_token.get_linked_list_idx_ptr(),
+                        static_cast<int>(ready_epoch_base - 1));
+                }
+                issue_grouped_put(
+                    scaleout_recv_buffer
+                        .get_token_buffer(retained_ordinal),
+                    retained_token.get_base_ptr(),
+                    dst_scaleout_rank_idx, publish_completion);
+            }
             const int proxy_begin =
                 __ldg(rail_balance_group_prefix + plan_offset);
             const int proxy_end = proxy_begin + moved_count;
-
             #pragma unroll 1
             for (int proxy_slot = proxy_begin;
                  proxy_slot < proxy_end; ++proxy_slot) {
                 const int remote_slot =
                     retained_count + proxy_slot - proxy_begin;
-                gin.put<ncclTeamTagRail>(
-                    scaleout_recv_buffer.get_token_buffer(remote_slot)
-                        .get_base_ptr(),
-                    math::advance_ptr(
-                        rail_balance_arena,
-                        rail_balance::kHybridProxyDispatchOffsetBytes +
-                            static_cast<int64_t>(proxy_slot) *
-                                token_layout.get_num_bytes<false>()),
-                    token_layout.get_num_bytes<false>(), lane_idx,
-                    ncclGinOptFlagsAggregateRequests);
+                const auto proxy_token =
+                    arena_layout.get_proxy_dispatch_layout(proxy_slot);
+                comm::timeout_while<kNumTimeoutCycles>([&](
+                        const bool& is_last_check) {
+                    const int ready = ptx::ld_acquire_sys<int>(
+                        arena_layout.get_proxy_ready_ptr(proxy_slot));
+                    if (ready == invocation_key)
+                        return true;
+                    if (is_last_check)
+                        printf("DeepEP rail-balance proxy timeout, scale-out: %d, "
+                               "scale-up: %d, channel: %d, proxy: %d, "
+                               "ready: %d, invocation: %d\n",
+                               scaleout_rank_idx, scaleup_rank_idx, channel_idx,
+                               proxy_slot, ready, invocation_key);
+                    return false;
+                });
+                const auto staged_token =
+                    arena_layout.get_proxy_rail_staging_layout(proxy_slot);
+                if (ptx::elect_one_sync()) {
+                    ptx::tma_load_1d(
+                        tma_buffer.get_base_ptr(),
+                        proxy_token.get_base_ptr(), mbarrier_ptr,
+                        token_bytes);
+                    ptx::mbarrier_arrive_and_set_tx(
+                        mbarrier_ptr, token_bytes);
+                    ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
+                }
+                __syncwarp();
+                if (ptx::elect_one_sync())
+                    ptx::tma_store_1d(
+                        staged_token.get_base_ptr(),
+                        tma_buffer.get_base_ptr(), token_bytes);
+                ptx::tma_store_commit();
+                ptx::tma_store_wait();
+                ptx::tma_store_global_visibility_fence();
+                __syncwarp();
+                const bool publish_completion =
+                    (remote_slot + 1) %
+                            kNumSlotsPerForwardChunk == 0 or
+                    remote_slot + 1 == final_tail;
+                if (lane_idx == dst_scaleout_rank_idx and
+                    not publish_completion) {
+                    ptx::st_release_sys(
+                        staged_token.get_linked_list_idx_ptr(),
+                        static_cast<int>(
+                            ready_epoch_base + proxy_slot));
+                }
+                issue_grouped_put(
+                    scaleout_recv_buffer.get_token_buffer(remote_slot),
+                    staged_token.get_base_ptr(),
+                    dst_scaleout_rank_idx, publish_completion);
             }
+            __syncwarp();
         }
+
+        // The grouped force path has no legacy interval update to terminate
+        // the grouped queue. Complete every payload issue before publishing
+        // the one dense tail below, matching Hybrid combine's final protocol.
+        gin.flush<ncclCoopWarp>();
         __syncwarp();
 
         // Tag0 begins a fresh dispatch epoch and the legacy forwarder clears
@@ -552,16 +674,12 @@ rail_balance_hybrid_dispatch_impl(
         // one final dense tail per (channel,destination); it intentionally
         // gives up the legacy interval overlap until C100 can measure a safe
         // grouped alternative.
+        // Remote payload chunks publish an epoch marker on their final slot.
+        // Non-final slots are pre-encoded in local staging; the final action
+        // orders every default put earlier on the same Rail QP.
         if (lane_idx < kNumScaleoutRanks) {
-            int final_tail = stored_owner_tail;
-            if (lane_idx != scaleout_rank_idx) {
-                const auto plan_offset =
-                    rail_balance::hybrid_plan_detail::gcd_offset(
-                        scaleup_rank_idx, channel_idx, lane_idx,
-                        kNumChannels, kNumScaleoutRanks);
-                final_tail = __ldg(rail_balance_retained + plan_offset) +
-                    __ldg(rail_balance_moved + plan_offset);
-            }
+            const int final_tail = lane_idx == scaleout_rank_idx ?
+                stored_owner_tail : stored_grouped_tail;
             const auto signaled_tail =
                 math::pack2<int, int64_t>(1, final_tail);
             const auto tail_ptr =
@@ -600,6 +718,14 @@ rail_balance_hybrid_dispatch_impl(
         int stored_finish_flag = lane_idx >= kNumScaleoutRanks;
         int stored_scaleout_tail_idx = 0;
         int recv_scaleout_rank_idx = channel_idx % kNumScaleoutRanks;
+        const auto forward_arena_layout = rail_balance::HybridArenaLayout(
+            kNumHiddenBytes / static_cast<int>(sizeof(nv_bfloat16)),
+            kNumTopk, kProxyCapacity, rail_balance_arena);
+        const int forward_invocation_key = ptx::ld_acquire_sys<int>(
+            &forward_arena_layout.get_control_ptr()->invocation_id);
+        const uint32_t forward_ready_epoch_base =
+            static_cast<uint32_t>(forward_invocation_key) *
+            static_cast<uint32_t>(kProxyCapacity + 1);
         uint32_t wip_mask;
         while ((wip_mask = ptx::gather(stored_scaleout_tail_idx > stored_scaleout_old_tail_idx or stored_finish_flag == 0))) {
             // Pick next rank in round-robin
@@ -646,6 +772,40 @@ rail_balance_hybrid_dispatch_impl(
                 stored_scaleout_old_tail_idx = end_slot_idx;
 
             const auto recv_buffer = scaleout_recv_buffer.get_rank_buffer(recv_scaleout_rank_idx);
+            // The final slot of every forwarding chunk carries a completion
+            // action that orders all earlier default puts on this Rail QP.
+            // Gate once per chunk instead of posting and polling an action for
+            // every token.
+            if (recv_scaleout_rank_idx != scaleout_rank_idx and
+                end_slot_idx > start_slot_idx) {
+                const int completion_slot_idx = end_slot_idx - 1;
+                const auto completion_token =
+                    recv_buffer.get_token_buffer(completion_slot_idx);
+                comm::timeout_while<kNumTimeoutCycles>([&](
+                        const bool& is_last_check) {
+                    const uint32_t encoded_proxy =
+                        ptx::ld_acquire_sys<uint32_t>(
+                            reinterpret_cast<const uint32_t*>(
+                                completion_token
+                                    .get_linked_list_idx_ptr()));
+                    const uint32_t decoded_proxy =
+                        encoded_proxy - forward_ready_epoch_base;
+                    const bool ready =
+                        decoded_proxy == ~uint32_t(0) or
+                        decoded_proxy <
+                            static_cast<uint32_t>(kProxyCapacity);
+                    if (ready)
+                        return true;
+                    if (is_last_check and ptx::elect_one_sync())
+                        printf("DeepEP rail payload timeout, scale-out: %d, "
+                               "scale-up: %d, channel: %d, slot: %d, "
+                               "encoded: %u, epoch: %u\n",
+                               scaleout_rank_idx, scaleup_rank_idx,
+                               channel_idx, completion_slot_idx,
+                               encoded_proxy, forward_ready_epoch_base);
+                    return false;
+                });
+            }
             for (int slot_idx = start_slot_idx; slot_idx < end_slot_idx; ++ slot_idx) {
                 const auto token_buffer = recv_buffer.get_token_buffer(slot_idx);
 
@@ -674,9 +834,12 @@ rail_balance_hybrid_dispatch_impl(
                         src_token_global_idx / kNumMaxTokensPerRank;
                     const int owner_scaleup_rank_idx =
                         src_rank_idx % kNumScaleupRanks;
-                    if (owner_scaleup_rank_idx != scaleup_rank_idx)
-                        stored_proxy_slot =
-                            tma_buffer.get_linked_list_idx_ptr()[0];
+                    if (owner_scaleup_rank_idx != scaleup_rank_idx) {
+                        const uint32_t encoded_proxy = static_cast<uint32_t>(
+                            tma_buffer.get_linked_list_idx_ptr()[0]);
+                        stored_proxy_slot = static_cast<int>(
+                            encoded_proxy - forward_ready_epoch_base);
+                    }
                 }
 
                 // Read top-k indices
@@ -782,11 +945,24 @@ rail_balance_hybrid_dispatch_impl(
             #pragma unroll
             for (int i = 0; i < kNumScaleupRanksPerLane; ++ i) {
                 if (const auto j = i * 32 + lane_idx; i < (kNumScaleupRanksPerLane - 1) or j < kNumScaleupRanks) {
-                    ptx::st_relaxed_sys(
+                    ptx::red_add_rel_sys(
                         gin.get_sym_ptr<ncclTeamTagLsa>(tail_ptr, j),
                         transform_linked_list_idx(stored_scaleup_send_counters[i]));
+                    auto peer_mailbox = gin.get_sym_ptr<ncclTeamTagLsa>(
+                        scaleup_count_mailbox + scaleup_rank_idx, j);
+                    // The release reduction is ordered after this channel's
+                    // tail store. The target waits for all channel credits,
+                    // so Tag1 cannot expose an incomplete combine list.
+                    ptx::red_add_rel_sys(
+                        peer_mailbox,
+                        math::pack2<int, int64_t>(
+                            stored_scaleup_send_counters[i], 1));
                 }
             }
+            // The NVLink barrier signal is issued by SM 0 after the grid
+            // rendezvous, not by the lanes that publish these peer tails.
+            // Complete each lane's store before handing off to that signaler.
+            ptx::fence_acq_rel_sys();
         }
         __syncwarp();
 
@@ -796,20 +972,51 @@ rail_balance_hybrid_dispatch_impl(
         __syncwarp();
     }
 
+    // Wait until every warp has issued its channel completion credit.
+    cooperative_groups::this_grid().sync();
+
     // Scale-up barrier to ensure data arrival
     // As scale-out tokens have already been consumed by forwarders, no need to do scale-out barrier again
     comm::gpu_barrier<true, kNumScaleoutRanks, kNumScaleupRanks,
                       kNumSMs, kNumThreads, kNumQPs, kNumTimeoutCycles, comm::kHybridDispatchTag1, true, true, false>(
         gin, workspace_layout, scaleout_rank_idx, scaleup_rank_idx, sm_idx, thread_idx, /* do not scale-out */ false, true);
 
+    // Notify counted tokens by their original owner rail, but source shuffle
+    // changes the rank-buffer owner for moved copies. Rebuild the rank prefix
+    // from sender-owned dense counts reduced into this target before Tag1.
+    if (sm_idx == 0 and warp_idx == 0) {
+        int actual_count = 0;
+        int64_t published_count = 0;
+        comm::timeout_while<kNumTimeoutCycles>(
+            lane_idx < kNumScaleupRanks,
+            [&](const bool& is_last_check) {
+                published_count = ptx::ld_acquire_sys<int64_t>(
+                    scaleup_count_mailbox + lane_idx);
+                if ((static_cast<uint64_t>(published_count) >> 32ull) ==
+                    static_cast<uint64_t>(kNumChannels))
+                    return true;
+                if (is_last_check)
+                    printf("DeepEP rail count timeout, scale-out: %d, "
+                           "scale-up: %d, source: %d, status: %lld\n",
+                           scaleout_rank_idx, scaleup_rank_idx, lane_idx,
+                           static_cast<long long>(published_count));
+                return false;
+            });
+        if (lane_idx < kNumScaleupRanks)
+            actual_count = static_cast<int>(
+                static_cast<uint32_t>(published_count));
+        const int actual_prefix =
+            ptx::warp_inclusive_sum(actual_count, lane_idx);
+        if (lane_idx < kNumScaleupRanks)
+            ptx::st_release_sys(
+                psum_num_recv_tokens_per_scaleup_rank + lane_idx,
+                actual_prefix);
+    }
+
+    // Order the local prefix write before any SM triggers the epilogue.
+    cooperative_groups::this_grid().sync();
     // Trigger the copy epilogue kernel
     cudaTriggerProgrammaticLaunchCompletion();
-
-    // Clean scale-up counters
-    // All scale-out counters should be cleaned before
-    EP_STATIC_ASSERT(kNumScaleupRanks <= kNumThreads, "Insufficient threads");
-    if (not kReuseSlotIndices and sm_idx == 0 and thread_idx < kNumScaleupRanks)
-        workspace_layout.get_scaleup_atomic_sender_counter()[thread_idx] = 0;
 }
 
 }  // namespace deep_ep::elastic

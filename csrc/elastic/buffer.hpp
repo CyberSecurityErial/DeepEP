@@ -346,7 +346,7 @@ public:
                        num_scaleout_ranks <= 32);
         EP_HOST_ASSERT(local_scaleout_rank >= 0 and
                        local_scaleout_rank < num_scaleout_ranks);
-        EP_HOST_ASSERT(proxy_capacity_per_egress > 0);
+        EP_HOST_ASSERT(proxy_capacity_per_egress >= num_tokens);
         EP_HOST_ASSERT(hidden > 0 and hidden % 256 == 0);
         EP_HOST_ASSERT(
             num_experts % (num_scaleout_ranks * num_rails) == 0);
@@ -390,6 +390,11 @@ public:
 
         const c10::cuda::CUDAGuard device_guard(topk_idx.device());
         const auto compute_stream = at::cuda::getCurrentCUDAStream(device_index);
+        const int invocation_key = ~invocation_id;
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            &arena_layout.get_control_ptr()->invocation_id,
+            &invocation_key, sizeof(invocation_key), cudaMemcpyHostToDevice,
+            comm_stream));
         const auto int_options = topk_idx.options().dtype(torch::kInt);
 
         // Allocate every Gate #2 output and build every private cubin before the
@@ -575,7 +580,7 @@ public:
         EP_HOST_ASSERT(num_sms <= jit::device_runtime->get_num_sms());
         EP_HOST_ASSERT(num_qps > 0 and
                        num_qps <= nccl_context->num_allocated_qps);
-        EP_HOST_ASSERT(proxy_capacity_per_egress > 0);
+        EP_HOST_ASSERT(proxy_capacity_per_egress >= num_tokens);
 
         const int num_destinations = nccl_context->num_scaleout_ranks;
         const int num_rails = nccl_context->num_scaleup_ranks;
@@ -698,6 +703,11 @@ public:
         const c10::cuda::CUDAGuard device_guard(device_index);
         const auto compute_stream =
             at::cuda::getCurrentCUDAStream(device_index);
+        const int invocation_key = ~invocation_id;
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            &arena_layout.get_control_ptr()->invocation_id,
+            &invocation_key, sizeof(invocation_key), cudaMemcpyHostToDevice,
+            comm_stream));
         const auto int_options = topk_idx.options().dtype(torch::kInt);
 
         // Allocate every plan/handle tensor before the first symmetric arena
@@ -1122,11 +1132,18 @@ public:
         const c10::cuda::CUDAGuard device_guard(device_index);
 
         // Freeze the complete raw submission ABI before poisoning ownership.
-        // From Invalid through the two adjacent submissions there may be no
+        // From Invalid through the three adjacent submissions there may be no
         // Tensor access, validation, allocation, JIT, status readback, or
-        // synchronization. Both launch adapters are still allowed to throw;
+        // host synchronization. The local barrier is required because source
+        // shuffle publishes into peer arenas: stream ordering protects the
+        // local producer only, while an egress rank may otherwise consume a
+        // peer proxy slot before its owner has finished writing it. All three
+        // launch adapters are still allowed to throw;
         // in that case the transaction remains permanently Invalid.
         const auto& prepared_source = *pending.source_shuffle;
+        const auto& prepared_local_barrier = pending.local_barrier;
+        const auto local_barrier_launch_args =
+            pending.local_barrier_launch_args;
         const auto& prepared_dispatch = *bundle.main_dispatch;
         const auto raw = bundle.raw;
         const auto nccl_dev_comm = nccl_context->dev_comm;
@@ -1142,6 +1159,7 @@ public:
         const int proxy_capacity_per_egress =
             bundle.proxy_capacity_per_egress;
         const int num_tokens = bundle.num_tokens;
+        const int64_t timeout_cycles = num_gpu_timeout_cycles;
 
         pending.state = RailBalanceHybridPlanState::Invalid;
         submit_prepared_rail_balance_hybrid_source_shuffle(
@@ -1157,6 +1175,10 @@ public:
             num_rails, scaleup_rank_idx,
             num_max_tokens_per_rank, rank_idx,
             proxy_capacity_per_egress, comm_stream);
+        submit_prepared_rail_balance_hybrid_local_barrier(
+            prepared_local_barrier, local_barrier_launch_args,
+            nccl_dev_comm, nccl_window, raw.workspace,
+            num_rails, scaleup_rank_idx, timeout_cycles, comm_stream);
         launch_prepared_rail_balance_hybrid_dispatch(
             prepared_dispatch,
             raw.x, nullptr,

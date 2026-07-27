@@ -7,6 +7,10 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
 _ADAPTER = _ROOT / "csrc/kernels/elastic/rail_balance_hybrid_shuffle.hpp"
+_KERNEL = (
+    _ROOT / "deep_ep/include/deep_ep/impls/rail_balance_hybrid_shuffle.cuh"
+)
+_PTX = _ROOT / "deep_ep/include/deep_ep/common/ptx.cuh"
 _PENDING = _ROOT / "csrc/kernels/elastic/rail_balance_hybrid_dispatch.hpp"
 _CALLSITE = _ROOT / "csrc/elastic/buffer.hpp"
 
@@ -18,6 +22,8 @@ def _section(source: str, begin: str, end: str) -> str:
 
 def main() -> None:
     source = _ADAPTER.read_text()
+    kernel_source = _KERNEL.read_text()
+    ptx_source = _PTX.read_text()
     pending_source = _PENDING.read_text()
     callsite_source = _CALLSITE.read_text()
 
@@ -106,6 +112,32 @@ def main() -> None:
         "                    hidden, num_topk, num_channels, num_tokens)"
         in callsite_source
     )
+
+    # Every generation-ready release must follow the async-proxy visibility
+    # fence for its payload; otherwise an egress can observe ready while the
+    # peer TMA bytes are still outside the generic-global domain.
+    wait = kernel_source.index("ptx::tma_store_wait();")
+    visibility = kernel_source.index(
+        "ptx::tma_store_global_visibility_fence();", wait
+    )
+    slot_release = kernel_source.index(
+        "peer_layout.get_proxy_ready_ptr(", visibility)
+    assert wait < visibility < slot_release
+    assert 'asm volatile("fence.proxy.async.global;"' in ptx_source
+
+    # Retained copies are materialized once in an owner-local stable slot
+    # before moved copies add their per-proxy diagnostic metadata.
+    retained_mask = kernel_source.index("const unsigned retained_mask =")
+    retained_stage = kernel_source.index(
+        "get_retained_rail_staging_layout(", retained_mask)
+    moved_loop = kernel_source.index("while (moved_mask != 0)", retained_stage)
+    assert retained_mask < retained_stage < moved_loop
+    retained_body = kernel_source[retained_stage:moved_loop]
+    assert "ptx::tma_store_fence();" in retained_body
+    assert "ptx::tma_store_global_visibility_fence();" in retained_body
+    assert "get_linked_list_idx_ptr()[0] = proxy_slot" in kernel_source
+    assert "get_linked_list_idx_ptr()[1] = invocation_key" not in kernel_source
+    assert "get_linked_list_idx_ptr()[2]" not in kernel_source
 
     print("PASS C080-H1b prepared source-shuffle raw submit")
 

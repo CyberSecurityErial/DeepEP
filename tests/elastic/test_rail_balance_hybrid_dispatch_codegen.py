@@ -44,7 +44,7 @@ _CASES = {
 
 def _derive_static_payload_counters(
     retained: tuple[int, ...], moved: tuple[int, ...], token_bytes: int,
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int, int, int]:
     """Derive dispatch-payload counters from plan tensors, never atomics."""
     assert token_bytes > 0
     assert len(retained) == len(moved)
@@ -52,8 +52,15 @@ def _derive_static_payload_counters(
     retained_puts = sum(retained)
     moved_puts = sum(moved)
     payload_puts = retained_puts + moved_puts
+    completion_actions = sum(
+        (retained_count + moved_count + 5) // 6
+        for retained_count, moved_count in zip(retained, moved)
+    )
     payload_gin_bytes = payload_puts * token_bytes
-    return retained_puts, moved_puts, payload_puts, payload_gin_bytes
+    return (
+        retained_puts, moved_puts, payload_puts,
+        completion_actions, payload_gin_bytes,
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -183,11 +190,34 @@ def _run_case(name: str) -> None:
         "if (stored_old_slot_idx < retained_count)")
     proxy_begin = header.index("const int proxy_begin =")
     proxy_loop = header.index("for (int proxy_slot = proxy_begin;")
+    retained_staging = header.index(
+        "arena_layout.get_retained_rail_staging_layout(",
+        retained_threshold)
     remote_slot = header.index("const int remote_slot =", proxy_loop)
-    proxy_put = header.index("gin.put<ncclTeamTagRail>(", proxy_loop)
-    final_tail = header.index("const auto signaled_tail =", proxy_put)
-    assert retained_threshold < proxy_begin < proxy_loop
-    assert proxy_loop < remote_slot < proxy_put < final_tail
+    grouped_put_helper = header.index("const auto issue_grouped_put =")
+    final_action = header.index("ncclGin_VASignalAdd(", grouped_put_helper)
+    proxy_put = header.index("issue_grouped_put(", proxy_loop)
+    proxy_acquire = header.index(
+        "const int ready = ptx::ld_acquire_sys<int>(", proxy_loop
+    )
+    final_tail = header.index("const auto signaled_tail =", grouped_put_helper)
+    final_flush = header.index("gin.flush<ncclCoopWarp>();", proxy_put)
+    assert retained_threshold < retained_staging < proxy_begin < proxy_loop
+    assert (
+        grouped_put_helper < final_action < proxy_loop < remote_slot <
+        proxy_acquire < proxy_put < final_flush < final_tail
+    )
+    assert "RB_PROXY_BAD" not in header
+    assert "embedded_proxy" not in header
+    proxy_copy = header[proxy_acquire:proxy_put]
+    assert "ptx::tma_load_1d(" in proxy_copy
+    assert "proxy_token.get_base_ptr(), mbarrier_ptr" in proxy_copy
+    assert "ptx::tma_store_1d(" in proxy_copy
+    assert "ptx::tma_store_global_visibility_fence();" in proxy_copy
+    assert "__threadfence_system();" not in proxy_copy
+    assert "ncclGinOptFlagsDefault" in header[
+        grouped_put_helper:final_tail
+    ]
     assert "retained_count + proxy_slot - proxy_begin" in header[
         remote_slot:proxy_put]
 
@@ -199,6 +229,55 @@ def _run_case(name: str) -> None:
     metadata_snapshot = header.index(
         "rail_balance::kHybridForwardProxySlotDim] =", linked_list_overwrite)
     assert proxy_snapshot < linked_list_overwrite < metadata_snapshot
+
+    # Moved copies change the source-rank buffer that owns a token. The
+    # epilogue prefix must therefore be rebuilt from channel counts published
+    # after their linked-list tails. The target waits for every channel credit
+    # before consuming the reduced count.
+    counter_clear = header.index(
+        "ptx::st_relaxed_sys(\n"
+        "            workspace_layout.get_scaleup_atomic_sender_counter()"
+    )
+    role_begin = header.index("// Different warp roles")
+    assert counter_clear < role_begin
+    first_arrival_barrier = header.index(
+        "comm::kHybridDispatchTag1", role_begin)
+    mailbox_reset = header.index(
+        "ptx::st_relaxed_sys(scaleup_count_mailbox + thread_idx, int64_t(0))")
+    mailbox_publish = header.index(
+        "ptx::red_add_rel_sys(\n"
+        "                        peer_mailbox,\n"
+        "                        math::pack2<int, int64_t>(",
+        role_begin,
+    )
+    mailbox_snapshot = header.index(
+        "published_count = ptx::ld_acquire_sys<int64_t>(",
+        first_arrival_barrier,
+    )
+    tail_publish = header.index(
+        "ptx::red_add_rel_sys(\n"
+        "                        gin.get_sym_ptr<ncclTeamTagLsa>(tail_ptr, j)"
+    )
+    tail_completion = header.index(
+        "ptx::fence_acq_rel_sys();", tail_publish)
+    assert (
+        mailbox_reset < role_begin < tail_publish < mailbox_publish <
+        tail_completion < first_arrival_barrier < mailbox_snapshot
+    )
+    prefix_write = header.index(
+        "ptx::st_release_sys(\n"
+        "                psum_num_recv_tokens_per_scaleup_rank + lane_idx",
+        mailbox_snapshot,
+    )
+    epilogue_trigger = header.index(
+        "cudaTriggerProgrammaticLaunchCompletion()", prefix_write)
+    assert (
+        first_arrival_barrier < mailbox_snapshot < prefix_write <
+        epilogue_trigger
+    )
+    assert "DeepEP rail count timeout" in header
+    assert "static_cast<uint64_t>(kNumChannels)" in header
+    assert "kRailBalanceHybridDispatchCountTag" not in header
 
     # After the opening Tag0 epoch boundary the release specialization trusts
     # immutable Gate2 state. Compare with legacy instead of banning `return;`
@@ -223,14 +302,26 @@ def _run_case(name: str) -> None:
     scaleout_end = header.index(
         "\n    } else {\n        const int forward_warp_idx", scaleout_begin)
     scaleout_body = header[scaleout_begin:scaleout_end]
-    # Exactly two payload put sites exist: retained owner traffic and grouped
-    # proxy traffic. Local destination remains a TMA bypass.
+    # The grouped put helper still doorbells every token payload, but only the
+    # final slot of each forwarding chunk publishes a remote completion action.
+    # Local destination remains a TMA bypass.
     assert scaleout_body.count("gin.put<ncclTeamTagRail>(") == 2
+    assert "ncclGinOptFlagsAggregateRequests" not in scaleout_body
+    assert scaleout_body.count("ncclGin_VASignalAdd(") == 1
+    assert "encoded_proxy - forward_ready_epoch_base" in header
+    assert "DeepEP rail payload timeout" in header
+    completion_gate = header.index("const int completion_slot_idx =")
+    slot_loop = header.index("for (int slot_idx = start_slot_idx;")
+    assert completion_gate < slot_loop
+    assert "if (lane_idx == dst_scaleout_rank_idx)" in scaleout_body
+    assert "flush_async<ncclTeamTagRail" not in scaleout_body
+    assert "gin.wait(*completion_request);" not in scaleout_body
+    assert scaleout_body.count("gin.flush<ncclCoopWarp>();") == 1
     assert "stored_old_slot_idx < retained_count" in scaleout_body
     assert "for (int proxy_slot = proxy_begin;" in scaleout_body
 
     counters = _derive_static_payload_counters((3, 0, 5), (0, 4, 2), 1024)
-    assert counters == (8, 6, 14, 14336)
+    assert counters == (8, 6, 14, 4, 14336)
 
     print(
         "PASS C080-E dispatch codegen "

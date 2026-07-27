@@ -77,6 +77,10 @@ void rail_balance_hybrid_source_shuffle_impl(
 
     const auto gin = handle::NCCLGin(
         nccl_dev_comm, nccl_window, 0, NCCL_GIN_RESOURCE_SHARING_CTA);
+    const auto local_arena_layout = rail_balance::HybridArenaLayout(
+        kHidden, kNumTopk, proxy_capacity, arena);
+    const int invocation_key = ptx::ld_acquire_sys<int>(
+        &local_arena_layout.get_control_ptr()->invocation_id);
     extern __shared__ __align__(ptx::kNumTMAAlignBytes) int8_t smem[];
     const auto staged_token = layout::TokenLayout(
         kNumHiddenBytes, 0, kNumTopk, true, smem);
@@ -203,9 +207,11 @@ void rail_balance_hybrid_source_shuffle_impl(
             break;
         }
 
+        const unsigned retained_mask = ptx::gather(
+            present and resolution.moved == 0);
         unsigned moved_mask = ptx::gather(
             present and resolution.moved == 1);
-        if (moved_mask == 0)
+        if (retained_mask == 0 and moved_mask == 0)
             continue;
 
         if (ptx::elect_one_sync()) {
@@ -221,12 +227,54 @@ void rail_balance_hybrid_source_shuffle_impl(
         }
         __syncwarp();
 
+        // Pack retained payloads in channel-major/destination-minor order.
+        // The egress dispatch warp reconstructs the same prefix and posts both
+        // retained and moved payloads through one elected-lane completion path.
+        unsigned pending_retained_mask = retained_mask;
+        while (pending_retained_mask != 0) {
+            const int source_lane = __ffs(pending_retained_mask) - 1;
+            const int destination = source_lane;
+            const int remote_slot =
+                ptx::exchange(resolution.remote_slot, source_lane);
+            int retained_prefix = 0;
+            for (int channel = 0; channel <= source_channel; ++channel) {
+                const int destination_end = channel < source_channel ?
+                    num_destinations : destination;
+                for (int previous_destination = 0;
+                     previous_destination < destination_end;
+                     ++previous_destination) {
+                    retained_prefix += __ldg(retained +
+                        rail_balance::hybrid_plan_detail::gcd_offset(
+                            owner, channel, previous_destination,
+                            num_channels, num_destinations));
+                }
+            }
+            const int retained_slot = retained_prefix + remote_slot;
+            const auto retained_token =
+                local_arena_layout.get_retained_rail_staging_layout(
+                    retained_slot);
+            ptx::tma_store_fence();
+            __syncwarp();
+            if (ptx::elect_one_sync())
+                ptx::tma_store_1d(
+                    retained_token.get_base_ptr(), staged_token.get_base_ptr(),
+                    staged_token_bytes);
+            ptx::tma_store_commit();
+            ptx::tma_store_wait();
+            ptx::tma_store_global_visibility_fence();
+            __syncwarp();
+            pending_retained_mask &= pending_retained_mask - 1;
+        }
+
         while (moved_mask != 0) {
             const int source_lane = __ffs(moved_mask) - 1;
             const int egress = ptx::exchange(resolution.egress, source_lane);
             const int proxy_slot =
                 ptx::exchange(resolution.proxy_slot, source_lane);
-
+            // The forwarder consumes this transit field before replacing all
+            // linked-list entries with their final receiver-side indices.
+            // It is needed to route the combine payload back through the
+            // inverse proxy mapping.
             if (lane == 0)
                 staged_token.get_linked_list_idx_ptr()[0] = proxy_slot;
             __syncwarp();
@@ -244,10 +292,21 @@ void rail_balance_hybrid_source_shuffle_impl(
             }
             ptx::tma_store_commit();
             ptx::tma_store_wait();
+            // Bridge the completed async-proxy payload into the generic
+            // global domain before publishing its release-ready word.
+            ptx::tma_store_global_visibility_fence();
+            // Publish the completed async-proxy copy with an epoch-specific
+            // ready key.  The plan's channel-count arena is dead after Gate #2
+            // and is large enough to provide one word per proxy slot.
+            if (ptx::elect_one_sync())
+                ptx::st_release_sys(
+                    peer_layout.get_proxy_ready_ptr(proxy_slot),
+                    invocation_key);
             __syncwarp();
             moved_mask &= moved_mask - 1;
         }
     }
+
 }
 
 }  // namespace deep_ep::elastic
