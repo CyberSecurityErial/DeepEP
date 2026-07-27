@@ -72,6 +72,7 @@ _RAIL_BALANCE_DISPATCH_PLAN_STATUS_ERROR = 36
 _RAIL_BALANCE_DISPATCH_PLAN_ENCODE_ERROR = 37
 # Priority one is below every real error and doubles as a world-wide OR bit.
 _RAIL_BALANCE_DISPATCH_HAS_MOVES = 1
+_RAIL_BALANCE_ZERO_MOVE_RECHECK_INTERVAL = 32
 _RAIL_BALANCE_COMBINE_VALIDATION_ERROR = 40
 _RAIL_BALANCE_COMBINE_PREPARE_ERROR = 41
 _RAIL_BALANCE_COMBINE_MANIFEST_ERROR = 42
@@ -1100,6 +1101,8 @@ class ElasticBuffer:
             self._rail_balance_next_invocation_id = 1
             self._rail_balance_live_ticket = None
             self._rail_balance_terminal = False
+            self._rail_balance_zero_move_bypass_budget = 0
+            self._rail_balance_zero_move_common_fields = None
 
         # Store default values
         self.num_max_tokens_per_rank = num_max_tokens_per_rank
@@ -1673,6 +1676,7 @@ class ElasticBuffer:
         prepare_common_fields = None
         dispatch_manifest = None
         ticket = None
+        cached_bypass = False
 
         # Reserve the epoch before validating caller inputs. Every attempt,
         # including a locally invalid one, must rendezvous with its peers.
@@ -1774,34 +1778,69 @@ class ElasticBuffer:
                     _RAIL_BALANCE_DISPATCH_VALIDATION_ERROR
 
         if local_error_priority == 0:
-            prepare_attempted = True
-            try:
-                prepare_result = \
-                    self.runtime._rail_balance_hybrid_dispatch_prepare(
-                        x, topk_idx, topk_weights,
-                        cumulative_local_expert_recv_stats,
-                        resolved_num_max_tokens, resolved_num_experts,
-                        resolved_num_sms, resolved_num_qps,
-                        self._rail_balance_proxy_slots_per_rank,
-                        self._rail_balance_arena_offset,
-                        invocation_id, 0,
-                        self._rail_balance_policy,
-                        self._rail_balance_threshold_percent)
-                if type(prepare_result) is not tuple or \
-                        len(prepare_result) != 1 + \
-                        _RAIL_BALANCE_DISPATCH_COMMON_FIELDS or \
-                        type(prepare_result[0]) is not int or \
-                        prepare_result[0] not in (0, 2, 3):
-                    raise ValueError(
-                        'rail-balance dispatch prepare ABI is invalid')
-                if prepare_result[0] != 0:
+            cached_bypass = self._rail_balance_zero_move_bypass_budget > 0
+            if cached_bypass:
+                try:
+                    cached_fields = \
+                        self._rail_balance_zero_move_common_fields
+                    if type(cached_fields) is not tuple or \
+                            len(cached_fields) != \
+                            _RAIL_BALANCE_DISPATCH_COMMON_FIELDS:
+                        raise ValueError(
+                            'rail-balance zero-move cache ABI is invalid')
+                    if x.dim() != 2 or topk_idx.dim() != 2 or \
+                            topk_weights.dim() != 2 or \
+                            not x.is_contiguous() or \
+                            not topk_idx.is_contiguous() or \
+                            not topk_weights.is_contiguous() or \
+                            x.dtype != torch.bfloat16 or \
+                            topk_weights.dtype != torch.float32 or \
+                            x.device != topk_idx.device or \
+                            x.device != topk_weights.device or \
+                            x.shape[0] != topk_idx.shape[0] or \
+                            x.shape[0] != topk_weights.shape[0] or \
+                            topk_idx.shape != topk_weights.shape or \
+                            x.shape[1] != cached_fields[4] or \
+                            topk_idx.shape[1] != cached_fields[5] or \
+                            resolved_num_max_tokens != cached_fields[6] or \
+                            resolved_num_experts != cached_fields[7] or \
+                            resolved_num_sms != cached_fields[9] or \
+                            resolved_num_qps != cached_fields[14]:
+                        raise ValueError(
+                            'rail-balance zero-move cache input mismatch')
+                    prepare_common_fields = cached_fields
+                except BaseException:
                     local_error_priority = \
-                        _RAIL_BALANCE_DISPATCH_PREPARE_STATUS_ERROR
-                else:
-                    prepare_common_fields = tuple(prepare_result[1:])
-            except BaseException:
-                local_error_priority = \
-                    _RAIL_BALANCE_DISPATCH_PREPARE_ERROR
+                        _RAIL_BALANCE_DISPATCH_VALIDATION_ERROR
+            else:
+                prepare_attempted = True
+                try:
+                    prepare_result = \
+                        self.runtime._rail_balance_hybrid_dispatch_prepare(
+                            x, topk_idx, topk_weights,
+                            cumulative_local_expert_recv_stats,
+                            resolved_num_max_tokens, resolved_num_experts,
+                            resolved_num_sms, resolved_num_qps,
+                            self._rail_balance_proxy_slots_per_rank,
+                            self._rail_balance_arena_offset,
+                            invocation_id, 0,
+                            self._rail_balance_policy,
+                            self._rail_balance_threshold_percent)
+                    if type(prepare_result) is not tuple or \
+                            len(prepare_result) != 1 + \
+                            _RAIL_BALANCE_DISPATCH_COMMON_FIELDS or \
+                            type(prepare_result[0]) is not int or \
+                            prepare_result[0] not in (0, 2, 3):
+                        raise ValueError(
+                            'rail-balance dispatch prepare ABI is invalid')
+                    if prepare_result[0] != 0:
+                        local_error_priority = \
+                            _RAIL_BALANCE_DISPATCH_PREPARE_STATUS_ERROR
+                    else:
+                        prepare_common_fields = tuple(prepare_result[1:])
+                except BaseException:
+                    local_error_priority = \
+                        _RAIL_BALANCE_DISPATCH_PREPARE_ERROR
 
         if local_error_priority == 0:
             try:
@@ -1858,6 +1897,26 @@ class ElasticBuffer:
                     self._rail_balance_terminal = True
                     raise
             raise
+
+        if cached_bypass:
+            self._rail_balance_zero_move_bypass_budget -= 1
+            original_mode = self._rail_balance_mode
+            self._rail_balance_mode = 'off'
+            try:
+                return self.dispatch(
+                    x, topk_idx, topk_weights,
+                    cumulative_local_expert_recv_stats,
+                    num_experts, num_max_tokens_per_rank,
+                    expert_alignment, num_sms, num_qps,
+                    previous_event,
+                    previous_event_before_epilogue,
+                    async_with_compute_stream,
+                    allocate_on_comm_stream, handle,
+                    do_handle_copy, do_cpu_sync, do_expand,
+                    do_zero_padding,
+                    use_tma_aligned_col_major_sf)
+            finally:
+                self._rail_balance_mode = original_mode
 
         plan_error_priority = 0
         local_moved_copies = 0
@@ -1936,6 +1995,10 @@ class ElasticBuffer:
         # path already has the desired rail placement.
         if not world_has_moves:
             self.runtime._rail_balance_hybrid_plan_abort(invocation_id)
+            self._rail_balance_zero_move_bypass_budget = \
+                _RAIL_BALANCE_ZERO_MOVE_RECHECK_INTERVAL - 1
+            self._rail_balance_zero_move_common_fields = \
+                prepare_common_fields
             original_mode = self._rail_balance_mode
             self._rail_balance_mode = 'off'
             try:

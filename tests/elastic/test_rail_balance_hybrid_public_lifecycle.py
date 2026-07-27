@@ -376,6 +376,8 @@ def _make_buffer(*, force: bool) -> tuple[ElasticBuffer, _FakeRuntime, _GateCont
         buffer._rail_balance_owner_token = object()
         buffer._rail_balance_live_ticket = None
         buffer._rail_balance_terminal = False
+        buffer._rail_balance_zero_move_bypass_budget = 0
+        buffer._rail_balance_zero_move_common_fields = None
         # Epoch zero stays reserved for uninitialized/control words.
         buffer._rail_balance_next_invocation_id = 1
         # Keep aliases until the public implementation chooses one spelling;
@@ -492,6 +494,14 @@ def _assert_zero_move_plan_bypasses_force() -> None:
         "dispatch_prepare", "gate", "plan_finish", "gate",
         "dispatch_abort", "legacy_dispatch", "legacy_combine",
     ]
+
+    runtime.trace.clear()
+    recv_x, _, recv_weights, handle, _ = _force_dispatch(buffer)
+    assert getattr(handle, "_rail_balance_ticket", None) is None
+    buffer.combine(recv_x, handle, recv_weights, num_sms=4, num_qps=0)
+    assert runtime.trace == ["gate", "legacy_dispatch", "legacy_combine"]
+    assert buffer._rail_balance_zero_move_bypass_budget == \
+        elastic_module._RAIL_BALANCE_ZERO_MOVE_RECHECK_INTERVAL - 2
 
 
 def _assert_gate_rejection_is_retryable() -> None:
