@@ -1911,6 +1911,48 @@ class ElasticBuffer:
                 raise
             raise
 
+        # If the source-only plan moves no copies anywhere in the world, the
+        # native Hybrid path already has the desired rail placement. Abort the
+        # private transaction and reuse that path instead of paying the force
+        # shuffle/forward protocol. The CUDA-only guard keeps CPU lifecycle
+        # fakes on the force path while real plans make one collective decision
+        # before any rank can diverge.
+        moved_copies = plan_outputs[12]
+        if moved_copies.is_cuda:
+            global_moved_copies = moved_copies.detach().clone()
+            try:
+                dist.all_reduce(
+                    global_moved_copies, op=dist.ReduceOp.SUM,
+                    group=self.group)
+                bypass_force = global_moved_copies.item() == 0
+            except BaseException:
+                self._rail_balance_terminal = True
+                try:
+                    self.runtime._rail_balance_hybrid_plan_abort(
+                        invocation_id)
+                except BaseException:
+                    pass
+                raise
+            if bypass_force:
+                self.runtime._rail_balance_hybrid_plan_abort(invocation_id)
+                original_mode = self._rail_balance_mode
+                self._rail_balance_mode = 'off'
+                try:
+                    return self.dispatch(
+                        x, topk_idx, topk_weights,
+                        cumulative_local_expert_recv_stats,
+                        num_experts, num_max_tokens_per_rank,
+                        expert_alignment, num_sms, num_qps,
+                        previous_event,
+                        previous_event_before_epilogue,
+                        async_with_compute_stream,
+                        allocate_on_comm_stream, handle,
+                        do_handle_copy, do_cpu_sync, do_expand,
+                        do_zero_padding,
+                        use_tma_aligned_col_major_sf)
+                finally:
+                    self._rail_balance_mode = original_mode
+
         try:
             self.runtime._rail_balance_hybrid_dispatch_commit(invocation_id)
             (recv_x, recv_sf,
@@ -2345,7 +2387,9 @@ class ElasticBuffer:
             combined_topk_weights: the reduced top-k weights, with shape `[num_combined_tokens, num_topk]` and type `torch.float`.
             event: the event after executing the kernel (valid only if `async_with_compute_stream` is set).
         """
-        if getattr(self, '_rail_balance_mode', 'off') == 'force':
+        if getattr(self, '_rail_balance_mode', 'off') == 'force' and \
+                type(getattr(handle, '_rail_balance_ticket', None)) is \
+                _RailBalanceForceTicket:
             return self._combine_rail_balance_force(
                 x, handle, topk_weights, bias,
                 num_sms, num_qps,

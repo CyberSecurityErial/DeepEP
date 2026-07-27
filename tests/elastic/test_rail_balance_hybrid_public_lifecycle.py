@@ -235,11 +235,25 @@ def _dispatch_result(
     )
 
 
+class _FakeCudaScalar:
+    is_cuda = True
+
+    def detach(self) -> "_FakeCudaScalar":
+        return self
+
+    def clone(self) -> "_FakeCudaScalar":
+        return self
+
+    def item(self) -> int:
+        return 0
+
+
 class _FakeRuntime:
     def __init__(self) -> None:
         self.trace: list[str] = []
         self.buffer: ElasticBuffer | None = None
         self.plan_status = 0
+        self.bypass_plan = False
         self.fail_dispatch_prepare = False
         self.fail_plan_finish = False
         self.fail_dispatch_commit = False
@@ -270,6 +284,8 @@ class _FakeRuntime:
         if self.fail_plan_finish:
             raise RuntimeError("injected plan finish failure")
         outputs = [torch.zeros(1, dtype=torch.int32) for _ in range(13)]
+        if self.bypass_plan:
+            outputs[12] = _FakeCudaScalar()  # type: ignore[assignment]
         outputs.append(torch.tensor(self.plan_status, dtype=torch.int32))
         return tuple(outputs)
 
@@ -468,6 +484,30 @@ def _assert_successful_round_trip() -> None:
             elastic_module._RAIL_BALANCE_COMBINE_MANIFEST_WIDTH,
             4, 1,
         ),
+    ]
+
+
+def _assert_zero_move_plan_bypasses_force() -> None:
+    buffer, runtime, _ = _make_buffer(force=True)
+    runtime.bypass_plan = True
+    original_all_reduce = elastic_module.dist.all_reduce
+
+    def fake_all_reduce(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        runtime.trace.append("bypass_all_reduce")
+
+    elastic_module.dist.all_reduce = fake_all_reduce
+    try:
+        recv_x, _, recv_weights, handle, _ = _force_dispatch(buffer)
+        assert getattr(handle, "_rail_balance_ticket", None) is None
+        buffer.combine(recv_x, handle, recv_weights, num_sms=4, num_qps=0)
+    finally:
+        elastic_module.dist.all_reduce = original_all_reduce
+
+    assert runtime.trace == [
+        "dispatch_prepare", "gate", "plan_finish", "gate",
+        "bypass_all_reduce", "dispatch_abort", "legacy_dispatch",
+        "legacy_combine",
     ]
 
 
@@ -702,6 +742,7 @@ def main() -> None:
     try:
         _assert_source_contract()
         _assert_successful_round_trip()
+        _assert_zero_move_plan_bypasses_force()
         _assert_gate_rejection_is_retryable()
         _assert_dispatch_entry_failures_are_retryable()
         _assert_combine_prepare_failure_is_retryable()
