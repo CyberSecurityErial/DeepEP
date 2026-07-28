@@ -645,6 +645,8 @@ def test_unanimous_force_retains_the_exact_gate_storage_and_idle_owner():
         '_rail_balance_next_invocation_id',
         '_rail_balance_live_ticket',
         '_rail_balance_terminal',
+        '_rail_balance_zero_move_bypass_budget',
+        '_rail_balance_zero_move_common_fields',
     }
     assert {
         name for name in buffer.__dict__ if name.startswith('_rail_balance_')
@@ -656,6 +658,8 @@ def test_unanimous_force_retains_the_exact_gate_storage_and_idle_owner():
     assert buffer._rail_balance_next_invocation_id == 1
     assert buffer._rail_balance_live_ticket is None
     assert buffer._rail_balance_terminal is False
+    assert buffer._rail_balance_zero_move_bypass_budget == 0
+    assert buffer._rail_balance_zero_move_common_fields is None
 
 
 def test_force_runtime_arguments_are_frozen_before_gate_two_commit():
