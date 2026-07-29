@@ -22,6 +22,489 @@ from ..utils.envs import (
 from ..utils.comm import get_nccl_comm_handle
 
 
+_RAIL_BALANCE_MODES = ('off', 'force')
+_RAIL_BALANCE_POLICIES = ('all', 'active', 'adaptive')
+_RAIL_BALANCE_POLICY_IDS = {
+    policy: index for index, policy in enumerate(_RAIL_BALANCE_POLICIES)
+}
+_RAIL_BALANCE_MAX_THRESHOLD_PERCENT = 3100
+_RAIL_BALANCE_MAX_PROXY_SLOTS = (1 << 31) - 1
+_RAIL_BALANCE_FORCE_HOST_AVAILABLE = False
+_RAIL_BALANCE_WORLD_GATE_WORDS = 128
+_RAIL_BALANCE_WORLD_GATE_MAX_FIELDS = 63
+_RAIL_BALANCE_WORLD_GATE_INT64_MAX = (1 << 63) - 1
+_RAIL_BALANCE_WORLD_GATE_INT32_MAX = (1 << 31) - 1
+_RAIL_BALANCE_BUFFER_ALIGNMENT = 2 * 1024 * 1024
+_RAIL_BALANCE_WORLD_GATE_RANK_MASK = (1 << 32) - 1
+_RAIL_BALANCE_WORLD_GATE_MAX_ERROR_PRIORITY = (1 << 31) - 1
+_RAIL_BALANCE_PROTOCOL_MAGIC = int.from_bytes(b'RBH6', byteorder='little')
+_RAIL_BALANCE_PROTOCOL_VERSION = 2
+_RAIL_BALANCE_OPERATION_CONSTRUCTOR = 1
+_RAIL_BALANCE_OPERATION_DISPATCH = 2
+_RAIL_BALANCE_OPERATION_COMBINE = 3
+_RAIL_BALANCE_PHASE_PREPARE = 1
+_RAIL_BALANCE_PHASE_SIZING = 2
+_RAIL_BALANCE_PHASE_PLAN = 2
+_RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS = 10
+_RAIL_BALANCE_CONSTRUCTOR_MANIFEST_WIDTH = 18 + _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS
+_RAIL_BALANCE_CONSTRUCTOR_SIZING_MANIFEST_WIDTH = 20
+_RAIL_BALANCE_CONSTRUCTOR_PARSE_ERROR = 10
+_RAIL_BALANCE_CONSTRUCTOR_VALIDATION_ERROR = 11
+_RAIL_BALANCE_CONSTRUCTOR_CAPABILITY_ERROR = 12
+_RAIL_BALANCE_CONSTRUCTOR_LAYOUT_ERROR = 13
+_RAIL_BALANCE_CONSTRUCTOR_MANIFEST_ERROR = 14
+_RAIL_BALANCE_CONSTRUCTOR_ENCODE_ERROR = 15
+_RAIL_BALANCE_CONSTRUCTOR_SIZING_ERROR = 17
+_RAIL_BALANCE_CONSTRUCTOR_RUNTIME_CONFIG_ERROR = 18
+_RAIL_BALANCE_CONSTRUCTOR_SIZING_MANIFEST_ERROR = 19
+_RAIL_BALANCE_CONSTRUCTOR_SIZING_ENCODE_ERROR = 20
+_RAIL_BALANCE_DISPATCH_COMMON_FIELDS = 21
+_RAIL_BALANCE_DISPATCH_MANIFEST_WIDTH = 7 + \
+    _RAIL_BALANCE_DISPATCH_COMMON_FIELDS
+_RAIL_BALANCE_COMBINE_MANIFEST_WIDTH = 7
+_RAIL_BALANCE_DISPATCH_VALIDATION_ERROR = 30
+_RAIL_BALANCE_DISPATCH_PREPARE_ERROR = 31
+_RAIL_BALANCE_DISPATCH_PREPARE_STATUS_ERROR = 32
+_RAIL_BALANCE_DISPATCH_MANIFEST_ERROR = 33
+_RAIL_BALANCE_DISPATCH_ENCODE_ERROR = 34
+_RAIL_BALANCE_DISPATCH_PLAN_ERROR = 35
+_RAIL_BALANCE_DISPATCH_PLAN_STATUS_ERROR = 36
+_RAIL_BALANCE_DISPATCH_PLAN_ENCODE_ERROR = 37
+_RAIL_BALANCE_COMBINE_VALIDATION_ERROR = 40
+_RAIL_BALANCE_COMBINE_PREPARE_ERROR = 41
+_RAIL_BALANCE_COMBINE_MANIFEST_ERROR = 42
+_RAIL_BALANCE_COMBINE_ENCODE_ERROR = 43
+
+
+def _rail_balance_error(code: str, detail: str) -> str:
+    return f'[DeepEP rail_balance:{code}] {detail}'
+
+
+def _parse_rail_balance_config(
+        mode: str,
+        proxy_slots_per_rank: int,
+        policy: str = 'all',
+        threshold_percent: int = 0) -> Tuple[str, int, int, int]:
+    """Validate the constructor-fixed rail-balance mode without touching CUDA or collectives."""
+    if type(mode) is not str or mode not in _RAIL_BALANCE_MODES:
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            f"rail_balance must be exactly one of {_RAIL_BALANCE_MODES}, got {mode!r}"))
+    if type(proxy_slots_per_rank) is not int or not (
+            0 <= proxy_slots_per_rank <= _RAIL_BALANCE_MAX_PROXY_SLOTS):
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            'rail_balance_proxy_slots_per_rank must be an integer in '
+            f'[0, {_RAIL_BALANCE_MAX_PROXY_SLOTS}]'))
+    if type(policy) is not str or policy not in _RAIL_BALANCE_POLICIES:
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            'rail_balance_policy must be exactly one of '
+            f'{_RAIL_BALANCE_POLICIES}, got {policy!r}'))
+    if type(threshold_percent) is not int or not (
+            0 <= threshold_percent <= _RAIL_BALANCE_MAX_THRESHOLD_PERCENT):
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            'rail_balance_threshold_percent must be an integer in '
+            f'[0, {_RAIL_BALANCE_MAX_THRESHOLD_PERCENT}]'))
+    if mode == 'off' and proxy_slots_per_rank != 0:
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            "rail_balance_proxy_slots_per_rank must be 0 when rail_balance='off'"))
+    if mode == 'force' and proxy_slots_per_rank == 0:
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            "rail_balance_proxy_slots_per_rank must be positive when rail_balance='force'"))
+    if mode == 'off' and policy != 'all':
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            "rail_balance_policy must be 'all' when rail_balance='off'"))
+    if mode == 'off' and threshold_percent != 0:
+        raise ValueError(_rail_balance_error(
+            'InvalidConfiguration',
+            'rail_balance_threshold_percent must be 0 when '
+            "rail_balance='off'"))
+    return (mode, proxy_slots_per_rank,
+            _RAIL_BALANCE_POLICY_IDS[policy], threshold_percent)
+
+
+def _validate_rail_balance_force_constructor(
+        num_bytes: Optional[int], num_cpu_bytes: int,
+        num_max_tokens_per_rank: int, hidden: int, num_topk: int,
+        use_fp8_dispatch: bool, deterministic: bool,
+        allow_hybrid_mode: bool, allow_multiple_reduction: bool) -> None:
+    """Validate the deliberately narrow force-v1 constructor contract."""
+    invalid_reason = None
+    if num_bytes is not None:
+        invalid_reason = 'manual num_bytes is not supported'
+    elif type(num_cpu_bytes) is not int or num_cpu_bytes != 0:
+        invalid_reason = 'num_cpu_bytes must be 0'
+    elif type(num_max_tokens_per_rank) is not int or num_max_tokens_per_rank <= 0:
+        invalid_reason = 'num_max_tokens_per_rank must be a positive integer'
+    elif type(hidden) is not int or hidden <= 0 or hidden % 256 != 0:
+        invalid_reason = 'hidden must be a positive multiple of 256'
+    elif type(num_topk) is not int or not (1 <= num_topk <= 32):
+        invalid_reason = 'num_topk must be an integer in [1, 32]'
+    elif type(use_fp8_dispatch) is not bool:
+        invalid_reason = 'use_fp8_dispatch must be a bool'
+    elif use_fp8_dispatch:
+        invalid_reason = 'FP8 dispatch is not supported'
+    elif type(deterministic) is not bool:
+        invalid_reason = 'deterministic must be a bool'
+    elif deterministic:
+        invalid_reason = 'deterministic mode is not supported'
+    elif type(allow_hybrid_mode) is not bool:
+        invalid_reason = 'allow_hybrid_mode must be a bool'
+    elif not allow_hybrid_mode:
+        invalid_reason = 'allow_hybrid_mode must be true'
+    elif type(allow_multiple_reduction) is not bool:
+        invalid_reason = 'allow_multiple_reduction must be a bool'
+    elif not allow_multiple_reduction:
+        invalid_reason = 'allow_multiple_reduction must be true'
+
+    if invalid_reason is not None:
+        raise ValueError(_rail_balance_error(
+            'UnsupportedConfiguration', f'force-v1: {invalid_reason}'))
+
+
+def _validate_rail_balance_force_runtime_config(
+        sl_idx: int, num_allocated_qps: int,
+        num_cpu_timeout_secs: int, num_gpu_timeout_secs: int,
+        prefer_overlap_with_compute: bool,
+        explicitly_destroy: bool) -> None:
+    """Reject values that could fail Python-to-C++ conversion after consensus."""
+    invalid_reason = None
+    if type(sl_idx) is not int or not (
+            0 <= sl_idx <= _RAIL_BALANCE_WORLD_GATE_INT32_MAX):
+        invalid_reason = 'sl_idx must be a nonnegative int32'
+    elif type(num_allocated_qps) is not int or not (
+            1 <= num_allocated_qps <= _RAIL_BALANCE_WORLD_GATE_INT32_MAX):
+        invalid_reason = 'num_allocated_qps must be a positive int32'
+    elif type(num_cpu_timeout_secs) is not int or not (
+            0 <= num_cpu_timeout_secs <= _RAIL_BALANCE_WORLD_GATE_INT32_MAX):
+        invalid_reason = 'num_cpu_timeout_secs must be a nonnegative int32'
+    elif type(num_gpu_timeout_secs) is not int or not (
+            0 <= num_gpu_timeout_secs <= _RAIL_BALANCE_WORLD_GATE_INT32_MAX):
+        invalid_reason = 'num_gpu_timeout_secs must be a nonnegative int32'
+    elif type(prefer_overlap_with_compute) is not bool:
+        invalid_reason = 'prefer_overlap_with_compute must be a bool'
+    elif type(explicitly_destroy) is not bool:
+        invalid_reason = 'explicitly_destroy must be a bool'
+
+    if invalid_reason is not None:
+        raise ValueError(_rail_balance_error(
+            'UnsupportedConfiguration', f'force-v1: {invalid_reason}'))
+
+
+def _rail_balance_force_available() -> bool:
+    """Fail closed across old extensions and partial Python/C++ installations."""
+    if not _RAIL_BALANCE_FORCE_HOST_AVAILABLE:
+        return False
+    compiled_capability = getattr(_C, '_rail_balance_force_available', None)
+    if not callable(compiled_capability):
+        return False
+    try:
+        return compiled_capability() is True
+    except Exception:
+        return False
+
+
+def _make_rail_balance_world_gate_error_key(priority: int, rank: int) -> int:
+    """Encode an error so MAX selects higher priority, then the lowest rank."""
+    if type(priority) is not int or not (
+            0 <= priority <= _RAIL_BALANCE_WORLD_GATE_MAX_ERROR_PRIORITY):
+        raise ValueError('rail-balance WORLD gate error priority is out of range')
+    if type(rank) is not int or not (
+            0 <= rank <= _RAIL_BALANCE_WORLD_GATE_RANK_MASK):
+        raise ValueError('rail-balance WORLD gate error rank is out of range')
+    if priority == 0:
+        return 0
+    return (priority << 32) | (_RAIL_BALANCE_WORLD_GATE_RANK_MASK - rank)
+
+
+def _decode_rail_balance_world_gate_error_key(error_key: int) -> Tuple[int, int]:
+    """Return ``(priority, rank)`` for a nonnegative WORLD-gate error key."""
+    if type(error_key) is not int or not (
+            0 <= error_key <= _RAIL_BALANCE_WORLD_GATE_INT64_MAX):
+        raise ValueError('rail-balance WORLD gate error key is out of range')
+    if error_key == 0:
+        return 0, -1
+    return (error_key >> 32,
+            _RAIL_BALANCE_WORLD_GATE_RANK_MASK -
+            (error_key & _RAIL_BALANCE_WORLD_GATE_RANK_MASK))
+
+
+def _validate_rail_balance_world_gate_storage(
+        device_words: torch.Tensor, host_words: torch.Tensor) -> None:
+    """Validate the fixed storage once, before it enters a force transaction."""
+    if device_words.dtype != torch.int64 or device_words.device.type != 'cuda' or \
+            tuple(device_words.shape) != (_RAIL_BALANCE_WORLD_GATE_WORDS,) or \
+            not device_words.is_contiguous():
+        raise ValueError(
+            'rail-balance WORLD gate device storage must be contiguous '
+            'CUDA int64[128]')
+    if host_words.dtype != torch.int64 or host_words.device.type != 'cpu' or \
+            tuple(host_words.shape) != (_RAIL_BALANCE_WORLD_GATE_WORDS,) or \
+            not host_words.is_contiguous() or not host_words.is_pinned():
+        raise ValueError(
+            'rail-balance WORLD gate host storage must be contiguous pinned '
+            'CPU int64[128]')
+
+
+def _encode_rail_balance_world_gate(
+        host_words: torch.Tensor,
+        local_error_key: int,
+        common_fields: Sequence[int]) -> None:
+    """Encode one checked fixed gate payload into caller-owned host storage."""
+    if type(local_error_key) is not int or not (
+            0 <= local_error_key <= _RAIL_BALANCE_WORLD_GATE_INT64_MAX):
+        raise ValueError('rail-balance WORLD gate error key is out of range')
+    if len(common_fields) > _RAIL_BALANCE_WORLD_GATE_MAX_FIELDS:
+        raise ValueError('rail-balance WORLD gate has more than 63 fields')
+
+    checked_fields = []
+    for value in common_fields:
+        if type(value) is not int or not (
+                0 <= value <= _RAIL_BALANCE_WORLD_GATE_INT64_MAX):
+            raise ValueError(
+                'rail-balance WORLD gate fields must be nonnegative int64')
+        checked_fields.append(value)
+
+    host_words.zero_()
+    host_words[0] = local_error_key
+    for index, value in enumerate(checked_fields):
+        host_words[2 + 2 * index] = value
+        host_words[3 + 2 * index] = -value
+
+
+def _patch_rail_balance_world_gate_prevalidated(
+        host_words: torch.Tensor,
+        local_error_key: int,
+        field_index: int = -1,
+        field_value: int = 0) -> None:
+    """Patch prepared gate words without field iteration or validation.
+
+    The caller must validate the fixed storage, error key, field index, and
+    value before entering the collective transaction.  ``field_index == -1``
+    patches only the error word.  This deliberately tiny helper is for the
+    Gate1/Gate2 interval where rank-local dynamic validation is unsafe.
+    """
+    host_words[0] = local_error_key
+    if field_index >= 0:
+        offset = 2 + 2 * field_index
+        host_words[offset] = field_value
+        host_words[offset + 1] = -field_value
+
+
+def _decode_rail_balance_world_gate(
+        host_words: torch.Tensor) -> Tuple[int, int, int, int]:
+    """Return ``(error_key, field, minimum, maximum)`` without rank-local throws."""
+    error_key = int(host_words[0].item())
+    if error_key != 0:
+        return error_key, -1, 0, 0
+    for index in range(_RAIL_BALANCE_WORLD_GATE_MAX_FIELDS):
+        maximum = int(host_words[2 + 2 * index].item())
+        minimum = -int(host_words[3 + 2 * index].item())
+        if minimum != maximum:
+            return 0, index, minimum, maximum
+    return 0, -1, 0, 0
+
+
+def _run_rail_balance_world_gate(
+        device_words: torch.Tensor,
+        host_words: torch.Tensor,
+        group: dist.ProcessGroup) -> Tuple[int, int, int, int]:
+    """Run one prevalidated fixed-tensor WORLD consensus on the caller stream."""
+    device_words.copy_(host_words, non_blocking=True)
+    dist.all_reduce(device_words, op=dist.ReduceOp.MAX, group=group)
+    host_words.copy_(device_words, non_blocking=True)
+    torch.cuda.current_stream(device_words.device).synchronize()
+    return _decode_rail_balance_world_gate(host_words)
+
+
+def _make_rail_balance_constructor_manifest(
+        mode: str,
+        world_size: int,
+        num_max_tokens_per_rank: int = 0,
+        hidden: int = 0,
+        num_topk: int = 0,
+        proxy_slots_per_rank: int = 0,
+        use_fp8_dispatch: bool = False,
+        deterministic: bool = False,
+        allow_hybrid_mode: bool = False,
+        allow_multiple_reduction: bool = False,
+        arena_layout: Sequence[int] = (),
+        policy: int = 0,
+        threshold_percent: int = 0) -> Tuple[int, ...]:
+    """Encode only fields that must agree before the symmetric window exists."""
+    if type(mode) is not str or mode not in _RAIL_BALANCE_MODES:
+        raise ValueError('rail-balance constructor manifest mode is invalid')
+    if type(policy) is not int or policy not in \
+            _RAIL_BALANCE_POLICY_IDS.values():
+        raise ValueError('rail-balance constructor policy ABI is invalid')
+    if type(threshold_percent) is not int or not (
+            0 <= threshold_percent <= _RAIL_BALANCE_MAX_THRESHOLD_PERCENT):
+        raise ValueError('rail-balance constructor threshold is invalid')
+    is_force = mode == 'force'
+    if is_force:
+        if len(arena_layout) != _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS or not all(
+                type(value) is int and value >= 0 for value in arena_layout):
+            raise ValueError('rail-balance constructor arena layout ABI is invalid')
+        force_fields = (
+            num_max_tokens_per_rank,
+            hidden,
+            num_topk,
+            proxy_slots_per_rank,
+            int(use_fp8_dispatch),
+            int(deterministic),
+            int(allow_hybrid_mode),
+            int(allow_multiple_reduction),
+            policy,
+            threshold_percent,
+            len(arena_layout),
+        )
+        layout_fields = tuple(arena_layout)
+    else:
+        force_fields = (0,) * 11
+        layout_fields = (0,) * _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS
+
+    fields = (
+        _RAIL_BALANCE_PROTOCOL_MAGIC,
+        _RAIL_BALANCE_PROTOCOL_VERSION,
+        _RAIL_BALANCE_OPERATION_CONSTRUCTOR,
+        _RAIL_BALANCE_PHASE_PREPARE,
+        _RAIL_BALANCE_CONSTRUCTOR_MANIFEST_WIDTH,
+        int(is_force),
+        world_size,
+        *force_fields,
+        *layout_fields,
+    )
+    if len(fields) != _RAIL_BALANCE_CONSTRUCTOR_MANIFEST_WIDTH:
+        raise RuntimeError('rail-balance constructor manifest width is invalid')
+    if not all(type(value) is int and
+               0 <= value <= _RAIL_BALANCE_WORLD_GATE_INT64_MAX
+               for value in fields):
+        raise ValueError(
+            'rail-balance constructor manifest fields must be nonnegative int64')
+    return fields
+
+
+def _make_rail_balance_constructor_sizing_manifest(
+        world_size: int,
+        num_max_tokens_per_rank: int,
+        hidden: int,
+        num_topk: int,
+        proxy_slots_per_rank: int,
+        legacy_bytes: int,
+        arena_bytes: int,
+        total_bytes: int,
+        sl_idx: int,
+        num_allocated_qps: int,
+        num_cpu_timeout_secs: int,
+        num_gpu_timeout_secs: int,
+        prefer_overlap_with_compute: bool,
+        explicitly_destroy: bool) -> Tuple[int, ...]:
+    """Encode the force facts resolved only after a common NCCL comm exists."""
+    fields = (
+        _RAIL_BALANCE_PROTOCOL_MAGIC,
+        _RAIL_BALANCE_PROTOCOL_VERSION,
+        _RAIL_BALANCE_OPERATION_CONSTRUCTOR,
+        _RAIL_BALANCE_PHASE_SIZING,
+        _RAIL_BALANCE_CONSTRUCTOR_SIZING_MANIFEST_WIDTH,
+        1,
+        world_size,
+        num_max_tokens_per_rank,
+        hidden,
+        num_topk,
+        proxy_slots_per_rank,
+        legacy_bytes,
+        arena_bytes,
+        total_bytes,
+        sl_idx,
+        num_allocated_qps,
+        num_cpu_timeout_secs,
+        num_gpu_timeout_secs,
+        int(prefer_overlap_with_compute),
+        int(explicitly_destroy),
+    )
+    if len(fields) != _RAIL_BALANCE_CONSTRUCTOR_SIZING_MANIFEST_WIDTH:
+        raise RuntimeError('rail-balance constructor sizing manifest width is invalid')
+    if not all(type(value) is int and
+               0 <= value <= _RAIL_BALANCE_WORLD_GATE_INT64_MAX
+               for value in fields):
+        raise ValueError(
+            'rail-balance constructor sizing fields must be nonnegative int64')
+    return fields
+
+
+def _make_rail_balance_operation_manifest(
+        operation: int, phase: int, world_size: int, invocation_id: int,
+        common_fields: Sequence[int] = ()) -> Tuple[int, ...]:
+    """Encode one fixed dispatch/combine transaction identity and geometry."""
+    if operation == _RAIL_BALANCE_OPERATION_DISPATCH:
+        expected_common_fields = _RAIL_BALANCE_DISPATCH_COMMON_FIELDS
+        expected_width = _RAIL_BALANCE_DISPATCH_MANIFEST_WIDTH
+        if phase not in (_RAIL_BALANCE_PHASE_PREPARE,
+                         _RAIL_BALANCE_PHASE_PLAN):
+            raise ValueError('rail-balance dispatch phase is invalid')
+    elif operation == _RAIL_BALANCE_OPERATION_COMBINE:
+        expected_common_fields = 0
+        expected_width = _RAIL_BALANCE_COMBINE_MANIFEST_WIDTH
+        if phase != _RAIL_BALANCE_PHASE_PREPARE:
+            raise ValueError('rail-balance combine phase is invalid')
+    else:
+        raise ValueError('rail-balance operation is invalid')
+    if len(common_fields) != expected_common_fields:
+        raise ValueError('rail-balance operation manifest width is invalid')
+
+    fields = (
+        _RAIL_BALANCE_PROTOCOL_MAGIC,
+        _RAIL_BALANCE_PROTOCOL_VERSION,
+        operation,
+        phase,
+        expected_width,
+        world_size,
+        invocation_id,
+        *common_fields,
+    )
+    if len(fields) != expected_width or not all(
+            type(value) is int and
+            0 <= value <= _RAIL_BALANCE_WORLD_GATE_INT64_MAX
+            for value in fields):
+        raise ValueError(
+            'rail-balance operation manifest fields must be nonnegative int64')
+    return fields
+
+
+def _raise_rail_balance_world_gate_failure(
+        stage: str, result: Tuple[int, int, int, int]) -> None:
+    """Raise the same compact post-consensus error on every participating rank."""
+    error_key, field, minimum, maximum = result
+    if error_key != 0:
+        priority, rank = _decode_rail_balance_world_gate_error_key(error_key)
+        raise RuntimeError(_rail_balance_error(
+            'CollectivePreflight',
+            f'{stage} rejected rank {rank} with error priority {priority}'))
+    if field >= 0:
+        raise RuntimeError(_rail_balance_error(
+            'ConfigurationMismatch',
+            f'{stage} field {field} differs across ranks: min={minimum}, max={maximum}'))
+
+
+class _RailBalanceForceTicket:
+    """Shared mutable one-shot state attached dynamically to an EPHandle."""
+    __slots__ = ('owner_token', 'invocation_id', 'state')
+
+    LIVE = 'LIVE'
+    PREPARING = 'PREPARING'
+    CONSUMED = 'CONSUMED'
+
+    def __init__(self, owner_token: object, invocation_id: int):
+        self.owner_token = owner_token
+        self.invocation_id = invocation_id
+        self.state = self.LIVE
+
+
 class EPHandle:
     """
     Communication handle returned by `ElasticBuffer.dispatch`.
@@ -243,7 +726,12 @@ class ElasticBuffer:
                  sl_idx: int = 3,
                  num_allocated_qps: int = 0,
                  num_cpu_timeout_secs: int = 300, num_gpu_timeout_secs: int = 100,
-                 explicitly_destroy: bool = False):
+                 explicitly_destroy: bool = False,
+                 *,
+                 rail_balance: str = 'off',
+                 rail_balance_proxy_slots_per_rank: int = 0,
+                 rail_balance_policy: str = 'all',
+                 rail_balance_threshold_percent: int = 0):
         """
         Initialize the elastic communication buffer.
 
@@ -266,7 +754,151 @@ class ElasticBuffer:
             num_gpu_timeout_secs: GPU-side timeout in seconds for GPU operations.
             explicitly_destroy: If this flag is set to True, you need to explicitly call `destroy()` to release resources;
                 otherwise, the resources will be released by the destructor.
+            rail_balance: experimental source-side rail-balancing mode, either ``'off'`` or ``'force'``.
+                The default ``'off'`` path preserves the legacy buffer sizing, runtime arguments,
+                JIT specialization, handles, and results; only local configuration parsing and
+                mode guards are added.
+            rail_balance_proxy_slots_per_rank: moved-copy capacity reserved on each egress rank.
+                Must be zero for ``'off'`` and positive for ``'force'``.
+            rail_balance_policy: planner policy: ``'all'`` balances across every
+                local rail, ``'active'`` keeps the original nonempty rail set,
+                and ``'adaptive'`` expands that set only when each added rail
+                clears ``rail_balance_threshold_percent``.
+            rail_balance_threshold_percent: tolerated integer percentage by
+                which the current peak may exceed the selected-set balanced
+                target. Zero disables the gate and preserves the original
+                exact ``'all'`` plan.
         """
+        rail_balance_arena_layout = None
+        rail_balance_policy_id = 0
+        constructor_gate_device_words = None
+        constructor_gate_host_words = None
+        if not _RAIL_BALANCE_FORCE_HOST_AVAILABLE:
+            # Development/partial-install fail-close path. Once the public host
+            # protocol is enabled, every mode instead joins the universal gate
+            # below so a valid off rank cannot diverge from a valid force rank.
+            (rail_balance, rail_balance_proxy_slots_per_rank,
+             rail_balance_policy_id,
+             rail_balance_threshold_percent) = \
+                _parse_rail_balance_config(
+                    rail_balance, rail_balance_proxy_slots_per_rank,
+                    rail_balance_policy,
+                    rail_balance_threshold_percent)
+            if rail_balance == 'force':
+                _validate_rail_balance_force_constructor(
+                    num_bytes, num_cpu_bytes,
+                    num_max_tokens_per_rank, hidden, num_topk,
+                    use_fp8_dispatch, deterministic,
+                    allow_hybrid_mode, allow_multiple_reduction)
+                if not _rail_balance_force_available():
+                    raise RuntimeError(_rail_balance_error(
+                        'FeatureUnavailable',
+                        'force-v1 remains disabled until truthful D>1 Rail/Gin correctness passes'))
+        else:
+            # This is intentionally before get_nccl_comm_handle, buffer sizing,
+            # and window registration. Off participates once, then keeps no
+            # rail-balance field or storage after construction.
+            constructor_rank = group.rank()
+            constructor_world_size = group.size()
+            constructor_error_priority = 0
+            constructor_manifest = None
+            try:
+                (rail_balance, rail_balance_proxy_slots_per_rank,
+                 rail_balance_policy_id,
+                 rail_balance_threshold_percent) = \
+                    _parse_rail_balance_config(
+                        rail_balance, rail_balance_proxy_slots_per_rank,
+                        rail_balance_policy,
+                        rail_balance_threshold_percent)
+            except BaseException:
+                rail_balance = 'off'
+                rail_balance_proxy_slots_per_rank = 0
+                rail_balance_policy_id = 0
+                rail_balance_threshold_percent = 0
+                constructor_error_priority = \
+                    _RAIL_BALANCE_CONSTRUCTOR_PARSE_ERROR
+
+            if constructor_error_priority == 0 and rail_balance == 'force':
+                try:
+                    _validate_rail_balance_force_constructor(
+                        num_bytes, num_cpu_bytes,
+                        num_max_tokens_per_rank, hidden, num_topk,
+                        use_fp8_dispatch, deterministic,
+                        allow_hybrid_mode, allow_multiple_reduction)
+                except BaseException:
+                    constructor_error_priority = \
+                        _RAIL_BALANCE_CONSTRUCTOR_VALIDATION_ERROR
+
+            if constructor_error_priority == 0 and rail_balance == 'force' and \
+                    not _rail_balance_force_available():
+                constructor_error_priority = \
+                    _RAIL_BALANCE_CONSTRUCTOR_CAPABILITY_ERROR
+
+            if constructor_error_priority == 0 and rail_balance == 'force':
+                try:
+                    rail_balance_arena_layout = tuple(
+                        _C._get_rail_balance_hybrid_layout(
+                            hidden, num_topk,
+                            rail_balance_proxy_slots_per_rank))
+                except BaseException:
+                    rail_balance_arena_layout = None
+                    constructor_error_priority = \
+                        _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_ERROR
+
+            if constructor_error_priority == 0:
+                try:
+                    constructor_manifest = \
+                        _make_rail_balance_constructor_manifest(
+                            rail_balance, constructor_world_size,
+                            num_max_tokens_per_rank, hidden, num_topk,
+                            rail_balance_proxy_slots_per_rank,
+                            use_fp8_dispatch, deterministic,
+                            allow_hybrid_mode, allow_multiple_reduction,
+                            rail_balance_arena_layout or (),
+                            policy=rail_balance_policy_id,
+                            threshold_percent=
+                                rail_balance_threshold_percent)
+                except BaseException:
+                    constructor_manifest = None
+                    constructor_error_priority = \
+                        _RAIL_BALANCE_CONSTRUCTOR_MANIFEST_ERROR
+
+            constructor_gate_device_words = torch.empty(
+                _RAIL_BALANCE_WORLD_GATE_WORDS,
+                dtype=torch.int64, device='cuda')
+            constructor_gate_host_words = torch.empty(
+                _RAIL_BALANCE_WORLD_GATE_WORDS,
+                dtype=torch.int64, device='cpu', pin_memory=True)
+            _validate_rail_balance_world_gate_storage(
+                constructor_gate_device_words, constructor_gate_host_words)
+            if constructor_manifest is None:
+                # The error key wins before any field comparison. Keep this
+                # fallback independent of every caller-controlled value.
+                constructor_manifest = \
+                    _make_rail_balance_constructor_manifest('off', 0)
+            constructor_error_key = _make_rail_balance_world_gate_error_key(
+                constructor_error_priority, constructor_rank)
+            try:
+                _encode_rail_balance_world_gate(
+                    constructor_gate_host_words,
+                    constructor_error_key,
+                    constructor_manifest)
+            except BaseException:
+                constructor_error_key = \
+                    _make_rail_balance_world_gate_error_key(
+                        _RAIL_BALANCE_CONSTRUCTOR_ENCODE_ERROR,
+                        constructor_rank)
+                _encode_rail_balance_world_gate(
+                    constructor_gate_host_words,
+                    constructor_error_key,
+                    _make_rail_balance_constructor_manifest('off', 0))
+            constructor_gate_result = _run_rail_balance_world_gate(
+                constructor_gate_device_words,
+                constructor_gate_host_words,
+                group)
+            _raise_rail_balance_world_gate_failure(
+                'constructor', constructor_gate_result)
+
         # Some useful utilities
         self.group = group
         self.rank_idx = group.rank()
@@ -300,8 +932,145 @@ class ElasticBuffer:
         # Create NCCL comm handle
         self.nccl_comm_handle = get_nccl_comm_handle(group, force_new_comm=num_cpu_bytes > 0)
 
-        # Calculate buffer size (already 2 MB-aligned from hint functions / calculate_elastic_buffer_size)
-        if num_bytes is None:
+        legacy_num_bytes = 0
+        rail_balance_arena_bytes = 0
+        force_runtime = None
+        if rail_balance == 'force' and _RAIL_BALANCE_FORCE_HOST_AVAILABLE:
+            # Gate 0 made mode and geometry unanimous.  Resolve the remaining
+            # rank-local sizing/runtime facts before any symmetric window is
+            # registered, then reuse the same fixed storage for one force-only
+            # Gate 1.  Failures returned by local helpers still participate in
+            # the gate so a healthy peer cannot enter window creation alone.
+            sizing_error_priority = 0
+            sizing_manifest = None
+            force_num_bytes = 0
+            force_sl_idx = 0
+            force_num_allocated_qps = 0
+            force_runtime_args = None
+            raw_nccl_comm = 0
+
+            if sizing_error_priority == 0:
+                try:
+                    raw_nccl_comm = self.nccl_comm_handle.get()
+                    legacy_num_bytes = _C.calculate_elastic_buffer_size(
+                        raw_nccl_comm,
+                        num_max_tokens_per_rank, hidden, num_topk,
+                        use_fp8_dispatch,
+                        allow_hybrid_mode, allow_multiple_reduction)
+                    rail_balance_arena_bytes = rail_balance_arena_layout[-1]
+                    force_num_bytes = \
+                        _C._calculate_rail_balance_hybrid_buffer_size(
+                            raw_nccl_comm,
+                            num_max_tokens_per_rank, hidden, num_topk,
+                            rail_balance_proxy_slots_per_rank)
+                    if type(raw_nccl_comm) is not int or not (
+                            0 < raw_nccl_comm <=
+                            _RAIL_BALANCE_WORLD_GATE_INT64_MAX) or \
+                            not all(type(value) is int and
+                               0 < value <= _RAIL_BALANCE_WORLD_GATE_INT64_MAX
+                               for value in (
+                                   legacy_num_bytes,
+                                   rail_balance_arena_bytes,
+                                   force_num_bytes)) or \
+                            any(value % _RAIL_BALANCE_BUFFER_ALIGNMENT != 0
+                                for value in (
+                                    legacy_num_bytes,
+                                    rail_balance_arena_bytes,
+                                    force_num_bytes)) or \
+                            force_num_bytes != (
+                                legacy_num_bytes + rail_balance_arena_bytes):
+                        raise RuntimeError(_rail_balance_error(
+                            'InternalInvariant',
+                            'force-v1 buffer size must equal legacy bytes '
+                            'plus arena bytes'))
+                except BaseException:
+                    sizing_error_priority = \
+                        _RAIL_BALANCE_CONSTRUCTOR_SIZING_ERROR
+
+            if sizing_error_priority == 0:
+                try:
+                    force_sl_idx = sl_idx
+                    if 'EP_OVERRIDE_RDMA_SL' in os.environ:
+                        force_sl_idx = int(
+                            os.environ['EP_OVERRIDE_RDMA_SL'])
+
+                    force_num_allocated_qps = num_allocated_qps
+                    if type(force_num_allocated_qps) is not int:
+                        raise ValueError('num_allocated_qps is not an int')
+                    if force_num_allocated_qps == 0:
+                        force_num_allocated_qps = \
+                            65 if check_fast_rdma_atomic_support() else 129
+                    _validate_rail_balance_force_runtime_config(
+                        force_sl_idx, force_num_allocated_qps,
+                        num_cpu_timeout_secs, num_gpu_timeout_secs,
+                        prefer_overlap_with_compute,
+                        explicitly_destroy)
+                    force_runtime_args = (
+                        self.rank_idx, self.num_ranks,
+                        raw_nccl_comm, [],
+                        force_num_bytes, 0,
+                        allow_hybrid_mode,
+                        allow_multiple_reduction,
+                        prefer_overlap_with_compute,
+                        force_sl_idx, force_num_allocated_qps,
+                        num_cpu_timeout_secs, num_gpu_timeout_secs,
+                        explicitly_destroy)
+                except BaseException:
+                    sizing_error_priority = \
+                        _RAIL_BALANCE_CONSTRUCTOR_RUNTIME_CONFIG_ERROR
+
+            if sizing_error_priority == 0:
+                try:
+                    sizing_manifest = \
+                        _make_rail_balance_constructor_sizing_manifest(
+                            self.num_ranks,
+                            num_max_tokens_per_rank, hidden, num_topk,
+                            rail_balance_proxy_slots_per_rank,
+                            legacy_num_bytes, rail_balance_arena_bytes,
+                            force_num_bytes,
+                            force_sl_idx, force_num_allocated_qps,
+                            num_cpu_timeout_secs, num_gpu_timeout_secs,
+                            prefer_overlap_with_compute,
+                            explicitly_destroy)
+                except BaseException:
+                    sizing_error_priority = \
+                        _RAIL_BALANCE_CONSTRUCTOR_SIZING_MANIFEST_ERROR
+
+            if sizing_manifest is None:
+                sizing_manifest = \
+                    _make_rail_balance_constructor_sizing_manifest(
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        False, False)
+            sizing_error_key = _make_rail_balance_world_gate_error_key(
+                sizing_error_priority, self.rank_idx)
+            try:
+                _encode_rail_balance_world_gate(
+                    constructor_gate_host_words,
+                    sizing_error_key,
+                    sizing_manifest)
+            except BaseException:
+                sizing_error_key = \
+                    _make_rail_balance_world_gate_error_key(
+                        _RAIL_BALANCE_CONSTRUCTOR_SIZING_ENCODE_ERROR,
+                        self.rank_idx)
+                _encode_rail_balance_world_gate(
+                    constructor_gate_host_words,
+                    sizing_error_key,
+                    _make_rail_balance_constructor_sizing_manifest(
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        False, False))
+            sizing_gate_result = _run_rail_balance_world_gate(
+                constructor_gate_device_words,
+                constructor_gate_host_words,
+                group)
+            _raise_rail_balance_world_gate_failure(
+                'constructor-sizing', sizing_gate_result)
+            force_runtime = _C.ElasticBuffer(*force_runtime_args)
+
+            num_bytes = force_num_bytes
+            sl_idx = force_sl_idx
+            num_allocated_qps = force_num_allocated_qps
+        elif num_bytes is None:
             # NOTES: we allow `num_topk == 0`, as the buffer size can also be calculated by number of ranks (maybe bigger though)
             num_bytes = _C.calculate_elastic_buffer_size(
                 self.nccl_comm_handle.get(),
@@ -313,45 +1082,68 @@ class ElasticBuffer:
                   f'(cpu: {num_cpu_bytes}) at rank EP {group.rank()}/{group.size()}')
         self.num_bytes = num_bytes
 
+        if rail_balance == 'force':
+            self._rail_balance_mode = rail_balance
+            self._rail_balance_proxy_slots_per_rank = rail_balance_proxy_slots_per_rank
+            self._rail_balance_policy = rail_balance_policy_id
+            self._rail_balance_threshold_percent = \
+                rail_balance_threshold_percent
+            self._rail_balance_arena_offset = legacy_num_bytes
+            self._rail_balance_arena_bytes = rail_balance_arena_bytes
+            self._rail_balance_world_gate_device_words = \
+                constructor_gate_device_words
+            self._rail_balance_world_gate_host_words = \
+                constructor_gate_host_words
+            self._rail_balance_owner_token = object()
+            self._rail_balance_next_invocation_id = 1
+            self._rail_balance_live_ticket = None
+            self._rail_balance_terminal = False
+
         # Store default values
         self.num_max_tokens_per_rank = num_max_tokens_per_rank
 
-        # Check PCIe GPUs
-        check_nvlink_connections(group)
+        if rail_balance != 'force':
+            # Preserve the exact legacy path when rail balancing is disabled.
+            check_nvlink_connections(group)
 
-        # RDMA SL
-        if 'EP_OVERRIDE_RDMA_SL' in os.environ:
-            sl_idx = int(os.environ['EP_OVERRIDE_RDMA_SL'])
+            # RDMA SL
+            if 'EP_OVERRIDE_RDMA_SL' in os.environ:
+                sl_idx = int(os.environ['EP_OVERRIDE_RDMA_SL'])
 
-        # Automatic maximum QP count allowed
-        # TODO(tianr22): revise the QP count in consideration of Engram
-        if num_allocated_qps == 0:
-            # Hybrid mode will consume more QPs
-            # The extra QP is for notify warps
-            if self.allow_hybrid_mode:
-                num_allocated_qps = 65 if check_fast_rdma_atomic_support() else 129
-            else:
-                num_allocated_qps = 17
+            # Automatic maximum QP count allowed
+            # TODO(tianr22): revise the QP count in consideration of Engram
+            if num_allocated_qps == 0:
+                # Hybrid mode will consume more QPs
+                # The extra QP is for notify warps
+                if self.allow_hybrid_mode:
+                    num_allocated_qps = 65 if check_fast_rdma_atomic_support() else 129
+                else:
+                    num_allocated_qps = 17
         self.num_allocated_qps = num_allocated_qps
 
-        # Create CPU communicator (exchange POSIX FD handles for CPU segments)
-        cpu_comm = []
-        if allow_hybrid_mode and num_cpu_bytes > 0:
-            pid, fd = _C.create_cpu_handle(num_cpu_bytes)
-            cpu_comm = [None] * self.num_ranks
-            dist.all_gather_object(cpu_comm, (pid, fd), self.group)
-
-        # Create CPP handle
         self.explicitly_destroy = explicitly_destroy
-        self.runtime = _C.ElasticBuffer(group.rank(), group.size(),
-                                        self.nccl_comm_handle.get(), cpu_comm,
-                                        num_bytes, num_cpu_bytes,
-                                        allow_hybrid_mode,
-                                        allow_multiple_reduction,
-                                        prefer_overlap_with_compute,
-                                        sl_idx, num_allocated_qps,
-                                        num_cpu_timeout_secs, num_gpu_timeout_secs,
-                                        self.explicitly_destroy)
+        if rail_balance == 'force':
+            # The force runtime/window was created immediately after Gate 1.
+            self.runtime = force_runtime
+        else:
+            # Create CPU communicator (exchange POSIX FD handles for CPU segments)
+            cpu_comm = []
+            if allow_hybrid_mode and num_cpu_bytes > 0:
+                pid, fd = _C.create_cpu_handle(num_cpu_bytes)
+                cpu_comm = [None] * self.num_ranks
+                dist.all_gather_object(cpu_comm, (pid, fd), self.group)
+
+            # Create CPP handle
+            self.runtime = _C.ElasticBuffer(
+                group.rank(), group.size(),
+                self.nccl_comm_handle.get(), cpu_comm,
+                num_bytes, num_cpu_bytes,
+                allow_hybrid_mode,
+                allow_multiple_reduction,
+                prefer_overlap_with_compute,
+                sl_idx, num_allocated_qps,
+                num_cpu_timeout_secs, num_gpu_timeout_secs,
+                self.explicitly_destroy)
 
         # Logical rank indices
         self.num_scaleout_ranks, self.num_scaleup_ranks = self.get_logical_domain_size()
@@ -852,6 +1644,317 @@ class ElasticBuffer:
 
         return min(num_qps, self.num_allocated_qps)
 
+    def _dispatch_rail_balance_force(
+            self,
+            x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
+            topk_idx: Optional[torch.Tensor],
+            topk_weights: Optional[torch.Tensor],
+            cumulative_local_expert_recv_stats: Optional[torch.Tensor],
+            num_experts: Optional[int],
+            num_max_tokens_per_rank: Optional[int],
+            expert_alignment: Optional[int],
+            num_sms: int, num_qps: int,
+            previous_event: Optional[EventHandle],
+            previous_event_before_epilogue: Optional[EventHandle],
+            async_with_compute_stream: bool,
+            allocate_on_comm_stream: bool,
+            handle: Optional[EPHandle],
+            do_handle_copy: bool,
+            do_cpu_sync: Optional[bool],
+            do_expand: bool,
+            do_zero_padding: bool,
+            use_tma_aligned_col_major_sf: bool):
+        """Run the narrow force-v1 publication transaction."""
+        invocation_id = 0
+        local_error_priority = 0
+        prepare_attempted = False
+        prepare_common_fields = None
+        dispatch_manifest = None
+        ticket = None
+
+        # Reserve the epoch before validating caller inputs. Every attempt,
+        # including a locally invalid one, must rendezvous with its peers.
+        try:
+            invocation_id = self._rail_balance_next_invocation_id
+            if type(invocation_id) is not int or not (
+                    1 <= invocation_id <=
+                    _RAIL_BALANCE_WORLD_GATE_INT32_MAX):
+                raise ValueError('rail-balance invocation is out of range')
+            self._rail_balance_next_invocation_id = invocation_id + 1
+        except BaseException:
+            invocation_id = 0
+            local_error_priority = _RAIL_BALANCE_DISPATCH_VALIDATION_ERROR
+
+        resolved_num_max_tokens = 0
+        resolved_num_experts = 0
+        resolved_num_sms = 0
+        resolved_num_qps = 0
+        if local_error_priority == 0:
+            try:
+                if self._rail_balance_terminal:
+                    raise RuntimeError('rail-balance buffer is terminal')
+                if self._rail_balance_live_ticket is not None:
+                    raise RuntimeError('rail-balance dispatch is already live')
+                if handle is not None:
+                    raise ValueError('cached force dispatch is unsupported')
+                if isinstance(x, tuple):
+                    raise ValueError('FP8 force dispatch is unsupported')
+                if topk_idx is None or topk_weights is None:
+                    raise ValueError(
+                        'force dispatch requires top-k indices and weights')
+                if type(num_experts) is not int or num_experts <= 0:
+                    raise ValueError('force dispatch requires num_experts')
+                resolved_num_experts = num_experts
+                resolved_num_max_tokens = value_or(
+                    num_max_tokens_per_rank,
+                    self.num_max_tokens_per_rank)
+                if type(resolved_num_max_tokens) is not int or \
+                        resolved_num_max_tokens != \
+                        self.num_max_tokens_per_rank:
+                    raise ValueError(
+                        'force dispatch must use the constructor token capacity')
+                resolved_expert_alignment = value_or(expert_alignment, 1)
+                if type(resolved_expert_alignment) is not int or \
+                        resolved_expert_alignment != 1:
+                    raise ValueError(
+                        'force dispatch supports expert_alignment=1 only')
+                resolved_do_cpu_sync = value_or(do_cpu_sync, True)
+                if type(resolved_do_cpu_sync) is not bool or \
+                        not resolved_do_cpu_sync:
+                    raise ValueError(
+                        'force dispatch requires do_cpu_sync=True')
+                if type(do_handle_copy) is not bool or not do_handle_copy:
+                    raise ValueError(
+                        'force dispatch requires do_handle_copy=True')
+                if type(do_expand) is not bool or do_expand or \
+                        type(do_zero_padding) is not bool or do_zero_padding or \
+                        type(use_tma_aligned_col_major_sf) is not bool or \
+                        use_tma_aligned_col_major_sf:
+                    raise ValueError(
+                        'force dispatch does not support expanded/FP8 layouts')
+                if previous_event is not None or \
+                        previous_event_before_epilogue is not None or \
+                        type(async_with_compute_stream) is not bool or \
+                        async_with_compute_stream or \
+                        type(allocate_on_comm_stream) is not bool or \
+                        allocate_on_comm_stream:
+                    raise ValueError(
+                        'force dispatch does not support public event/async options')
+                if self.deterministic:
+                    raise ValueError(
+                        'force dispatch does not support deterministic mode')
+                check_torch_deterministic()
+
+                if type(num_sms) is not int or num_sms < 0:
+                    raise ValueError('force dispatch num_sms is invalid')
+                resolved_num_sms = num_sms
+                if resolved_num_sms == 0:
+                    resolved_num_sms = self.get_theoretical_num_sms(
+                        resolved_num_experts, topk_idx.shape[1])
+                if type(resolved_num_sms) is not int or not (
+                        2 <= resolved_num_sms <=
+                        _RAIL_BALANCE_WORLD_GATE_INT32_MAX):
+                    raise ValueError('force dispatch num_sms is invalid')
+
+                if type(num_qps) is not int or num_qps < 0:
+                    raise ValueError('force dispatch num_qps is invalid')
+                resolved_num_qps = num_qps
+                if resolved_num_qps == 0:
+                    resolved_num_qps = self.get_theoretical_num_qps(
+                        resolved_num_sms)
+                if type(resolved_num_qps) is not int or not (
+                        1 <= resolved_num_qps <= self.num_allocated_qps):
+                    raise ValueError('force dispatch num_qps is invalid')
+                ticket = _RailBalanceForceTicket(
+                    self._rail_balance_owner_token, invocation_id)
+            except BaseException:
+                local_error_priority = \
+                    _RAIL_BALANCE_DISPATCH_VALIDATION_ERROR
+
+        if local_error_priority == 0:
+            prepare_attempted = True
+            try:
+                prepare_result = \
+                    self.runtime._rail_balance_hybrid_dispatch_prepare(
+                        x, topk_idx, topk_weights,
+                        cumulative_local_expert_recv_stats,
+                        resolved_num_max_tokens, resolved_num_experts,
+                        resolved_num_sms, resolved_num_qps,
+                        self._rail_balance_proxy_slots_per_rank,
+                        self._rail_balance_arena_offset,
+                        invocation_id, 0,
+                        self._rail_balance_policy,
+                        self._rail_balance_threshold_percent)
+                if type(prepare_result) is not tuple or \
+                        len(prepare_result) != 1 + \
+                        _RAIL_BALANCE_DISPATCH_COMMON_FIELDS or \
+                        type(prepare_result[0]) is not int or \
+                        prepare_result[0] not in (0, 2, 3):
+                    raise ValueError(
+                        'rail-balance dispatch prepare ABI is invalid')
+                if prepare_result[0] != 0:
+                    local_error_priority = \
+                        _RAIL_BALANCE_DISPATCH_PREPARE_STATUS_ERROR
+                else:
+                    prepare_common_fields = tuple(prepare_result[1:])
+            except BaseException:
+                local_error_priority = \
+                    _RAIL_BALANCE_DISPATCH_PREPARE_ERROR
+
+        if local_error_priority == 0:
+            try:
+                dispatch_manifest = _make_rail_balance_operation_manifest(
+                    _RAIL_BALANCE_OPERATION_DISPATCH,
+                    _RAIL_BALANCE_PHASE_PREPARE,
+                    self.num_ranks, invocation_id,
+                    prepare_common_fields)
+            except BaseException:
+                local_error_priority = \
+                    _RAIL_BALANCE_DISPATCH_MANIFEST_ERROR
+        if dispatch_manifest is None:
+            dispatch_manifest = _make_rail_balance_operation_manifest(
+                _RAIL_BALANCE_OPERATION_DISPATCH,
+                _RAIL_BALANCE_PHASE_PREPARE,
+                0, 0,
+                (0,) * _RAIL_BALANCE_DISPATCH_COMMON_FIELDS)
+
+        local_error_key = _make_rail_balance_world_gate_error_key(
+            local_error_priority, self.rank_idx)
+        try:
+            _encode_rail_balance_world_gate(
+                self._rail_balance_world_gate_host_words,
+                local_error_key, dispatch_manifest)
+        except BaseException:
+            local_error_key = _make_rail_balance_world_gate_error_key(
+                _RAIL_BALANCE_DISPATCH_ENCODE_ERROR, self.rank_idx)
+            _encode_rail_balance_world_gate(
+                self._rail_balance_world_gate_host_words,
+                local_error_key,
+                _make_rail_balance_operation_manifest(
+                    _RAIL_BALANCE_OPERATION_DISPATCH,
+                    _RAIL_BALANCE_PHASE_PREPARE,
+                    0, 0,
+                    (0,) * _RAIL_BALANCE_DISPATCH_COMMON_FIELDS))
+
+        try:
+            gate_result = _run_rail_balance_world_gate(
+                self._rail_balance_world_gate_device_words,
+                self._rail_balance_world_gate_host_words,
+                self.group)
+        except BaseException:
+            self._rail_balance_terminal = True
+            raise
+        try:
+            _raise_rail_balance_world_gate_failure(
+                'dispatch-prepare', gate_result)
+        except BaseException:
+            if prepare_attempted:
+                try:
+                    self.runtime._rail_balance_hybrid_plan_abort(
+                        invocation_id)
+                except BaseException:
+                    self._rail_balance_terminal = True
+                    raise
+            raise
+
+        plan_error_priority = 0
+        try:
+            plan_outputs = \
+                self.runtime._rail_balance_hybrid_plan_finish(invocation_id)
+            if type(plan_outputs) is not tuple or len(plan_outputs) != 14:
+                raise ValueError('rail-balance plan result ABI is invalid')
+            plan_status = plan_outputs[-1].item()
+            if type(plan_status) is not int or plan_status not in (0, 1):
+                raise ValueError('rail-balance plan status is invalid')
+            if plan_status != 0:
+                plan_error_priority = \
+                    _RAIL_BALANCE_DISPATCH_PLAN_STATUS_ERROR
+        except BaseException:
+            plan_error_priority = _RAIL_BALANCE_DISPATCH_PLAN_ERROR
+
+        plan_error_key = _make_rail_balance_world_gate_error_key(
+            plan_error_priority, self.rank_idx)
+        try:
+            _patch_rail_balance_world_gate_prevalidated(
+                self._rail_balance_world_gate_host_words,
+                plan_error_key,
+                3, _RAIL_BALANCE_PHASE_PLAN)
+        except BaseException:
+            plan_error_key = _make_rail_balance_world_gate_error_key(
+                _RAIL_BALANCE_DISPATCH_PLAN_ENCODE_ERROR,
+                self.rank_idx)
+            _encode_rail_balance_world_gate(
+                self._rail_balance_world_gate_host_words,
+                plan_error_key,
+                _make_rail_balance_operation_manifest(
+                    _RAIL_BALANCE_OPERATION_DISPATCH,
+                    _RAIL_BALANCE_PHASE_PLAN,
+                    0, 0,
+                    (0,) * _RAIL_BALANCE_DISPATCH_COMMON_FIELDS))
+
+        try:
+            gate_result = _run_rail_balance_world_gate(
+                self._rail_balance_world_gate_device_words,
+                self._rail_balance_world_gate_host_words,
+                self.group)
+        except BaseException:
+            self._rail_balance_terminal = True
+            raise
+        try:
+            _raise_rail_balance_world_gate_failure(
+                'dispatch-plan', gate_result)
+        except BaseException:
+            try:
+                self.runtime._rail_balance_hybrid_plan_abort(invocation_id)
+            except BaseException:
+                self._rail_balance_terminal = True
+                raise
+            raise
+
+        try:
+            self.runtime._rail_balance_hybrid_dispatch_commit(invocation_id)
+            (recv_x, recv_sf,
+             recv_topk_idx, recv_topk_weights,
+             cloned_topk_idx,
+             num_recv_tokens, num_expanded_tokens,
+             num_recv_tokens_per_expert_list,
+             psum_num_recv_tokens_per_scaleup_rank,
+             psum_num_recv_tokens_per_expert,
+             num_unaligned_recv_tokens_per_expert,
+             recv_src_metadata,
+             dst_buffer_slot_idx,
+             token_metadata_at_forward,
+             channel_linked_list,
+             event) = self.runtime._rail_balance_hybrid_dispatch_finish(
+                invocation_id)
+            if recv_sf is not None:
+                raise RuntimeError(
+                    'force-v1 dispatch unexpectedly returned FP8 scales')
+            force_handle = EPHandle(
+                False,
+                resolved_num_experts, 1,
+                resolved_num_max_tokens,
+                resolved_num_sms,
+                cloned_topk_idx,
+                num_recv_tokens, num_expanded_tokens,
+                num_recv_tokens_per_expert_list,
+                psum_num_recv_tokens_per_scaleup_rank,
+                psum_num_recv_tokens_per_expert,
+                num_unaligned_recv_tokens_per_expert,
+                recv_src_metadata,
+                dst_buffer_slot_idx,
+                token_metadata_at_forward,
+                channel_linked_list)
+            force_handle._rail_balance_ticket = ticket
+            event_overlap = EventOverlap(event)
+            self._rail_balance_live_ticket = ticket
+            return (recv_x, recv_topk_idx, recv_topk_weights,
+                    force_handle, event_overlap)
+        except BaseException:
+            self._rail_balance_terminal = True
+            self.runtime._rail_balance_hybrid_plan_abort(invocation_id)
+            raise
+
     def dispatch(self,
                  x: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
                  topk_idx: Optional[torch.Tensor] = None,
@@ -921,6 +2024,23 @@ class ElasticBuffer:
             handle: the returned communication handle.
             event: the event after executing the kernel (valid only if `async_with_compute_stream` is set).
         """
+        if getattr(self, '_rail_balance_mode', 'off') == 'force':
+            return self._dispatch_rail_balance_force(
+                x, topk_idx, topk_weights,
+                cumulative_local_expert_recv_stats,
+                num_experts, num_max_tokens_per_rank, expert_alignment,
+                num_sms, num_qps,
+                previous_event, previous_event_before_epilogue,
+                async_with_compute_stream, allocate_on_comm_stream,
+                handle, do_handle_copy, do_cpu_sync,
+                do_expand, do_zero_padding,
+                use_tma_aligned_col_major_sf)
+        if type(getattr(handle, '_rail_balance_ticket', None)) is \
+                _RailBalanceForceTicket:
+            raise ValueError(_rail_balance_error(
+                'InvalidHandle',
+                'a force dispatch handle cannot be reused by an off buffer'))
+
         check_torch_deterministic()
 
         # Automatic decide SM and QP count
@@ -1043,6 +2163,151 @@ class ElasticBuffer:
             bias_0, bias_1 = bias
         return bias_0, bias_1
 
+    def _combine_rail_balance_force(
+            self,
+            x: torch.Tensor,
+            handle: EPHandle,
+            topk_weights: Optional[torch.Tensor],
+            bias: Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
+            num_sms: int, num_qps: int,
+            previous_event: EventHandle,
+            previous_event_before_epilogue: Optional[EventHandle],
+            async_with_compute_stream: bool,
+            allocate_on_comm_stream: bool):
+        """Consume one buffer-owned force ticket through the combine gate."""
+        local_error_priority = 0
+        invocation_id = 0
+        ticket = None
+        prepare_attempted = False
+        combine_manifest = None
+
+        try:
+            ticket = getattr(handle, '_rail_balance_ticket', None)
+            if type(ticket) is not _RailBalanceForceTicket:
+                raise ValueError('combine handle has no force ticket')
+            # Owner identity is checked before operation/state so a foreign
+            # handle can never mutate or abort this buffer's live completion.
+            if ticket.owner_token is not self._rail_balance_owner_token:
+                raise ValueError('combine handle belongs to another buffer')
+            invocation_id = ticket.invocation_id
+            if type(invocation_id) is not int or not (
+                    1 <= invocation_id <=
+                    _RAIL_BALANCE_WORLD_GATE_INT32_MAX):
+                raise ValueError('combine invocation is invalid')
+            if self._rail_balance_terminal:
+                raise RuntimeError('rail-balance buffer is terminal')
+            if self._rail_balance_live_ticket is not ticket:
+                raise ValueError('combine handle is not the live operation')
+            if ticket.state != _RailBalanceForceTicket.LIVE:
+                raise ValueError('combine handle has already been consumed')
+            if topk_weights is None:
+                raise ValueError('force combine requires top-k weights')
+            if bias is not None:
+                raise ValueError('force combine does not support bias')
+            if type(num_qps) is not int or num_qps != 0:
+                raise ValueError('force combine requires num_qps=0')
+            if type(num_sms) is not int or num_sms not in (
+                    0, handle.num_sms):
+                raise ValueError(
+                    'force combine must reuse the dispatch SM count')
+            if previous_event is not None or \
+                    previous_event_before_epilogue is not None or \
+                    type(async_with_compute_stream) is not bool or \
+                    async_with_compute_stream or \
+                    type(allocate_on_comm_stream) is not bool or \
+                    allocate_on_comm_stream:
+                raise ValueError(
+                    'force combine does not support public event/async options')
+            if self.deterministic:
+                raise ValueError(
+                    'force combine does not support deterministic mode')
+            check_torch_deterministic()
+            ticket.state = _RailBalanceForceTicket.PREPARING
+        except BaseException:
+            local_error_priority = \
+                _RAIL_BALANCE_COMBINE_VALIDATION_ERROR
+
+        if local_error_priority == 0:
+            # Once the call starts, Python owns cleanup even if an exception
+            # arrives after C++ has installed the pending completion but
+            # before control returns to the next Python statement.
+            prepare_attempted = True
+            try:
+                self.runtime._rail_balance_hybrid_combine_prepare(
+                    x, topk_weights, invocation_id)
+            except BaseException:
+                local_error_priority = \
+                    _RAIL_BALANCE_COMBINE_PREPARE_ERROR
+
+        if local_error_priority == 0:
+            try:
+                combine_manifest = _make_rail_balance_operation_manifest(
+                    _RAIL_BALANCE_OPERATION_COMBINE,
+                    _RAIL_BALANCE_PHASE_PREPARE,
+                    self.num_ranks, invocation_id)
+            except BaseException:
+                local_error_priority = \
+                    _RAIL_BALANCE_COMBINE_MANIFEST_ERROR
+        if combine_manifest is None:
+            combine_manifest = _make_rail_balance_operation_manifest(
+                _RAIL_BALANCE_OPERATION_COMBINE,
+                _RAIL_BALANCE_PHASE_PREPARE,
+                0, 0)
+
+        local_error_key = _make_rail_balance_world_gate_error_key(
+            local_error_priority, self.rank_idx)
+        try:
+            _encode_rail_balance_world_gate(
+                self._rail_balance_world_gate_host_words,
+                local_error_key, combine_manifest)
+        except BaseException:
+            local_error_key = _make_rail_balance_world_gate_error_key(
+                _RAIL_BALANCE_COMBINE_ENCODE_ERROR, self.rank_idx)
+            _encode_rail_balance_world_gate(
+                self._rail_balance_world_gate_host_words,
+                local_error_key,
+                _make_rail_balance_operation_manifest(
+                    _RAIL_BALANCE_OPERATION_COMBINE,
+                    _RAIL_BALANCE_PHASE_PREPARE,
+                    0, 0))
+
+        try:
+            gate_result = _run_rail_balance_world_gate(
+                self._rail_balance_world_gate_device_words,
+                self._rail_balance_world_gate_host_words,
+                self.group)
+        except BaseException:
+            self._rail_balance_terminal = True
+            raise
+        try:
+            _raise_rail_balance_world_gate_failure(
+                'combine-prepare', gate_result)
+        except BaseException:
+            if prepare_attempted:
+                try:
+                    self.runtime._rail_balance_hybrid_combine_abort(
+                        invocation_id)
+                except BaseException:
+                    self._rail_balance_terminal = True
+                    raise
+            if type(ticket) is _RailBalanceForceTicket and \
+                    ticket.owner_token is self._rail_balance_owner_token and \
+                    ticket.state == _RailBalanceForceTicket.PREPARING:
+                ticket.state = _RailBalanceForceTicket.LIVE
+            raise
+
+        ticket.state = _RailBalanceForceTicket.CONSUMED
+        self._rail_balance_live_ticket = None
+        try:
+            combined_x, combined_topk_weights, event = \
+                self.runtime._rail_balance_hybrid_combine_commit(
+                    invocation_id)
+            return (combined_x, combined_topk_weights,
+                    EventOverlap(event))
+        except BaseException:
+            self._rail_balance_terminal = True
+            raise
+
     def combine(self,
                 x: torch.Tensor,
                 handle: EPHandle,
@@ -1080,6 +2345,18 @@ class ElasticBuffer:
             combined_topk_weights: the reduced top-k weights, with shape `[num_combined_tokens, num_topk]` and type `torch.float`.
             event: the event after executing the kernel (valid only if `async_with_compute_stream` is set).
         """
+        if getattr(self, '_rail_balance_mode', 'off') == 'force':
+            return self._combine_rail_balance_force(
+                x, handle, topk_weights, bias,
+                num_sms, num_qps,
+                previous_event, previous_event_before_epilogue,
+                async_with_compute_stream, allocate_on_comm_stream)
+        if type(getattr(handle, '_rail_balance_ticket', None)) is \
+                _RailBalanceForceTicket:
+            raise ValueError(_rail_balance_error(
+                'InvalidHandle',
+                'a force handle cannot be combined by an off buffer'))
+
         check_torch_deterministic()
 
         # Automatic decide SM and QP count
