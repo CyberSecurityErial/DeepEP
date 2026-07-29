@@ -5,6 +5,7 @@
 
 #include "jit/api.hpp"
 #include "elastic/buffer.hpp"
+#include "elastic/rail_balance.hpp"
 #include "legacy/buffer.hpp"
 
 #ifndef TORCH_EXTENSION_NAME
@@ -36,4 +37,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
 
     // Register elastic buffer (DeepEP V2) APIs
     deep_ep::elastic::register_apis(m);
+
+    // Register private rail-balancing prototype APIs
+    deep_ep::elastic::register_rail_balance_apis(m);
 }
