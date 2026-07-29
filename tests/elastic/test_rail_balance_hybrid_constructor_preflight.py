@@ -65,11 +65,17 @@ def _reference_layout(hidden: int, num_topk: int, pcap: int):
     """Independent mirror of the ten-field HybridArenaLayout ABI."""
     channel_count_offset = _align(32, 32)
     channel_count_bytes = 1024 * 32 * 4
-    proxy_dispatch_offset = _align(
+    proxy_ready_offset = _align(
         channel_count_offset + channel_count_bytes, 32)
+    proxy_dispatch_offset = _align(
+        proxy_ready_offset + pcap * 4, 32)
     dispatch_token_bytes = _token_bytes(hidden, num_topk, True)
-    proxy_return_offset = _align(
+    proxy_rail_staging_offset = _align(
         proxy_dispatch_offset + pcap * dispatch_token_bytes, 32)
+    retained_rail_staging_offset = _align(
+        proxy_rail_staging_offset + pcap * dispatch_token_bytes, 32)
+    proxy_return_offset = _align(
+        retained_rail_staging_offset + pcap * dispatch_token_bytes, 32)
     combine_token_bytes = _token_bytes(hidden, num_topk, False)
     raw_bytes = proxy_return_offset + pcap * combine_token_bytes
     arena_bytes = _align(raw_bytes, _ARENA_BYTES)
@@ -84,8 +90,8 @@ def _reference_layout(hidden: int, num_topk: int, pcap: int):
 
 _LAYOUT = _reference_layout(1280, 7, 37)
 assert _LAYOUT == (
-    0, 32, 32, 131072, 131104, 2656,
-    229376, 2624, 326464, 2097152)
+    0, 32, 32, 131072, 131264, 2656,
+    426080, 2624, 523168, 2097152)
 
 
 class _FakeScalar:
@@ -639,6 +645,8 @@ def test_unanimous_force_retains_the_exact_gate_storage_and_idle_owner():
         '_rail_balance_next_invocation_id',
         '_rail_balance_live_ticket',
         '_rail_balance_terminal',
+        '_rail_balance_zero_move_bypass_budget',
+        '_rail_balance_zero_move_common_fields',
     }
     assert {
         name for name in buffer.__dict__ if name.startswith('_rail_balance_')
@@ -650,6 +658,8 @@ def test_unanimous_force_retains_the_exact_gate_storage_and_idle_owner():
     assert buffer._rail_balance_next_invocation_id == 1
     assert buffer._rail_balance_live_ticket is None
     assert buffer._rail_balance_terminal is False
+    assert buffer._rail_balance_zero_move_bypass_budget == 0
+    assert buffer._rail_balance_zero_move_common_fields is None
 
 
 def test_force_runtime_arguments_are_frozen_before_gate_two_commit():

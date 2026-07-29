@@ -262,7 +262,7 @@ using namespace deep_ep::elastic;
 static void __instantiate_kernel() {{
     auto ptr = reinterpret_cast<void*>(
         &rail_balance_hybrid_dispatch_impl<
-            true, false, {}, {}, {}, {}, {}, {}, {}, 0, {}, {}, {}, {}, {}, {}>);
+            true, false, {}, {}, {}, {}, {}, {}, {}, 0, {}, {}, {}, {}, {}, {}, {}>);
 }}
 )",
             s.num_sms,
@@ -277,7 +277,8 @@ static void __instantiate_kernel() {{
             s.num_topk,
             s.expert_alignment,
             s.num_qps,
-            s.num_timeout_cycles);
+            s.num_timeout_cycles,
+            s.proxy_capacity);
     }
 
     static void launch_impl(const jit::KernelHandle& kernel,
@@ -414,13 +415,13 @@ prepare_rail_balance_hybrid_dispatch(
     const auto args = make_rail_balance_hybrid_dispatch_args(spec);
     const auto key = fmt::format(
         "rail_balance_hybrid_dispatch_force_v1_"
-        "sm{}_nw{}_sw{}_fw{}_d{}_g{}_h{}_m{}_e{}_k{}_a{}_q{}_t{}",
+        "sm{}_nw{}_sw{}_fw{}_d{}_g{}_h{}_m{}_e{}_k{}_a{}_q{}_t{}_p{}",
         spec.num_sms, spec.num_notify_warps,
         spec.num_scaleout_warps, spec.num_forward_warps,
         spec.num_scaleout_ranks, spec.num_scaleup_ranks,
         spec.num_hidden_bytes, spec.num_max_tokens_per_rank,
         spec.num_experts, spec.num_topk, spec.expert_alignment,
-        spec.num_qps, spec.num_timeout_cycles);
+        spec.num_qps, spec.num_timeout_cycles, spec.proxy_capacity);
     return {
         .runtime = jit::compiler->build(
             key, RailBalanceHybridDispatchRuntime::generate(args)),
