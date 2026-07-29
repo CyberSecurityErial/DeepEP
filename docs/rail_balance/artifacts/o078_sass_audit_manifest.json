@@ -1,0 +1,2836 @@
+{
+  "checkpoints": {
+    "o077_commit": "f895eff",
+    "o077_reports": ".cache/rail_balance/c100/o077/post-f895eff",
+    "o078_commit": "32b9cfd",
+    "o078_reports": ".cache/rail_balance/c100/o078/post-32b9cfd-matched-o077"
+  },
+  "coverage": {
+    "artifacts_per_report": 14,
+    "cubin_pairs": 84,
+    "families": [
+      "combine",
+      "count",
+      "barrier",
+      "plan",
+      "prefix",
+      "return",
+      "source"
+    ],
+    "labels": [
+      "source-h256-r1",
+      "return-h256-r1",
+      "source-h7168-r1",
+      "return-h7168-r1",
+      "source-h256-r2",
+      "return-h256-r2",
+      "source-h7168-r2",
+      "return-h7168-r2",
+      "source-h256-r3",
+      "return-h256-r3",
+      "source-h7168-r3",
+      "return-h7168-r3"
+    ],
+    "reports_per_side": 12,
+    "validated_artifacts_per_side": {
+      "o077": 168,
+      "o078": 168
+    }
+  },
+  "interpretation": {
+    "plan_claim": "Every plan pair keeps 1,200 instructions and identical resources; the SASS delta is limited to one failure-only assertion source-line immediate.",
+    "raw_cubin_sha_note": "Raw cubin SHA can differ while exact SASS and resource usage match because non-executable ELF/string-table content can differ.",
+    "return_claim": "Every same-label return pair has exact SASS and resource usage.",
+    "source_claim": "Every source pair changes from 1,352 to 1,384 static SASS instructions, matching the bounded lookup implementation."
+  },
+  "pairs": [
+    {
+      "family": "combine",
+      "label": "source-h256-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.474d7ea83a82fcc0a5e02bfc5e76bc49/kernel.cubin",
+        "artifact_sha256": "4a36a030d4f04248e68aca776d74357f9c58efd657586966c927517b148c140d",
+        "artifact_size_bytes": 11112,
+        "instruction_count": 360,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 55,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "75e487ff4b60a291b4fb54ae5efb1c44825cd265b9201ad146ba39b7dd5950b3"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.474d7ea83a82fcc0a5e02bfc5e76bc49/kernel.cubin",
+        "artifact_sha256": "4a36a030d4f04248e68aca776d74357f9c58efd657586966c927517b148c140d",
+        "artifact_size_bytes": 11112,
+        "instruction_count": 360,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 55,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "75e487ff4b60a291b4fb54ae5efb1c44825cd265b9201ad146ba39b7dd5950b3"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "count",
+      "label": "source-h256-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0de9583114b44c48723fbc52bf602d40/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0efab7ebd7fe56258cddb12bebbcc5c1/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "barrier",
+      "label": "source-h256-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "ac1b3bee9bb049e846c33eafe6a208036e7d991b5c7463812d6d69befcaba3ab",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "fb17c5f83883f0d333fa4c834def7c692a6b2a0a65fe8dd3b64895f1d6af61d8",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "plan",
+      "label": "source-h256-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.6b432a6b0c5e3485749989567ba104a5/kernel.cubin",
+        "artifact_sha256": "080d5466f7218be7914c36b46e31d342d7a6664088cd95ccefaff0bec6b4e629",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "f1f9af6e4a941d433bc0641373f3317d38fa4ef4474d6947dad18d34dbdf0925"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.486a56e5efda4a2d88b999310b9e6044/kernel.cubin",
+        "artifact_sha256": "e28700d6b825be71d61cc22c5c511bd5d7d3aaf24d402679d0a1a799c0c8ec73",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "fff6a6e9244e8d6c1139fceaea771a615beb8d771275caf0ee4a162e4a951c44"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "diagnostic_line_immediate_only"
+    },
+    {
+      "family": "prefix",
+      "label": "source-h256-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.257e6bf1f674e5bb2d1e189f885af90a/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.2de365ea2b1b13781ca19e9baf152b22/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "return",
+      "label": "source-h256-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.4cec3b861f36b90edb1b0207a3359695/kernel.cubin",
+        "artifact_sha256": "e29b3aa6e050b6e881bd990024a00b2d3f250b676e4bf5507959d8d989ee87f2",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "a7cbeb0afba6af1a32c94dc9001800a210af2c5c729f1c8cef03c0704eb9e174"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.46d74f8ff1b12e4fd7ae7371733e484d/kernel.cubin",
+        "artifact_sha256": "7284e5dddbcd6a1476166a59f14a8f23e638cba6646691ee3e52d07a98884ec8",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "a7cbeb0afba6af1a32c94dc9001800a210af2c5c729f1c8cef03c0704eb9e174"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "source",
+      "label": "source-h256-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.40c133c55fcd966dc32e7268709f7f39/kernel.cubin",
+        "artifact_sha256": "e94f36147cb1ea59adeebd51fc747319b39e8c43ded72dd9bc694035ecc14f30",
+        "artifact_size_bytes": 30344,
+        "instruction_count": 1352,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "9e858b2fd098847a9bb699031e3a033aba27f9c29519678b09597dcce123e1c8"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.8ef6f3c649faff3fa053d9773b9a962a/kernel.cubin",
+        "artifact_sha256": "229da3608af2bf348286523acba4e49773d56891e7241040d0ad0a7c87226781",
+        "artifact_size_bytes": 30856,
+        "instruction_count": 1384,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 76,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "233e66a6c071ac3acaec1f8d99858242c1be3b41235611b2cbb9e277c58f7e61"
+      },
+      "resources_exact": false,
+      "sass_exact": false,
+      "verdict": "expected_bounded_lookup_change"
+    },
+    {
+      "family": "combine",
+      "label": "return-h256-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.474d7ea83a82fcc0a5e02bfc5e76bc49/kernel.cubin",
+        "artifact_sha256": "4a36a030d4f04248e68aca776d74357f9c58efd657586966c927517b148c140d",
+        "artifact_size_bytes": 11112,
+        "instruction_count": 360,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 55,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "75e487ff4b60a291b4fb54ae5efb1c44825cd265b9201ad146ba39b7dd5950b3"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.474d7ea83a82fcc0a5e02bfc5e76bc49/kernel.cubin",
+        "artifact_sha256": "4a36a030d4f04248e68aca776d74357f9c58efd657586966c927517b148c140d",
+        "artifact_size_bytes": 11112,
+        "instruction_count": 360,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 55,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "75e487ff4b60a291b4fb54ae5efb1c44825cd265b9201ad146ba39b7dd5950b3"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "count",
+      "label": "return-h256-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0de9583114b44c48723fbc52bf602d40/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0efab7ebd7fe56258cddb12bebbcc5c1/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "barrier",
+      "label": "return-h256-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "4935ab85538e6c3fe04acc6497711618d38f96c0b299da0666730c157a7962ce",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "228af8e6e3b4d2337de6b974f42de946472ac58e32333fbf806784a237476100",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "plan",
+      "label": "return-h256-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.6b432a6b0c5e3485749989567ba104a5/kernel.cubin",
+        "artifact_sha256": "080d5466f7218be7914c36b46e31d342d7a6664088cd95ccefaff0bec6b4e629",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "f1f9af6e4a941d433bc0641373f3317d38fa4ef4474d6947dad18d34dbdf0925"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.486a56e5efda4a2d88b999310b9e6044/kernel.cubin",
+        "artifact_sha256": "e28700d6b825be71d61cc22c5c511bd5d7d3aaf24d402679d0a1a799c0c8ec73",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "fff6a6e9244e8d6c1139fceaea771a615beb8d771275caf0ee4a162e4a951c44"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "diagnostic_line_immediate_only"
+    },
+    {
+      "family": "prefix",
+      "label": "return-h256-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.257e6bf1f674e5bb2d1e189f885af90a/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.2de365ea2b1b13781ca19e9baf152b22/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "return",
+      "label": "return-h256-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.4cec3b861f36b90edb1b0207a3359695/kernel.cubin",
+        "artifact_sha256": "012e3ae2710fc30806d0155697008e01456ba61070eff061d343dc6690db8066",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "a7cbeb0afba6af1a32c94dc9001800a210af2c5c729f1c8cef03c0704eb9e174"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.46d74f8ff1b12e4fd7ae7371733e484d/kernel.cubin",
+        "artifact_sha256": "19a295e3d561a0237caf6cc52a2b9d428b5c618ebf387d45d43334ccb6b28708",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "a7cbeb0afba6af1a32c94dc9001800a210af2c5c729f1c8cef03c0704eb9e174"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "source",
+      "label": "return-h256-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.40c133c55fcd966dc32e7268709f7f39/kernel.cubin",
+        "artifact_sha256": "e902214371ea5fad5cd2b6eac13b871c04010ec735bea5333c8621b20330f83b",
+        "artifact_size_bytes": 30344,
+        "instruction_count": 1352,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "9e858b2fd098847a9bb699031e3a033aba27f9c29519678b09597dcce123e1c8"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.8ef6f3c649faff3fa053d9773b9a962a/kernel.cubin",
+        "artifact_sha256": "f825692f9841a1a99428286dba82cb2bbc3786102a4c9228896c5b4e7b62eb4d",
+        "artifact_size_bytes": 30856,
+        "instruction_count": 1384,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 76,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "233e66a6c071ac3acaec1f8d99858242c1be3b41235611b2cbb9e277c58f7e61"
+      },
+      "resources_exact": false,
+      "sass_exact": false,
+      "verdict": "expected_bounded_lookup_change"
+    },
+    {
+      "family": "combine",
+      "label": "source-h7168-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.12877a7c1814387f7cc4554bc29944f3/kernel.cubin",
+        "artifact_sha256": "5f49e3fb1d0ec237d286a392b7ea72a7468c040b70278ecc6b43957e5ed41152",
+        "artifact_size_bytes": 19688,
+        "instruction_count": 896,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 124,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "e0c9f05c920f3510574d4a00b61a82f5c83617cd7bb59296f8ddeaf3d5bf6d6d"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.12877a7c1814387f7cc4554bc29944f3/kernel.cubin",
+        "artifact_sha256": "5f49e3fb1d0ec237d286a392b7ea72a7468c040b70278ecc6b43957e5ed41152",
+        "artifact_size_bytes": 19688,
+        "instruction_count": 896,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 124,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "e0c9f05c920f3510574d4a00b61a82f5c83617cd7bb59296f8ddeaf3d5bf6d6d"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "count",
+      "label": "source-h7168-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0de9583114b44c48723fbc52bf602d40/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0efab7ebd7fe56258cddb12bebbcc5c1/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "barrier",
+      "label": "source-h7168-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "e0cd667f325d19ddff6caeefcfef3163366d25ebb3049c05dee4c12cc1dc1b34",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "7faa858f836e6bd873f71e6b5b551c6b4d942610b353e4f7c7620dd456fb129f",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "plan",
+      "label": "source-h7168-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.6b432a6b0c5e3485749989567ba104a5/kernel.cubin",
+        "artifact_sha256": "080d5466f7218be7914c36b46e31d342d7a6664088cd95ccefaff0bec6b4e629",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "f1f9af6e4a941d433bc0641373f3317d38fa4ef4474d6947dad18d34dbdf0925"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.486a56e5efda4a2d88b999310b9e6044/kernel.cubin",
+        "artifact_sha256": "e28700d6b825be71d61cc22c5c511bd5d7d3aaf24d402679d0a1a799c0c8ec73",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "fff6a6e9244e8d6c1139fceaea771a615beb8d771275caf0ee4a162e4a951c44"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "diagnostic_line_immediate_only"
+    },
+    {
+      "family": "prefix",
+      "label": "source-h7168-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.257e6bf1f674e5bb2d1e189f885af90a/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.2de365ea2b1b13781ca19e9baf152b22/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "return",
+      "label": "source-h7168-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.eb91875472c30d216035bf652d287f00/kernel.cubin",
+        "artifact_sha256": "c32e0fd5d5dd37e61721e13307fc26e4f571612a07db6dbc37b2d5e112d7ee54",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "f64ff164215913d393ec8d168d5a46eec55469127d33c7eb4b7dfeae01881515"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.1b2862f8ec9f978ea1204e010a2cef7c/kernel.cubin",
+        "artifact_sha256": "ed4cac3ed619a8121ede6a91e3124e1d561c5b6d84b241fe33c613128be56520",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "f64ff164215913d393ec8d168d5a46eec55469127d33c7eb4b7dfeae01881515"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "source",
+      "label": "source-h7168-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.b17d2301b54fc9a03920bce550f97cf2/kernel.cubin",
+        "artifact_sha256": "7cbb03b6e6d50a31b7f869d0275fd6f97c985b1ff3a34dcf3f5a874dac7c61ae",
+        "artifact_size_bytes": 30344,
+        "instruction_count": 1352,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "fef19abbb99749219f4bf2d402798be96619c16e0032cbd7f7f46760ee09e73a"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.579ecf1c135f271c211a102f805826b0/kernel.cubin",
+        "artifact_sha256": "00e9b3db3d73595588d478fe36a470a4adfe95d970a24eded5ebe1dd6d21f6bb",
+        "artifact_size_bytes": 30856,
+        "instruction_count": 1384,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "9cec02f6bc5096275c02e00d310a55995f4c85df9310a899e53eb9492974ea1c"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "expected_bounded_lookup_change"
+    },
+    {
+      "family": "combine",
+      "label": "return-h7168-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.12877a7c1814387f7cc4554bc29944f3/kernel.cubin",
+        "artifact_sha256": "5f49e3fb1d0ec237d286a392b7ea72a7468c040b70278ecc6b43957e5ed41152",
+        "artifact_size_bytes": 19688,
+        "instruction_count": 896,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 124,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "e0c9f05c920f3510574d4a00b61a82f5c83617cd7bb59296f8ddeaf3d5bf6d6d"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.12877a7c1814387f7cc4554bc29944f3/kernel.cubin",
+        "artifact_sha256": "5f49e3fb1d0ec237d286a392b7ea72a7468c040b70278ecc6b43957e5ed41152",
+        "artifact_size_bytes": 19688,
+        "instruction_count": 896,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 124,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "e0c9f05c920f3510574d4a00b61a82f5c83617cd7bb59296f8ddeaf3d5bf6d6d"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "count",
+      "label": "return-h7168-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0de9583114b44c48723fbc52bf602d40/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0efab7ebd7fe56258cddb12bebbcc5c1/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "barrier",
+      "label": "return-h7168-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "b136e7d70db05cd3b10ec3e73a8e40693cad42b484fa2a5561d8e2c2777aab6f",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "f536bcb8ada48c51222f56c88392c0a1bfb977f9d4f30d2ab17652d03efca351",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "plan",
+      "label": "return-h7168-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.6b432a6b0c5e3485749989567ba104a5/kernel.cubin",
+        "artifact_sha256": "080d5466f7218be7914c36b46e31d342d7a6664088cd95ccefaff0bec6b4e629",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "f1f9af6e4a941d433bc0641373f3317d38fa4ef4474d6947dad18d34dbdf0925"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.486a56e5efda4a2d88b999310b9e6044/kernel.cubin",
+        "artifact_sha256": "e28700d6b825be71d61cc22c5c511bd5d7d3aaf24d402679d0a1a799c0c8ec73",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "fff6a6e9244e8d6c1139fceaea771a615beb8d771275caf0ee4a162e4a951c44"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "diagnostic_line_immediate_only"
+    },
+    {
+      "family": "prefix",
+      "label": "return-h7168-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.257e6bf1f674e5bb2d1e189f885af90a/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.2de365ea2b1b13781ca19e9baf152b22/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "return",
+      "label": "return-h7168-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.eb91875472c30d216035bf652d287f00/kernel.cubin",
+        "artifact_sha256": "244fc49ae9d60f4b053886b1bf938af9c2f02c61ec545c3f2616e3e0aeaecc90",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "f64ff164215913d393ec8d168d5a46eec55469127d33c7eb4b7dfeae01881515"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.1b2862f8ec9f978ea1204e010a2cef7c/kernel.cubin",
+        "artifact_sha256": "8255361b7b3f9a80c1ea6f8be839f88b8a57a8a5a1e880c49eeeb42265073c49",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "f64ff164215913d393ec8d168d5a46eec55469127d33c7eb4b7dfeae01881515"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "source",
+      "label": "return-h7168-r1",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.b17d2301b54fc9a03920bce550f97cf2/kernel.cubin",
+        "artifact_sha256": "6d199c36e09bd3e65897d900b0dac766a59c66fa7b373bec8dbc296ce6091361",
+        "artifact_size_bytes": 30344,
+        "instruction_count": 1352,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "fef19abbb99749219f4bf2d402798be96619c16e0032cbd7f7f46760ee09e73a"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.579ecf1c135f271c211a102f805826b0/kernel.cubin",
+        "artifact_sha256": "23e5bc6169ff9e7ca840826ad2d44e41e710dafd4146c33b11b14dd39349f228",
+        "artifact_size_bytes": 30856,
+        "instruction_count": 1384,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "9cec02f6bc5096275c02e00d310a55995f4c85df9310a899e53eb9492974ea1c"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "expected_bounded_lookup_change"
+    },
+    {
+      "family": "combine",
+      "label": "source-h256-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.474d7ea83a82fcc0a5e02bfc5e76bc49/kernel.cubin",
+        "artifact_sha256": "4a36a030d4f04248e68aca776d74357f9c58efd657586966c927517b148c140d",
+        "artifact_size_bytes": 11112,
+        "instruction_count": 360,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 55,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "75e487ff4b60a291b4fb54ae5efb1c44825cd265b9201ad146ba39b7dd5950b3"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.474d7ea83a82fcc0a5e02bfc5e76bc49/kernel.cubin",
+        "artifact_sha256": "4a36a030d4f04248e68aca776d74357f9c58efd657586966c927517b148c140d",
+        "artifact_size_bytes": 11112,
+        "instruction_count": 360,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 55,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "75e487ff4b60a291b4fb54ae5efb1c44825cd265b9201ad146ba39b7dd5950b3"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "count",
+      "label": "source-h256-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0de9583114b44c48723fbc52bf602d40/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0efab7ebd7fe56258cddb12bebbcc5c1/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "barrier",
+      "label": "source-h256-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "b63f257432e1a7e47e4c11227dcfda46d5399bf4a6245e5e60f8f37143477c6d",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "6efbfefae95bb09638a72669c107c0f37957462a8a43bfd17146525ff2e5a928",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "plan",
+      "label": "source-h256-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.6b432a6b0c5e3485749989567ba104a5/kernel.cubin",
+        "artifact_sha256": "080d5466f7218be7914c36b46e31d342d7a6664088cd95ccefaff0bec6b4e629",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "f1f9af6e4a941d433bc0641373f3317d38fa4ef4474d6947dad18d34dbdf0925"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.486a56e5efda4a2d88b999310b9e6044/kernel.cubin",
+        "artifact_sha256": "e28700d6b825be71d61cc22c5c511bd5d7d3aaf24d402679d0a1a799c0c8ec73",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "fff6a6e9244e8d6c1139fceaea771a615beb8d771275caf0ee4a162e4a951c44"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "diagnostic_line_immediate_only"
+    },
+    {
+      "family": "prefix",
+      "label": "source-h256-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.257e6bf1f674e5bb2d1e189f885af90a/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.2de365ea2b1b13781ca19e9baf152b22/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "return",
+      "label": "source-h256-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.4cec3b861f36b90edb1b0207a3359695/kernel.cubin",
+        "artifact_sha256": "81383a954bc8ca49b8f153883d334455713dd47624c07fba554c06e57b52672f",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "a7cbeb0afba6af1a32c94dc9001800a210af2c5c729f1c8cef03c0704eb9e174"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.46d74f8ff1b12e4fd7ae7371733e484d/kernel.cubin",
+        "artifact_sha256": "f78ba074952411a4d8847724285f1aa3556f8229e47e2d8eba679e56cc2c54d8",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "a7cbeb0afba6af1a32c94dc9001800a210af2c5c729f1c8cef03c0704eb9e174"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "source",
+      "label": "source-h256-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.40c133c55fcd966dc32e7268709f7f39/kernel.cubin",
+        "artifact_sha256": "7fd95e21a0ce1ef9d56fd45cb7c9d746def60ffdbe9da1e3d3f223669e330e7a",
+        "artifact_size_bytes": 30344,
+        "instruction_count": 1352,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "9e858b2fd098847a9bb699031e3a033aba27f9c29519678b09597dcce123e1c8"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.8ef6f3c649faff3fa053d9773b9a962a/kernel.cubin",
+        "artifact_sha256": "984575ad687b74839a6471a227ac92f665c07c83556c77560db0743126e01ae9",
+        "artifact_size_bytes": 30856,
+        "instruction_count": 1384,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 76,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "233e66a6c071ac3acaec1f8d99858242c1be3b41235611b2cbb9e277c58f7e61"
+      },
+      "resources_exact": false,
+      "sass_exact": false,
+      "verdict": "expected_bounded_lookup_change"
+    },
+    {
+      "family": "combine",
+      "label": "return-h256-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.474d7ea83a82fcc0a5e02bfc5e76bc49/kernel.cubin",
+        "artifact_sha256": "4a36a030d4f04248e68aca776d74357f9c58efd657586966c927517b148c140d",
+        "artifact_size_bytes": 11112,
+        "instruction_count": 360,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 55,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "75e487ff4b60a291b4fb54ae5efb1c44825cd265b9201ad146ba39b7dd5950b3"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.474d7ea83a82fcc0a5e02bfc5e76bc49/kernel.cubin",
+        "artifact_sha256": "4a36a030d4f04248e68aca776d74357f9c58efd657586966c927517b148c140d",
+        "artifact_size_bytes": 11112,
+        "instruction_count": 360,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 55,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "75e487ff4b60a291b4fb54ae5efb1c44825cd265b9201ad146ba39b7dd5950b3"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "count",
+      "label": "return-h256-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0de9583114b44c48723fbc52bf602d40/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0efab7ebd7fe56258cddb12bebbcc5c1/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "barrier",
+      "label": "return-h256-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "ec080267694da5e74a25dbee5c288cb1aa6b27b7cb8e8de2893bc9b8e9d5c3f1",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "62e1c27cc200dbf5bba1623e6daebdfbb0a85d3f8e69b5f4e85820d85fbf3bf0",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "plan",
+      "label": "return-h256-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.6b432a6b0c5e3485749989567ba104a5/kernel.cubin",
+        "artifact_sha256": "080d5466f7218be7914c36b46e31d342d7a6664088cd95ccefaff0bec6b4e629",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "f1f9af6e4a941d433bc0641373f3317d38fa4ef4474d6947dad18d34dbdf0925"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.486a56e5efda4a2d88b999310b9e6044/kernel.cubin",
+        "artifact_sha256": "e28700d6b825be71d61cc22c5c511bd5d7d3aaf24d402679d0a1a799c0c8ec73",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "fff6a6e9244e8d6c1139fceaea771a615beb8d771275caf0ee4a162e4a951c44"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "diagnostic_line_immediate_only"
+    },
+    {
+      "family": "prefix",
+      "label": "return-h256-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.257e6bf1f674e5bb2d1e189f885af90a/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.2de365ea2b1b13781ca19e9baf152b22/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "return",
+      "label": "return-h256-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.4cec3b861f36b90edb1b0207a3359695/kernel.cubin",
+        "artifact_sha256": "dd79b4e1ebc52f34023023200bb8e7e59cf110a7a37af4803377a1c4041e98bd",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "a7cbeb0afba6af1a32c94dc9001800a210af2c5c729f1c8cef03c0704eb9e174"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.46d74f8ff1b12e4fd7ae7371733e484d/kernel.cubin",
+        "artifact_sha256": "c236d9e0b7c1c934ab7bab5e27807fb952a553436a619c04faf8bd53597f7660",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "a7cbeb0afba6af1a32c94dc9001800a210af2c5c729f1c8cef03c0704eb9e174"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "source",
+      "label": "return-h256-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.40c133c55fcd966dc32e7268709f7f39/kernel.cubin",
+        "artifact_sha256": "bde1b418a8516b5cd75070c22e7faf560010c4071e9eb180f0504d3f0bcc50e1",
+        "artifact_size_bytes": 30344,
+        "instruction_count": 1352,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "9e858b2fd098847a9bb699031e3a033aba27f9c29519678b09597dcce123e1c8"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.8ef6f3c649faff3fa053d9773b9a962a/kernel.cubin",
+        "artifact_sha256": "0d5c3c917b715202ab517a0fc9da93836760b3699b9890bee1bcda38a04e26b1",
+        "artifact_size_bytes": 30856,
+        "instruction_count": 1384,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 76,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "233e66a6c071ac3acaec1f8d99858242c1be3b41235611b2cbb9e277c58f7e61"
+      },
+      "resources_exact": false,
+      "sass_exact": false,
+      "verdict": "expected_bounded_lookup_change"
+    },
+    {
+      "family": "combine",
+      "label": "source-h7168-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.12877a7c1814387f7cc4554bc29944f3/kernel.cubin",
+        "artifact_sha256": "5f49e3fb1d0ec237d286a392b7ea72a7468c040b70278ecc6b43957e5ed41152",
+        "artifact_size_bytes": 19688,
+        "instruction_count": 896,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 124,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "e0c9f05c920f3510574d4a00b61a82f5c83617cd7bb59296f8ddeaf3d5bf6d6d"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.12877a7c1814387f7cc4554bc29944f3/kernel.cubin",
+        "artifact_sha256": "5f49e3fb1d0ec237d286a392b7ea72a7468c040b70278ecc6b43957e5ed41152",
+        "artifact_size_bytes": 19688,
+        "instruction_count": 896,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 124,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "e0c9f05c920f3510574d4a00b61a82f5c83617cd7bb59296f8ddeaf3d5bf6d6d"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "count",
+      "label": "source-h7168-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0de9583114b44c48723fbc52bf602d40/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0efab7ebd7fe56258cddb12bebbcc5c1/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "barrier",
+      "label": "source-h7168-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "2e6fffc14b7ed17f954a81757c6475b33265bd3457bfb895e29840452b12a2af",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "20a79ccf8a8dda6a79cf9b2654a54ed45bbe64904469f65572885a3eb3531020",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "plan",
+      "label": "source-h7168-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.6b432a6b0c5e3485749989567ba104a5/kernel.cubin",
+        "artifact_sha256": "080d5466f7218be7914c36b46e31d342d7a6664088cd95ccefaff0bec6b4e629",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "f1f9af6e4a941d433bc0641373f3317d38fa4ef4474d6947dad18d34dbdf0925"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.486a56e5efda4a2d88b999310b9e6044/kernel.cubin",
+        "artifact_sha256": "e28700d6b825be71d61cc22c5c511bd5d7d3aaf24d402679d0a1a799c0c8ec73",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "fff6a6e9244e8d6c1139fceaea771a615beb8d771275caf0ee4a162e4a951c44"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "diagnostic_line_immediate_only"
+    },
+    {
+      "family": "prefix",
+      "label": "source-h7168-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.257e6bf1f674e5bb2d1e189f885af90a/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.2de365ea2b1b13781ca19e9baf152b22/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "return",
+      "label": "source-h7168-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.eb91875472c30d216035bf652d287f00/kernel.cubin",
+        "artifact_sha256": "605848be8cd9576a55760dc361fe907fa3ec5dece19a9ac8a98075556aa1e475",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "f64ff164215913d393ec8d168d5a46eec55469127d33c7eb4b7dfeae01881515"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.1b2862f8ec9f978ea1204e010a2cef7c/kernel.cubin",
+        "artifact_sha256": "b6f34c82498f44facde7d2bcc5f615270610187164ab314e13617ed7d4e53cfe",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "f64ff164215913d393ec8d168d5a46eec55469127d33c7eb4b7dfeae01881515"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "source",
+      "label": "source-h7168-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.b17d2301b54fc9a03920bce550f97cf2/kernel.cubin",
+        "artifact_sha256": "10fd14b08152426438f7d4939324b39c20c919c6aed3e762b84503fafddc1782",
+        "artifact_size_bytes": 30344,
+        "instruction_count": 1352,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "fef19abbb99749219f4bf2d402798be96619c16e0032cbd7f7f46760ee09e73a"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.579ecf1c135f271c211a102f805826b0/kernel.cubin",
+        "artifact_sha256": "958a37c26ae9f06e5b06f33d0b5b3d0bf76c71e173b2f18bb8d06477310d5f26",
+        "artifact_size_bytes": 30856,
+        "instruction_count": 1384,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "9cec02f6bc5096275c02e00d310a55995f4c85df9310a899e53eb9492974ea1c"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "expected_bounded_lookup_change"
+    },
+    {
+      "family": "combine",
+      "label": "return-h7168-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.12877a7c1814387f7cc4554bc29944f3/kernel.cubin",
+        "artifact_sha256": "5f49e3fb1d0ec237d286a392b7ea72a7468c040b70278ecc6b43957e5ed41152",
+        "artifact_size_bytes": 19688,
+        "instruction_count": 896,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 124,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "e0c9f05c920f3510574d4a00b61a82f5c83617cd7bb59296f8ddeaf3d5bf6d6d"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.12877a7c1814387f7cc4554bc29944f3/kernel.cubin",
+        "artifact_sha256": "5f49e3fb1d0ec237d286a392b7ea72a7468c040b70278ecc6b43957e5ed41152",
+        "artifact_size_bytes": 19688,
+        "instruction_count": 896,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 124,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "e0c9f05c920f3510574d4a00b61a82f5c83617cd7bb59296f8ddeaf3d5bf6d6d"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "count",
+      "label": "return-h7168-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0de9583114b44c48723fbc52bf602d40/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0efab7ebd7fe56258cddb12bebbcc5c1/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "barrier",
+      "label": "return-h7168-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "7a9779eaf5fc6ddf7c71286cb612ae48a2e5c23093708ea05adfd22ddc2d48d9",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "dac508b93f82977209444ffb97cac9993d161dc3d551ec2742548437b9677418",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "plan",
+      "label": "return-h7168-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.6b432a6b0c5e3485749989567ba104a5/kernel.cubin",
+        "artifact_sha256": "080d5466f7218be7914c36b46e31d342d7a6664088cd95ccefaff0bec6b4e629",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "f1f9af6e4a941d433bc0641373f3317d38fa4ef4474d6947dad18d34dbdf0925"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.486a56e5efda4a2d88b999310b9e6044/kernel.cubin",
+        "artifact_sha256": "e28700d6b825be71d61cc22c5c511bd5d7d3aaf24d402679d0a1a799c0c8ec73",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "fff6a6e9244e8d6c1139fceaea771a615beb8d771275caf0ee4a162e4a951c44"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "diagnostic_line_immediate_only"
+    },
+    {
+      "family": "prefix",
+      "label": "return-h7168-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.257e6bf1f674e5bb2d1e189f885af90a/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.2de365ea2b1b13781ca19e9baf152b22/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "return",
+      "label": "return-h7168-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.eb91875472c30d216035bf652d287f00/kernel.cubin",
+        "artifact_sha256": "ae5e950f6b94f31d668380f72cfbc5f4af443f4e87ed7cc4e53e92e330ea9063",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "f64ff164215913d393ec8d168d5a46eec55469127d33c7eb4b7dfeae01881515"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.1b2862f8ec9f978ea1204e010a2cef7c/kernel.cubin",
+        "artifact_sha256": "af3460f96dc982f56620266d44aa1dc2fe771553a1cb4950d2942ee7f87af236",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "f64ff164215913d393ec8d168d5a46eec55469127d33c7eb4b7dfeae01881515"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "source",
+      "label": "return-h7168-r2",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.b17d2301b54fc9a03920bce550f97cf2/kernel.cubin",
+        "artifact_sha256": "3f78130c489c7faf6097c075618d750a5cabe777f5312cdb14f854cf08585a5d",
+        "artifact_size_bytes": 30344,
+        "instruction_count": 1352,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "fef19abbb99749219f4bf2d402798be96619c16e0032cbd7f7f46760ee09e73a"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.579ecf1c135f271c211a102f805826b0/kernel.cubin",
+        "artifact_sha256": "81f8c32422d190595b4cd4b5950de7ac31ae1b86a52a63607da2e36c311500bf",
+        "artifact_size_bytes": 30856,
+        "instruction_count": 1384,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "9cec02f6bc5096275c02e00d310a55995f4c85df9310a899e53eb9492974ea1c"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "expected_bounded_lookup_change"
+    },
+    {
+      "family": "combine",
+      "label": "source-h256-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.474d7ea83a82fcc0a5e02bfc5e76bc49/kernel.cubin",
+        "artifact_sha256": "4a36a030d4f04248e68aca776d74357f9c58efd657586966c927517b148c140d",
+        "artifact_size_bytes": 11112,
+        "instruction_count": 360,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 55,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "75e487ff4b60a291b4fb54ae5efb1c44825cd265b9201ad146ba39b7dd5950b3"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.474d7ea83a82fcc0a5e02bfc5e76bc49/kernel.cubin",
+        "artifact_sha256": "4a36a030d4f04248e68aca776d74357f9c58efd657586966c927517b148c140d",
+        "artifact_size_bytes": 11112,
+        "instruction_count": 360,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 55,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "75e487ff4b60a291b4fb54ae5efb1c44825cd265b9201ad146ba39b7dd5950b3"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "count",
+      "label": "source-h256-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0de9583114b44c48723fbc52bf602d40/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0efab7ebd7fe56258cddb12bebbcc5c1/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "barrier",
+      "label": "source-h256-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "8f339ba414d48ccf20eb0db0970c79e67d6463d2714e262b091867cb9ec17447",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "fddb8fd8057ca8beb2aaf547c5d8b5eca02fa098da45c25bf032a8b52c33ffa8",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "plan",
+      "label": "source-h256-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.6b432a6b0c5e3485749989567ba104a5/kernel.cubin",
+        "artifact_sha256": "080d5466f7218be7914c36b46e31d342d7a6664088cd95ccefaff0bec6b4e629",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "f1f9af6e4a941d433bc0641373f3317d38fa4ef4474d6947dad18d34dbdf0925"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.486a56e5efda4a2d88b999310b9e6044/kernel.cubin",
+        "artifact_sha256": "e28700d6b825be71d61cc22c5c511bd5d7d3aaf24d402679d0a1a799c0c8ec73",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "fff6a6e9244e8d6c1139fceaea771a615beb8d771275caf0ee4a162e4a951c44"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "diagnostic_line_immediate_only"
+    },
+    {
+      "family": "prefix",
+      "label": "source-h256-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.257e6bf1f674e5bb2d1e189f885af90a/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.2de365ea2b1b13781ca19e9baf152b22/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "return",
+      "label": "source-h256-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.4cec3b861f36b90edb1b0207a3359695/kernel.cubin",
+        "artifact_sha256": "c1b8b07d631b1d896d4bd161e47813fe521f8f3c983426e043b7538a36b2e296",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "a7cbeb0afba6af1a32c94dc9001800a210af2c5c729f1c8cef03c0704eb9e174"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.46d74f8ff1b12e4fd7ae7371733e484d/kernel.cubin",
+        "artifact_sha256": "85b48710bd895b4425ec076be2f4e938e8a0d6b4d473eda8fd7482431ba864cc",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "a7cbeb0afba6af1a32c94dc9001800a210af2c5c729f1c8cef03c0704eb9e174"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "source",
+      "label": "source-h256-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.40c133c55fcd966dc32e7268709f7f39/kernel.cubin",
+        "artifact_sha256": "dca06867df6ed53c8b36a4d35a053eeda2f483c856b61516ab92771cac245cd2",
+        "artifact_size_bytes": 30344,
+        "instruction_count": 1352,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "9e858b2fd098847a9bb699031e3a033aba27f9c29519678b09597dcce123e1c8"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.8ef6f3c649faff3fa053d9773b9a962a/kernel.cubin",
+        "artifact_sha256": "fd4e32c20f650001f91fffe0de7615ffce46af12b2c3aab5993a8f36d6364fe1",
+        "artifact_size_bytes": 30856,
+        "instruction_count": 1384,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 76,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "233e66a6c071ac3acaec1f8d99858242c1be3b41235611b2cbb9e277c58f7e61"
+      },
+      "resources_exact": false,
+      "sass_exact": false,
+      "verdict": "expected_bounded_lookup_change"
+    },
+    {
+      "family": "combine",
+      "label": "return-h256-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.474d7ea83a82fcc0a5e02bfc5e76bc49/kernel.cubin",
+        "artifact_sha256": "4a36a030d4f04248e68aca776d74357f9c58efd657586966c927517b148c140d",
+        "artifact_size_bytes": 11112,
+        "instruction_count": 360,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 55,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "75e487ff4b60a291b4fb54ae5efb1c44825cd265b9201ad146ba39b7dd5950b3"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.474d7ea83a82fcc0a5e02bfc5e76bc49/kernel.cubin",
+        "artifact_sha256": "4a36a030d4f04248e68aca776d74357f9c58efd657586966c927517b148c140d",
+        "artifact_size_bytes": 11112,
+        "instruction_count": 360,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 55,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "75e487ff4b60a291b4fb54ae5efb1c44825cd265b9201ad146ba39b7dd5950b3"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "count",
+      "label": "return-h256-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0de9583114b44c48723fbc52bf602d40/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0efab7ebd7fe56258cddb12bebbcc5c1/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "barrier",
+      "label": "return-h256-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "4fa085f9d3504c3d60f50e6d5a712aca66d3e1f5c50d100dbed0927723632b91",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "0fc838dae10ff16bd8e37aeaa61b69ba758e92bc66d8679877b05fde2f62330b",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "plan",
+      "label": "return-h256-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.6b432a6b0c5e3485749989567ba104a5/kernel.cubin",
+        "artifact_sha256": "080d5466f7218be7914c36b46e31d342d7a6664088cd95ccefaff0bec6b4e629",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "f1f9af6e4a941d433bc0641373f3317d38fa4ef4474d6947dad18d34dbdf0925"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.486a56e5efda4a2d88b999310b9e6044/kernel.cubin",
+        "artifact_sha256": "e28700d6b825be71d61cc22c5c511bd5d7d3aaf24d402679d0a1a799c0c8ec73",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "fff6a6e9244e8d6c1139fceaea771a615beb8d771275caf0ee4a162e4a951c44"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "diagnostic_line_immediate_only"
+    },
+    {
+      "family": "prefix",
+      "label": "return-h256-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.257e6bf1f674e5bb2d1e189f885af90a/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.2de365ea2b1b13781ca19e9baf152b22/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "return",
+      "label": "return-h256-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.4cec3b861f36b90edb1b0207a3359695/kernel.cubin",
+        "artifact_sha256": "792a129af817dbae1ae28aad20ffa76f173df51a8594dc3d51b9c5c8412dbae6",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "a7cbeb0afba6af1a32c94dc9001800a210af2c5c729f1c8cef03c0704eb9e174"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.46d74f8ff1b12e4fd7ae7371733e484d/kernel.cubin",
+        "artifact_sha256": "a41895e20c9eb89e14ccf442072609211a4f17f668e1096261b8106dc03f62b1",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "a7cbeb0afba6af1a32c94dc9001800a210af2c5c729f1c8cef03c0704eb9e174"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "source",
+      "label": "return-h256-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.40c133c55fcd966dc32e7268709f7f39/kernel.cubin",
+        "artifact_sha256": "544b35b042a5286c5f91885802e5cd081f7a9a821da1bcac4a5d362ddd49b6b8",
+        "artifact_size_bytes": 30344,
+        "instruction_count": 1352,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "9e858b2fd098847a9bb699031e3a033aba27f9c29519678b09597dcce123e1c8"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.8ef6f3c649faff3fa053d9773b9a962a/kernel.cubin",
+        "artifact_sha256": "89ce4dd526f4926c0acf150f480b79c47c9b94a78a50a474afbd58451f312944",
+        "artifact_size_bytes": 30856,
+        "instruction_count": 1384,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 76,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "233e66a6c071ac3acaec1f8d99858242c1be3b41235611b2cbb9e277c58f7e61"
+      },
+      "resources_exact": false,
+      "sass_exact": false,
+      "verdict": "expected_bounded_lookup_change"
+    },
+    {
+      "family": "combine",
+      "label": "source-h7168-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.12877a7c1814387f7cc4554bc29944f3/kernel.cubin",
+        "artifact_sha256": "5f49e3fb1d0ec237d286a392b7ea72a7468c040b70278ecc6b43957e5ed41152",
+        "artifact_size_bytes": 19688,
+        "instruction_count": 896,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 124,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "e0c9f05c920f3510574d4a00b61a82f5c83617cd7bb59296f8ddeaf3d5bf6d6d"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.12877a7c1814387f7cc4554bc29944f3/kernel.cubin",
+        "artifact_sha256": "5f49e3fb1d0ec237d286a392b7ea72a7468c040b70278ecc6b43957e5ed41152",
+        "artifact_size_bytes": 19688,
+        "instruction_count": 896,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 124,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "e0c9f05c920f3510574d4a00b61a82f5c83617cd7bb59296f8ddeaf3d5bf6d6d"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "count",
+      "label": "source-h7168-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0de9583114b44c48723fbc52bf602d40/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0efab7ebd7fe56258cddb12bebbcc5c1/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "barrier",
+      "label": "source-h7168-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "cfa4387022f40d63fa461efaec37aec1f0bdbe40c25b8fd5ca2ceb99e9c41a79",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "37b1463542a0931d8f1f6a6f128913979a68fdce54fd7f4cc5a65fb59f183c8f",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "plan",
+      "label": "source-h7168-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.6b432a6b0c5e3485749989567ba104a5/kernel.cubin",
+        "artifact_sha256": "080d5466f7218be7914c36b46e31d342d7a6664088cd95ccefaff0bec6b4e629",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "f1f9af6e4a941d433bc0641373f3317d38fa4ef4474d6947dad18d34dbdf0925"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.486a56e5efda4a2d88b999310b9e6044/kernel.cubin",
+        "artifact_sha256": "e28700d6b825be71d61cc22c5c511bd5d7d3aaf24d402679d0a1a799c0c8ec73",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "fff6a6e9244e8d6c1139fceaea771a615beb8d771275caf0ee4a162e4a951c44"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "diagnostic_line_immediate_only"
+    },
+    {
+      "family": "prefix",
+      "label": "source-h7168-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.257e6bf1f674e5bb2d1e189f885af90a/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.2de365ea2b1b13781ca19e9baf152b22/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "return",
+      "label": "source-h7168-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.eb91875472c30d216035bf652d287f00/kernel.cubin",
+        "artifact_sha256": "e23ad7dab09222ed548f704d67f8b667c358d1384410ebb9a597905400200ba3",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "f64ff164215913d393ec8d168d5a46eec55469127d33c7eb4b7dfeae01881515"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.1b2862f8ec9f978ea1204e010a2cef7c/kernel.cubin",
+        "artifact_sha256": "85e4f6ec8a220ce19154d7c5a6ec5d629c8223330992593b6ad3b435c051461e",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "f64ff164215913d393ec8d168d5a46eec55469127d33c7eb4b7dfeae01881515"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "source",
+      "label": "source-h7168-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.b17d2301b54fc9a03920bce550f97cf2/kernel.cubin",
+        "artifact_sha256": "c64e433288272b01e45c9c5b9e17b44fe89c7521e549f55d08e5ce8275b293dd",
+        "artifact_size_bytes": 30344,
+        "instruction_count": 1352,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "fef19abbb99749219f4bf2d402798be96619c16e0032cbd7f7f46760ee09e73a"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.579ecf1c135f271c211a102f805826b0/kernel.cubin",
+        "artifact_sha256": "b7ddc3f6b792ade20345b8178e3078170bfcf4a66f693136ec62efcb04149125",
+        "artifact_size_bytes": 30856,
+        "instruction_count": 1384,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "9cec02f6bc5096275c02e00d310a55995f4c85df9310a899e53eb9492974ea1c"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "expected_bounded_lookup_change"
+    },
+    {
+      "family": "combine",
+      "label": "return-h7168-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.12877a7c1814387f7cc4554bc29944f3/kernel.cubin",
+        "artifact_sha256": "5f49e3fb1d0ec237d286a392b7ea72a7468c040b70278ecc6b43957e5ed41152",
+        "artifact_size_bytes": 19688,
+        "instruction_count": 896,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 124,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "e0c9f05c920f3510574d4a00b61a82f5c83617cd7bb59296f8ddeaf3d5bf6d6d"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.combine_reduce_epilogue.12877a7c1814387f7cc4554bc29944f3/kernel.cubin",
+        "artifact_sha256": "5f49e3fb1d0ec237d286a392b7ea72a7468c040b70278ecc6b43957e5ed41152",
+        "artifact_size_bytes": 19688,
+        "instruction_count": 896,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 124,
+          "shared_bytes": 1024,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "e0c9f05c920f3510574d4a00b61a82f5c83617cd7bb59296f8ddeaf3d5bf6d6d"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "count",
+      "label": "return-h7168-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0de9583114b44c48723fbc52bf602d40/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_count_v1.0efab7ebd7fe56258cddb12bebbcc5c1/kernel.cubin",
+        "artifact_sha256": "3777516e082e4a6c31d844e282e0538bf84005826ce906be58d2105b48a4c60f",
+        "artifact_size_bytes": 8928,
+        "instruction_count": 320,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 36,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "f55415a6cc288e958e98732bcbec10c5dc0f07c5a4b172d3eaf714b7173cdd0c"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "barrier",
+      "label": "return-h7168-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "d48d9cc455e0759d6e55969bd2a7b472b0f0c9529a6abee19008c283942d1014",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_local_barrier_g8_t356400000000_v1.8bb1cccdfca19f8689d15c79f5c77f74/kernel.cubin",
+        "artifact_sha256": "c947a2e7f3f6bfe0a7a89285d48f19c02fcd425cbce0451407823781b15c9625",
+        "artifact_size_bytes": 9192,
+        "instruction_count": 200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 34,
+          "shared_bytes": 0,
+          "stack_bytes": 40
+        },
+        "sass_sha256": "b377849936214789aeac1033b49e850d30f9aebd39600091ab3ee88099b24f54"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "plan",
+      "label": "return-h7168-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.6b432a6b0c5e3485749989567ba104a5/kernel.cubin",
+        "artifact_sha256": "080d5466f7218be7914c36b46e31d342d7a6664088cd95ccefaff0bec6b4e629",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "f1f9af6e4a941d433bc0641373f3317d38fa4ef4474d6947dad18d34dbdf0925"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_plan_v1.486a56e5efda4a2d88b999310b9e6044/kernel.cubin",
+        "artifact_sha256": "e28700d6b825be71d61cc22c5c511bd5d7d3aaf24d402679d0a1a799c0c8ec73",
+        "artifact_size_bytes": 24376,
+        "instruction_count": 1200,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 56,
+          "shared_bytes": 0,
+          "stack_bytes": 24
+        },
+        "sass_sha256": "fff6a6e9244e8d6c1139fceaea771a615beb8d771275caf0ee4a162e4a951c44"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "diagnostic_line_immediate_only"
+    },
+    {
+      "family": "prefix",
+      "label": "return-h7168-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.257e6bf1f674e5bb2d1e189f885af90a/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_prefix_v1.2de365ea2b1b13781ca19e9baf152b22/kernel.cubin",
+        "artifact_sha256": "cb6f86a529516f8eaa57d91e3e2a866418ec15ff3a0a83e7ceeb4fda2eec65a3",
+        "artifact_size_bytes": 16024,
+        "instruction_count": 736,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 64,
+          "shared_bytes": 0,
+          "stack_bytes": 0
+        },
+        "sass_sha256": "bdb7e1514593596f00b83e6eb78427301f531cff071eaca071a8a9f61bc50a64"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "return",
+      "label": "return-h7168-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.eb91875472c30d216035bf652d287f00/kernel.cubin",
+        "artifact_sha256": "34e255642b42e60073a1266ea07bc02773c7dced4df6150e965ee19cb8fdf28f",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "f64ff164215913d393ec8d168d5a46eec55469127d33c7eb4b7dfeae01881515"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_return_unshuffle.1b2862f8ec9f978ea1204e010a2cef7c/kernel.cubin",
+        "artifact_sha256": "d8ed5081d42f37fb9a3231fe5972aa7a08676d07b0ca29586064c9a78b08ff50",
+        "artifact_size_bytes": 28232,
+        "instruction_count": 1256,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 60,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "f64ff164215913d393ec8d168d5a46eec55469127d33c7eb4b7dfeae01881515"
+      },
+      "resources_exact": true,
+      "sass_exact": true,
+      "verdict": "exact_sass_and_resources"
+    },
+    {
+      "family": "source",
+      "label": "return-h7168-r3",
+      "o077": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.b17d2301b54fc9a03920bce550f97cf2/kernel.cubin",
+        "artifact_sha256": "c5c653fe2e8839a5b7b934ead5d4fe9e1459b104c19eeaaecfdceb7f767f6d79",
+        "artifact_size_bytes": 30344,
+        "instruction_count": 1352,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "fef19abbb99749219f4bf2d402798be96619c16e0032cbd7f7f46760ee09e73a"
+      },
+      "o078": {
+        "artifact_relative_path": "kernel.rail_balance_hybrid_source_shuffle.579ecf1c135f271c211a102f805826b0/kernel.cubin",
+        "artifact_sha256": "3d83043650a3cc48275771aebafb5388d2ea287be5924ed6f99095e1ac9f1281",
+        "artifact_size_bytes": 30856,
+        "instruction_count": 1384,
+        "resources": {
+          "local_bytes": 0,
+          "registers": 74,
+          "shared_bytes": 1024,
+          "stack_bytes": 72
+        },
+        "sass_sha256": "9cec02f6bc5096275c02e00d310a55995f4c85df9310a899e53eb9492974ea1c"
+      },
+      "resources_exact": true,
+      "sass_exact": false,
+      "verdict": "expected_bounded_lookup_change"
+    }
+  ],
+  "purpose": "Persistent audit index for the O077/O078 matched JIT cubin comparison; raw JIT roots are temporary and are not repository artifacts.",
+  "schema_version": 1,
+  "tool": {
+    "instruction_count_definition": "Count of SASS stdout lines beginning with a hexadecimal instruction address comment.",
+    "path": "/usr/local/cuda/bin/cuobjdump",
+    "resource_command": "cuobjdump --dump-resource-usage <kernel.cubin>",
+    "sass_command": "cuobjdump --dump-sass <kernel.cubin>",
+    "sass_hash_definition": "SHA256 over exact cuobjdump --dump-sass stdout bytes; no normalization.",
+    "version_output": [
+      "cuobjdump: NVIDIA (R) fat binary listing tool",
+      "Copyright (c) 2005-2025 NVIDIA Corporation",
+      "Built on Fri_Jan__3_19:19:51_PST_2025",
+      "Cuda compilation tools, release 12.8, V12.8.55",
+      "Build cuda_12.8.r12.8/compiler.35351055_0"
+    ]
+  }
+}

@@ -1,0 +1,377 @@
+# Rail Balance Session Handoff
+
+Last updated: 2026-07-26 UTC
+Branch: `feat/rail-balance-prototype`
+Repository: `/home/chen/workspace/source_code/DeepEP`
+
+## Safe pause state
+
+- H6 constructor consensus and the public one-shot force lifecycle are
+  implemented, independently audited, and split into production/test commits;
+  the real EP8 constructor/public D=1 watchdog also passes. C080-G final-tree
+  compatibility and focused sanitizer closure now pass. There is no unfinished
+  local Hybrid integration slice or half-written host abstraction.
+- C000 through C070 remain complete for the agreed single-node PoC scope.
+- C090 exhaustive local correctness is PASS. The final additions are three
+  named route distributions plus one g812--g814 true-EP8 corrupt-p/delayed-
+  rank/recovery case; no local correctness or sanitizer gap remains.
+- C080-A/B/C/D are PASS. C080-D now includes corrupt/missing world-plan
+  pre-B0 abort plus same-buffer next-generation recovery; C080-C has the
+  fixed-tensor WORLD transaction, public ticket, and truthful D1 watchdog.
+- C080-E/F isolated force Hybrid dispatch/combine codegen are complete. Six
+  force/legacy combine pairs have identical REG/STACK/SHARED/LOCAL/spill
+  resources except the expected eight-byte constant pointer argument.
+- Recent checkpoints include `f895eff` (O077 mixed parent), `9997546`/`b1fd199`/
+  `32b9cfd` (O078 test/production/fault slices) and `560f55c` (O078 functional
+  archive).  D094-D095 retain the rejected timeout-confounded collection, the
+  exact O077-identity-matched B side, source Nsys, device-6 NCU and the tracked
+  84-pair SASS/cubin-resource audit manifest.  O078 is
+  accepted for the local checked adapter; C100 remains open only for transfer-
+  matrix and compute-interference evidence, not another resolver redesign.
+- O079 has a functionality-validated transfer-matrix fixture/report-
+  instrumentation slice.  It adds named C100 fan-out, fan-in, mesh, rot1 and
+  rot4 H256/H7168 fixtures without touching production kernels, fixes the
+  benchmark's source/return logical-byte scope by recording the full
+  owner-to-egress matrix plus outgoing and incoming sums, and passes true
+  8-GPU LSA source and return checks for all ten named matrix cases.  These
+  are functionality gates only, not performance evidence.
+- O080 adds a default-off compute-interference diagnostic mode to the existing
+  C100 benchmark: `none|compute-only|concurrent`.  It uses a fixed H7168 BF16
+  GEMM on an independent stream, schema v4, baseline ineligibility for
+  diagnostic modes, and compute-only logical moved bytes equal to zero.  Source
+  compute-only, source concurrent, return concurrent, default `none` source,
+  parser, selected-case and schema smokes pass.  No O080 performance result is
+  accepted yet.
+- C105 now includes `tests/elastic/run_rail_balance_hybrid_multinode.py`, a
+  truthful D>1 public Hybrid off/force runner.  It cross-checks Git, extension,
+  topology and launch configuration across ranks; compares dispatch/combine
+  with the official references; validates two consecutive capacity rejections;
+  restores the validation-only force capability; and writes one stable JSON
+  result.  The local contract is 23/23.  The runner has not executed here
+  because this environment has no truthful D>1 Rail/Gin topology.
+- C105 build/codegen preparation is one command through
+  `tests/elastic/run_rail_balance_build_warmup.py`.  Clean commit `a4a97ab`
+  rebuilt the in-tree extension, verified its checkout identity and disabled
+  capability bits, then emitted one representative D2xG8/H7168/K8 force/legacy
+  dispatch and combine pair into a fresh hashed cache.  This is
+  `HYBRID_CODEGEN_WARMUP_ONLY`, not the exact full runtime warmup.
+- Both capability bits remain false and no result claims real Gin/RDMA
+  behavior. The local activation evidence is complete, but the public methods
+  deliberately remain unreachable through a normal force construction until a
+  truthful D>1 Rail/Gin gate passes.
+- Resume from the working tree and the newest entries in `DEVELOPMENT_LOG.md`;
+  do not restore the obsolete sidecar/descriptor/ring draft.
+
+## Immutable checkpoints
+
+- C000-C061 Git tree:
+  `35e3d8970216bee0547b40e810873a623d677c71`
+- C000-C070 Git tree, before this handoff metadata:
+  `95cee99ae5f423821ca0eb246bb82487d502d36d`
+
+These are Git tree objects created from the reviewed staged index. They preserve
+the exact file snapshots without inventing commit identity.
+
+## Latest accepted evidence
+
+- C061 H256 and H7168 fresh-cache eight-GPU 2x4 runs: PASS.
+  - 33 destination copies.
+  - Six required per-destination moves despite aggregate 17/16 balance.
+  - 72 expert contributions and 282 byte-exact global coverage records.
+- C070 H256 and H7168 capture plus two cross-call replays: PASS.
+  - Planner manifest and fingerprint inputs were poisoned and deleted before
+    replay.
+  - Replay uses owning base/expert records, descriptor, route, ready, quota,
+    and top-k only.
+  - Both replays match an independent CPU expert formula; snapshot inputs are
+    byte-immutable; status is zero; the 4 KiB guard is intact.
+- One live expert route corruption reports `RouteMismatch=4`, keeps the guard
+  intact, and exits collectively: PASS.
+- Planner 38/38, C060 compatibility, the original EP8 public path, and the
+  in-place extension build pass after C070.
+- C070 final independent review: 0 Blocker, 0 High, 1 Medium, 0 Low. The trusted
+  snapshot PoC is accepted.
+- C080-B1 fresh-cache H200 materializer: PASS.
+  - C061 remains 33 destination copies and six moves.
+  - Pcap 3 succeeds and Pcap 2 preserves the candidate with capacity status.
+  - Zero tokens, 64 random seeds, C1024/D32, signed-int64 seed, invalid routes,
+    invalid seeds, and a non-default stream pass exact CPU comparison.
+  - Each count/plan/prefix cubin exports exactly one kernel symbol.
+  - Independent audit after fixes: 0 Blocker / 0 High.
+- C080-E force dispatch codegen: four production-shaped force/legacy pairs,
+  zero spill, API 6/6, legacy goldens 4/4, independent review PASS.
+- C080-F force combine codegen: six production-shaped force/legacy pairs cover
+  all four rank-layout combinations. All are REG216/STACK96/SHARED1024/LOCAL0
+  with zero spill; force adds only 8B constant memory. Independent review is
+  0 Blocker / 0 High / 0 Medium.
+- H1 prepared adapters: root fresh-cache dispatch/combine smoke, prebuilt
+  dispatch epilogue source gate, API 6/6, legacy goldens 4/4, and independent
+  adapter review pass with Blocker/High 0/0. Public force remains false.
+- H1b raw-submit closure: source and return true eight-GPU LSA cases, three
+  adapter gates, a real header-triggered extension rebuild, API 6/6, legacy
+  goldens 4/4, and independent final review pass. A reviewed N/grid mismatch
+  was fixed by making Prepared N the sole owner; final audit is 0/0/0/0.
+- H2 force-only sizing: API 9/9, distributed layout 5/5, legacy 4/4, complete
+  runtime-argument identity, helper failure ordering, and independent audit
+  pass. Runtime receives one `legacy+arena` window; off remains field/helper
+  identical and public force remains false.
+- H3a fixed gate: one reusable 1 KiB CUDA/pinned pair, one MAX per round,
+  exact field mismatch plus deterministic error convergence, true EP8 and
+  non-default-stream evidence, and independent audit 0/0/0/0. It is not yet
+  connected to plan/dispatch.
+- The H3a EP8 command was rerun immediately before the pause on port 29951 and
+  passed. H3b later passed its final EP8 run with eighteen fixed MAX gates and
+  final audits of 0 Blocker/High/Medium.
+- H4a explicit pending states are committed at `52b165e`. After a full rebuild,
+  H3b's eighteen-gate EP8 suite (including stale abort), true 8-GPU source and
+  return LSA paths, source faults, raw adapters, combine codegen, API 9/9, and
+  legacy 4/4 all pass. Independent state audit found no blocking issue.
+- H4b owning prepare is committed at `4e48b84` with gates at `7ab382b`.
+  Production D/G/C and all round-trip runtime/tensor/raw ownership are frozen
+  before Gate1; precommit abort drains in-flight comm work before releasing
+  storage. Full build, H4b three-gate EP8 fail-close/recovery, canonical H3b
+  eighteen gates, B1/B2/vnode, API/legacy, and focused codegen pass. The local
+  machine cannot execute a truthful D>1 production prepare.
+- H4c adjacent commit is pushed at `edb1a0e` with its source gate at
+  `ba82134`. It pre-poisons ownership, submits source and force main on the
+  same stream with no intervening work, then enters DispatchLive. G8xD2/H7168
+  codegen, true EP8 H7168 source LSA, 4x2/H7168 vnode, H4b three gates, H3b
+  eighteen gates, API/legacy, build, and independent audit pass. This is not
+  a real Gin runtime result; low-level partial launch is job-fatal.
+- H5a owning finish is committed at `81ecb86` with its source gate at
+  `7bd17a4`. It preserves the native 16-item dispatch result order, owns exact
+  receive storage before the epilogue, bounds mapped int64 counters before any
+  narrowing/allocation, and performs the first safe status readback plus
+  `comm_stream` sync. Full build, H5a/H4c/H4b CPU gates, API 9/9, legacy 4/4,
+  truthful EP8 D1 fail-close/recovery, 4x2/H7168 vnode, true EP8 return LSA,
+  and G8xD2/H7168 dispatch codegen pass. Local production success remains
+  impossible at D=1; this is not Gin runtime evidence.
+- H5b private combine ownership is committed at `ffe4fd4` with its exact source
+  contract at `403e725`. Prepare is retryable before the future WORLD combine
+  gate; abort releases only the new combine owner; commit poisons once and
+  submits main combine, return-unshuffle, local barrier, and native epilogue
+  adjacently before one correctness sync. Adapter, codegen, API/legacy, build,
+  truthful D1 fail-close, and independent C++ audit pass. Public `EPHandle`
+  identity/consumption was deliberately still closed at that checkpoint.
+- H6 constructor consensus is committed at `1e0ea60` with tests at `eb6b834`.
+  One universal pre-comm gate rejects mixed mode/geometry before symmetric
+  window divergence; force reuses the same 1 KiB CUDA/pinned storage for one
+  post-sizing/pre-window gate. Constructor 9/9, API 9/9, legacy 4/4, and
+  independent Blocker0/High0 review pass.
+- H6 public lifecycle is committed at `741e126` with tests at `cbe7df2`.
+  Dispatch performs prepare/Gate1, plan/Gate2, then native commit/finish;
+  combine validates one buffer-owned shared ticket, prepares/gates, consumes
+  before commit, and returns the native three-item result. Success, shallow-
+  copy one-shot, capacity/remote rejection, retry, foreign/off misuse, prepare,
+  commit, and finish faults pass the CPU fake runtime. H3-H5 source contracts,
+  API 9/9, legacy 4/4, pycompile/diff, and final public audit pass with no
+  Blocker/High. This evidence does not execute production D>1 Gin.
+- H6 real EP8 watchdog is committed at `0597ed0`. It rejects mixed mode and a
+  rank-3 invalid force geometry before communicator creation, creates a real
+  unanimous force window, rejects public dispatch twice at the truthful D1
+  guard, and collectively destroys. It observes exactly six fixed MAX gates,
+  stable accepted-constructor storage, invocation 1→3, no live ticket, and a
+  nonterminal retryable buffer. The audit closes Blocker0/High0; production
+  capability is restored false and no payload/Gin stage executes.
+- C080-D world-plan fault closure is committed at `6377e0c`. Rank 0 corrupts
+  one prepared value and rank 1 models one missing tensor; exact tagged
+  preflight failures converge before B0, both source/world owners abort, and
+  the next generation completes the full 4x2/H256 round trip on the same
+  buffers. True EP8 and independent Blocker0/High0 review pass.
+- C080-G final-tree closure passes both default-off EP8 modes, the focused
+  CPU/source and H3-H6 contracts, 8x1 source/return, 4x2 and D>K 2x4 vnode,
+  source/world-plan faults, fresh force/legacy codegen, and the full extension
+  build. Compute Sanitizer 2025.1 reports zero errors for memcheck, synccheck,
+  initcheck, and focused racecheck on the complete D>K vnode path; racecheck
+  also reports zero hazards/warnings. Final audit is Blocker0/High0/Medium0.
+  C080 is `LOCAL_COMPLETE / MULTINODE_PENDING`; C080-H remains an environment
+  gate, and both production capability bits remain false.
+- C090 closes at `5f8eab5`. The B1 matrix is now 70 unchanged cases plus named
+  one-hot/Zipf/log-normal, all 73 exact on one GPU. A fresh-cache true-EP8
+  4x2/H256 run checks the complete corrupt-p status graph and collective abort
+  at generation 812, a rank-2 native comm-stream delay with full success at
+  813, and ordinary same-buffer recovery at 814. Full rebuild, API 9/9,
+  legacy 4/4, and final C++/protocol/exit audits pass. No CUDA/JIT kernel or
+  production hot path changed, so the accepted C080-G sanitizer evidence is
+  unchanged.
+- C100's audited harness is committed at `056ad4d`; the clean samples use
+  commit `3c54839`. Six source reports (three H256, three H7168, each 10+100)
+  pass automatic collection gates and are stored with a verified SHA256
+  manifest under `.cache/rail_balance/c100/formal/3c54839/`. They are not a
+  stable accepted baseline: H256 medians span 7.26%, H7168 medians 20.22%, and
+  one rank-4 sample reaches 2.254 ms. No Nsys/NCU or performance-path change
+  followed. The first return run was user-interrupted, exited 130 through the
+  watchdog, wrote no JSON, and left no worker/GPU process.
+- A resumed one-variable H7168 experiment at clean `4211bae` set only
+  `OMP_NUM_THREADS=1`.  Three 10+100 reports cut pooled CV from 82.84% to
+  8.34% and maximum from 2.274 ms to 218.716 us, but their medians still span
+  14.94%.  Rank 1 starts first in 299/300 samples and rank 7 last in 295/300;
+  the remaining global-span variability follows post-Gloo release skew.
+  Reports plus a verified manifest live under
+  `.cache/rail_balance/c100/stability-omp1/4211bae/`.  No Nsys/NCU or hot-path
+  change occurred in that experiment.  It led to the now-complete
+  release-skew falsification recorded in the next bullet.
+- That release-skew falsification is now complete.  The reviewed CPU-only
+  probe at `ee41415` produces three clean Gloo return medians of
+  38.693/36.319/38.028 us; rank1-first and rank7-last each dominate at least
+  98%.  Even the smallest median covers at least 59.97% of every OMP E1 start
+  skew, so the pre-registered 50%/80% criterion passes.  Verified artifacts
+  are under `.cache/rail_balance/c100/gloo-gate/ee41415/`.  Global spans remain raw, but
+  kernel work must be attributed from rank-local adapter envelopes and Nsys,
+  never by subtracting the probe median.  Source-H256 and return-H256 OMP=1
+  repeated collection are complete as raw evidence; the next bullet records
+  the subsequently completed return-H7168 group.
+- Return-H256 at clean `d05411a` has accepted reports `{r1,r3,r4}`.  Global
+  medians are 225.189/215.610/218.210 us, but r3 retains a 1.419 ms maximum;
+  this is not a stable-tail baseline.  `r2` is preserved but rejected because
+  the post-run gate detected Megatron restart7 worker PIDs 1097155--1097158.
+  Its values must never enter pooled statistics.
+- Return-H7168 at clean `57b69a9` also has accepted reports `{r1,r3,r4}`.
+  Global medians span 2.37% and rank-local medians 2.12%, but accepted maxima
+  reach 2021.557/2008.428 us.  A concurrent eight-GPU DeepEP dispatch demo
+  makes r2 permanently rejected.  All four profiler-free source/return groups
+  are now collected.  Their millisecond extremes remain unattributed, while
+  the later formal Nsys run below separately attributes its own shorter tail.
+- The clean `feaf03e` benchmark has a default-off, baseline-ineligible NVTX
+  diagnostic mode.  Final-commit default-off and NVTX-on EP8 smokes pass after
+  one separate co-tenant tester report was correctly rejected.
+- Nsys's child-owned range trigger is experimentally rejected.  Default
+  `wait=all` holds a resource-tracker zombie in the watchdog PGID;
+  `--wait=primary` fixes cleanup, but a child range still cannot start
+  collection.  The accepted topology is full-process capture plus global-time
+  filtering to `c100_nsys_window`.  A 0+1 report/SQLite pair proves all eight
+  devices are present.
+- Formal return-H7168 10+100 Nsys attribution is complete at clean `6339ee2`.
+  The report proves its own long tail is test-only B1 arrival/host launch skew,
+  not return-kernel variation; older extreme samples remain separate evidence.
+  The production-shared return kernel still has a 93.871-us median diagnostic
+  union with no simultaneous copy/barrier, 24.8% of the 378.525-us global
+  NVTX-envelope median; this is not a production critical-path percentage.
+  The exact first NCU target is
+  rank/device 6, steady iteration 26, 142.752 us, grid 256, block 32, regs 60,
+  dynamic shared memory 14,400 bytes.  No hot-path edit has begun.
+- The first exact NCU report is accepted at clean `4fe7223`.  Ten strict
+  application-replay passes produce one device-6 target and preserve two prior
+  failures (invalid output option and no-match NVTX syntax).  Basic plus plan
+  audit shows sparse utilization and 32 active versus 224 empty target channels,
+  but no dominant wait/link root cause.
+- The directed NCU report is accepted at clean `e4bd800`.  Ten further strict
+  replays preserve the exact target and prove 98.238888% no-eligible scheduler
+  cycles, 49.733468 long-scoreboard cycles per issued instruction, exact
+  12,873,728-byte NVLink TX user traffic, and only 5.730689% aggregate TX peak
+  utilization.  The precise LDG/TMA source remains unproved.  O076 permits only
+  a target-channel-distribution experiment; no other hot-path change is open.
+
+## Mandatory retained boundary
+
+The fixed WORLD consensus and uninterrupted private C++ commit sequences are
+connected to public dispatch/combine, and real EP8 covers constructor, window,
+D1 fail-close/retry, and destroy. Local regression and focused sanitizer
+closure are complete. D=1 still cannot turn the production Hybrid data path
+into a success because it has no remote destination server.
+
+Post-publication failure must continue to invalidate the force object;
+precommit abort must not destroy an older live dispatch handle. Do not weaken
+these rules merely to make a local D=1 test succeed.
+
+No current result claims real Gin/RDMA/QP/NIC behavior or a multi-node speedup.
+No C070 timing is performance evidence.
+
+## Resume instructions
+
+1. Read this file plus `CONTEXT.md`, `CHECKPOINTS.md`, the tail of
+   `DEVELOPMENT_LOG.md`, and `OPTIMIZATION_LOG.md` decisions O077-O078.  O011-
+   O012 remain the older immutable design boundary when historical context is
+   needed.
+2. Verify branch and state with `git status --short --branch`, then run both
+   `git diff --check` and `git diff --cached --check`.
+3. Do not redo C061/C070 unless the relevant code changes.
+4. Do not rerun C080-G or every historical exhaustive seed unless a relevant
+   production core changes. Its final-tree matrix and sanitizer closure pass.
+5. Keep both production capability bits false until truthful C080-H D>1
+   Rail/Gin correctness passes. D1 evidence is never a D>1 Gin success claim.
+6. C090 is complete. Do not rerun its unchanged full suites or sanitizer
+   kernels unless production device code changes.
+7. O077's complete evidence remains at `f895eff`.  Keep it as the auditable
+   mixed parent that exposed return parallelism and the source linear-scan
+   regression; do not restore its linear resolver.
+8. O078 is complete and locally accepted at code checkpoint `32b9cfd`.
+   Its formal 12-run B side is `post-32b9cfd-matched-o077`; the earlier
+   `post-32b9cfd` directory is a retained timeout-confounded failure and must
+   never be mixed into statistics.  Typical source/return, matched Nsys and
+   device-6 dynamic-instruction gates pass; tail stability does not.
+9. Preserve O078's endpoint, bounded upper-bound and final containment checks,
+   immutable-plan contract and all current fault recovery.  Do not add an O(C)
+   validation pass, TMA rewrite, queue/atomic, new workspace, block-geometry,
+   barrier, ABI, capability or default-off change without a new evidence chain.
+10. Resume at D097.  O079's Python fixture/report instrumentation is
+   functionally validated for all ten named matrix cases: G8/D9/N2048/K4/C256/
+   Pcap7168, moved=7168 fan-out, fan-in, full mesh, rot1 and rot4, each at
+   H256 and H7168.  The benchmark now records outgoing and incoming bytes
+   separately; source uses outgoing owner rows and return uses incoming
+   proxy-egress columns.  Production-kernel changes remain out of scope for
+   O079.  No O079 performance result is accepted because the run had a GPU0
+   co-tenant and the visible GPU model string was `NVIDIA L20X`.
+11. After O079, pre-register O080's default-off, same-allocation H7168
+   stage-only/compute-only/concurrent GEMM experiment.  This is now
+   implemented as `--interference-mode` in the C100 benchmark and smoke-tested
+   functionally.  Performance work still requires idle target GPUs plus Nsys
+   overlap evidence.  C105 packages the fastest real-cluster bring-up; truthful
+   D>1 Gin remains C080-H/C110.
+12. C105 has both the validation-only CPU bundle generator and the real
+   multi-node runner.  Launch
+   `tests/elastic/run_rail_balance_hybrid_multinode.py` once per node with the
+   same reachable `MASTER_ADDR`, `MASTER_PORT`, `WORLD_SIZE=<node-count>`, and
+   node-local `RANK=<node-index>`; the script itself spawns the local GPU
+   processes.  Run the balanced, two-hot, one-hot and capacity cases from one
+   clean commit and matching extension.  Do not set `EP_DISABLE_GIN`.  The next
+   `balanced` must run first with the exact final shape because only that live
+   constructor/round trip prepares the complete production cache.  Optional
+   real-route ingestion and runtime counters remain cluster-side evidence gaps,
+   not locally inferred values.
+
+13. Before the cluster run, rebuild and preflight the current checkout once
+   (never concurrently from several nodes into the same source directory):
+
+   ```text
+   /home/chen/.cache/deepep-sjlgpt/bin/python -B \
+     tests/elastic/run_rail_balance_build_warmup.py \
+     --run-id <id> --output-dir .cache/rail_balance/c105/<id> \
+     --cuda-device 0 --jobs 8 --timeout 3600
+   ```
+
+   The generated manifest must keep `real_gin_runtime=false` and
+   `full_force_runtime_cache=false`.  Distribute the resulting identical
+   extension or use the same checkout; the live runner independently checks
+   extension SHA consensus across every rank.
+
+14. C106 adds constructor-fixed planner inputs without changing the data-path
+    ABI:
+
+    ```python
+    buffer = deep_ep.ElasticBuffer(
+        ...,
+        rail_balance="force",
+        rail_balance_proxy_slots_per_rank=8192,
+        rail_balance_policy="active",       # all | active | adaptive
+        rail_balance_threshold_percent=20,  # integer [0, 3100]
+    )
+    ```
+
+    `active` means only originally nonempty rails for each destination carry
+    that destination's payload. `adaptive` may add inactive rails while the
+    current peak exceeds the next-rail target by more than the threshold.
+    Threshold zero preserves the old exact `all` behavior. Compare `all/0`, `active/0`,
+    `active/20`, and `adaptive/20`; do not interpret local vnode timing as Gin.
+
+Pinned runtime for accepted commands:
+
+```text
+/home/chen/.cache/deepep-sjlgpt/bin/python
+PYTHONPATH=$PWD/tests:$PWD
+EP_DISABLE_GIN=1
+```
+
+Use fresh `EP_JIT_CACHE_DIR` values after CUDA/include changes. Run performance
+tests only when GPUs are idle; functional tests may run under contention if
+they do not risk OOM.
