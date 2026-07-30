@@ -2205,3 +2205,23 @@ The multinode backend still compares every candidate with native DeepEP V2
 real D>1 run exports actual path counters, the report labels its path split as
 the Python endpoint-oracle expectation. No kernel tuning is accepted from
 this checkpoint.
+
+## O091 — batch adaptive moves while the old Rail remains critical
+
+Hypothesis: adaptive is dominated by an avoidable full-record-table rescan for
+every accepted third-Rail copy. The prediction was linear growth in accepted
+moves on top of each table scan, low SM/DRAM utilization, and large instruction
+count. Nsys and NCU confirmed all three: the N128 kernel was 33.749 ms, executed
+9.28M instructions, used 0.03% SM throughput and did not saturate memory.
+
+Single variable: after selecting the best `(old egress, new egress,
+destination, hop cost)`, migrate the deterministic record prefix while its
+pair/source relief remains admissible. The batch stops when the first relief
+gap closes or the old Rail drops below another hotspot, and is also bounded by
+the remaining two-hop cap and proxy capacity. Endpoint constraints, threshold,
+penalty, dense slot materialization and one-hop are unchanged.
+
+Result: N128/N512 adaptive private-API medians improve 9.658x/34.013x;
+unchanged one-hop is 1.004x/1.001x. Matched Nsys kernel time improves 9.888x
+and targeted NCU instructions fall 11.419x. Correctness and sanitizer gates
+pass. This is accepted as a planner optimization but not a multinode speedup.

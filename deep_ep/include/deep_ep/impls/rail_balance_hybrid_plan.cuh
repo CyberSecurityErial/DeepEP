@@ -463,20 +463,90 @@ void rail_balance_hop_plan_impl(
         if (best_index < 0)
             break;
 
-        const auto record = records[best_index];
-        const int owner = static_cast<int>(
-            static_cast<int64_t>(best_index) /
-            (static_cast<int64_t>(num_tokens) * num_topk));
+        const auto best_record = records[best_index];
         const int old_egress = resolutions[best_index].egress;
-        --pair_load[record.destination * num_rails + old_egress];
-        ++pair_load[record.destination * num_rails + best_egress];
-        --source_load[old_egress];
-        ++source_load[best_egress];
-        if (old_egress != owner)
-            --proxy_required[old_egress];
-        ++proxy_required[best_egress];
-        resolutions[best_index].egress = best_egress;
-        ++selected_two_hop;
+        const int pair_gap = pair_load[
+            best_record.destination * num_rails + old_egress] -
+            pair_load[best_record.destination * num_rails + best_egress];
+        const int source_gap =
+            source_load[old_egress] - source_load[best_egress];
+        int batch = min(
+            two_hop_cap - selected_two_hop,
+            proxy_capacity_per_egress - proxy_required[best_egress]);
+        // Batch only while both score dimensions improve. If one is already
+        // tied or inverted, the next copy may change the preferred candidate.
+        if (pair_gap <= 0 or source_gap <= 0) {
+            batch = 1;
+        } else {
+            batch = min(batch, pair_gap / 2 + pair_gap % 2);
+            batch = min(batch, source_gap / 2 + source_gap % 2);
+        }
+        int pair_other = 0;
+        int source_other = 0;
+        for (int rail = 0; rail < num_rails; ++rail) {
+            if (rail != old_egress) {
+                pair_other = max(
+                    pair_other,
+                    pair_load[best_record.destination * num_rails + rail]);
+                source_other = max(source_other, source_load[rail]);
+            }
+        }
+        int critical_batch = 0;
+        const int old_pair = pair_load[
+            best_record.destination * num_rails + old_egress];
+        if (old_pair >= pair_other) {
+            const int difference = old_pair - pair_other;
+            critical_batch = difference >= batch ? batch : difference + 1;
+        }
+        const int old_source = source_load[old_egress];
+        if (old_source >= source_other) {
+            const int difference = old_source - source_other;
+            critical_batch = max(
+                critical_batch, difference >= batch ? batch : difference + 1);
+        }
+        batch = min(batch, critical_batch);
+
+        // Relief and hop cost stay admissible until a gap closes or the old
+        // Rail stops being critical. Move that deterministic prefix at once.
+        int migrated = 0;
+        for (int64_t index = 0; index < num_records and migrated < batch;
+             ++index) {
+            const auto record = records[index];
+            if (record.target_mask == 0 or
+                record.destination != best_record.destination or
+                resolutions[index].egress != old_egress)
+                continue;
+            const int owner = static_cast<int>(
+                index / (static_cast<int64_t>(num_tokens) * num_topk));
+            const uint32_t endpoints =
+                record.target_mask | (uint32_t{1} << owner);
+            if ((endpoints & (uint32_t{1} << old_egress)) == 0 or
+                (endpoints & (uint32_t{1} << best_egress)) != 0)
+                continue;
+            const int old_forwards = (old_egress != owner) +
+                __popc(record.target_mask &
+                       ~(uint32_t{1} << old_egress));
+            const int added_hops = 1 + __popc(record.target_mask) -
+                old_forwards;
+            if (added_hops != best_added_hops)
+                continue;
+
+            --pair_load[record.destination * num_rails + old_egress];
+            ++pair_load[record.destination * num_rails + best_egress];
+            --source_load[old_egress];
+            ++source_load[best_egress];
+            if (old_egress != owner)
+                --proxy_required[old_egress];
+            ++proxy_required[best_egress];
+            resolutions[index].egress = best_egress;
+            ++migrated;
+        }
+        if (migrated == 0) {
+            hybrid_plan_detail::report_error(
+                status, HybridPlanError::InvalidSchedule);
+            return;
+        }
+        selected_two_hop += migrated;
     }
 
     // Materialize dense channel-local slots only after two-hop selection has

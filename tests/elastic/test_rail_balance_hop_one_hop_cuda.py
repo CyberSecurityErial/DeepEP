@@ -333,6 +333,33 @@ def test_adaptive_threshold_and_cap_stop_extra_hops() -> None:
     assert capped[7].tolist() == [6, 0, 0, 2]
 
 
+def test_adaptive_batch_stops_at_the_next_hot_rail() -> None:
+    records = []
+    for owner, count in enumerate((10, 9, 0, 0)):
+        records.append(
+            tuple(
+                (_record(1, 1 << owner),) if token < count else (_UNUSED,)
+                for token in range(10)
+            )
+        )
+    tensor, outputs = _build(
+        tuple(records),
+        channels=2,
+        destinations=2,
+        capacity=40,
+        max_two_hop_percent=25,
+    )
+    _validate(
+        tensor,
+        outputs,
+        channels=2,
+        destinations=2,
+        max_two_hop_percent=25,
+    )
+    assert outputs[7][3].item() == 4
+    assert max(outputs[1][1]).item() <= 8
+
+
 def test_random_one_hop_invariants_and_determinism() -> None:
     for seed in range(128):
         rng = random.Random(seed)

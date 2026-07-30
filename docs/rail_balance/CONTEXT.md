@@ -1157,7 +1157,7 @@ Out of scope until evidence expands the project:
   vnode pack/demux specialization, and the existing destination/combine path.
   Adaptive first completes one-hop and then performs bounded, profitable
   third-Rail moves.  No expert endpoint changes.
-- Current local evidence: planner CUDA 8/8; one-hop and adaptive 4x2 round trips
+- Current local evidence: planner CUDA 9/9; one-hop and adaptive 4x2 round trips
   pass on eight H200s; API and constructor preflight are 9/9; public ticket and
   H4b/H4c source contracts pass.  Adaptive's synthetic diagonal proof moves 8
   of 16 copies under a 50% cap and returns exact BF16 values and weights.
@@ -1172,3 +1172,9 @@ Out of scope until evidence expands the project:
   than creating another distributed lifecycle. Endpoint-count manifests,
   planner/path/load fields and claim scopes are shared; real runtime path
   counters remain missing evidence until the kernel exports them.
+- HA060-A is the first profiler-accepted hop optimization. Nsys attributes
+  33.749 ms of an adaptive G8/N128/K8 diagnostic call to the single-thread
+  planner; NCU reports 9.28M instructions and no bandwidth saturation. A
+  single-variable load-gap batch reduces the same kernel to 3.413 ms and the
+  private API median 9.658x, without changing one-hop. Full evidence and
+  limitations are indexed in `HOP_AWARE_PERFORMANCE_EVIDENCE.md`.

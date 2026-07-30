@@ -6556,3 +6556,54 @@ Failures retained:
 
 Real multinode execution remains unrun on this host, capability stays false,
 and HA060 starts with profiler-free local stage timing before any kernel edit.
+
+## 2026-07-31 — HA060-A: profiler-guided adaptive batching
+
+Collected an idle-GPU environment manifest and a profiler-free private planner
+scaling probe before editing performance code. The unmodified adaptive planner
+grew from a 352.73 us median at N8 to 642.35 ms at N512; one-hop N512 was
+13.91 ms. Raw 20-sample sequences are retained in
+`/tmp/ha060-planner-baseline.json`.
+
+Nsys 2024.6.2 isolated the N128 range: the planner kernel occupied 33.749 ms of
+33.897 ms, while eleven allocation fill kernels totalled 11.1 us. NCU 2025.1
+then showed grid1/block32, one executing thread, 9.28M instructions, 0.03% SM,
+0.00% DRAM, and no branch divergence. This established the root cause before
+the kernel edit.
+
+The only code change batches equal-cost adaptive migrations until a pair/source
+load gap closes or the old Rail ceases to be critical, additionally bounded by
+remaining two-hop cap and proxy capacity. It replaces per-copy rescans without
+altering the one-hop pass or data plane. Profiler-free N128/N512 adaptive
+medians become 3.503/18.886 ms; the one-hop control is unchanged. Matched Nsys
+reports 3.413 ms and NCU reports 812,377 instructions.
+
+Validation:
+
+```text
+reference planner                          12/12 PASS
+GPU one-hop/adaptive random and boundary    9/9 PASS
+eight-GPU adaptive diagonal vnode               PASS
+compute-sanitizer memcheck                       0 errors
+compute-sanitizer initcheck                      0 errors
+git diff --check                                 PASS
+```
+
+Profiler failures retained:
+
+- NCU with `--target-processes application-only` and NVTX filtering collected
+  no kernels and warned that child-process tracking was required.
+- Retrying with `--target-processes all` still collected none because the NCU
+  push/pop include expression did not match. The accepted run uses the exact
+  kernel regex plus `--launch-skip 3 --launch-count 1`, matching the fourth
+  Nsys-labelled invocation.
+- Targeted NCU warned that kernel replay was slow and imported no source because
+  the JIT build lacked line information. The report, exact source and command
+  are retained; no source metric was fabricated.
+- The first repository benchmark NVTX name ended in `/0`; Nsys interpreted the
+  suffix as its optional range-instance selector and `--filter-nvtx` found no
+  range. Renaming the suffix to `_sample0` passed and selected exactly one
+  3.414 ms kernel. The failed report remains in the ignored artifact tree.
+
+See `HOP_AWARE_PERFORMANCE_EVIDENCE.md` for commands, numbers, artifact paths,
+limitations and the kernel dossier.
