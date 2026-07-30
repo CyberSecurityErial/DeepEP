@@ -200,3 +200,55 @@ only on a proven critical kernel. Candidate optimizations are planner
 parallelism, resolution packing, direct receive layout, source/RDMA overlap,
 segment coalescing, TMA tiles, and SM split. None is accepted solely from a
 single-kernel profiler number.
+
+## 10. One benchmark entry
+
+`tests/elastic/bench_rail_balance_hop.py` is the shared entry. The workload,
+planner configuration, path counters and Rail-load schema are identical across
+the three backends; only the executor and claim scope change.
+
+Planner-only reference:
+
+```bash
+PYTHONPATH=$PWD/tests/elastic:$PWD \
+/home/chen/.cache/deepep-sjlgpt/bin/python \
+  tests/elastic/bench_rail_balance_hop.py \
+  --backend reference --mode one_hop --case offdiag_hot \
+  --num-nodes 2 --gpus-per-node 4 --tokens-per-rank 16 \
+  --topk 1 --num-experts 16 --hidden 256 \
+  --output-json /tmp/rail-hop-reference.json
+```
+
+Eight-GPU 4x2 vnode round trip:
+
+```bash
+EP_DISABLE_GIN=1 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+PYTHONPATH=$PWD/tests/elastic:$PWD \
+/home/chen/.cache/deepep-sjlgpt/bin/python \
+  tests/elastic/bench_rail_balance_hop.py \
+  --backend vnode --mode adaptive --case diag_hot \
+  --num-nodes 2 --gpus-per-node 4 --tokens-per-rank 16 \
+  --topk 1 --num-experts 16 --hidden 256 \
+  --max-two-hop-percent 50 --hop-penalty-percent 0 \
+  --output-json /tmp/rail-hop-vnode.json
+```
+
+Real multinode execution uses the same entry under `torchrun`; it delegates to
+the existing strict profiler-free A/B runner and always compares the candidate
+against native DeepEP V2 `off`:
+
+```bash
+torchrun --nnodes=2 --nproc-per-node=4 \
+  --node-rank=$NODE_RANK --master-addr=$MASTER_ADDR --master-port=$MASTER_PORT \
+  tests/elastic/bench_rail_balance_hop.py \
+  --backend multinode --mode one_hop --case offdiag_hot \
+  --num-nodes 2 --gpus-per-node 4 --tokens-per-rank 4096 \
+  --topk 4 --num-experts 128 --hidden 7168 \
+  --warmup-iters 10 --steady-iters 100 \
+  --output-json /shared/rail-hop-multinode.json
+```
+
+The result marks `planner_only`, `single_node_diagnostic`, or
+`real_multinode`. Reference and vnode output are never network-speed claims.
+Endpoint-count traces use the JSON files under
+`tests/elastic/workloads/rail_balance/` with `--case trace --workload-json`.

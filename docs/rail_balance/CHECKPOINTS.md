@@ -35,7 +35,7 @@ Checkpoint states: `PLANNED`, `IN_PROGRESS`, `PASS`, `FAIL`, `BLOCKED`,
 | HA020 | Python one-hop/adaptive oracle and invariants | PASS | C0-C7 reference tests, exhaustive/random properties, deterministic tie-breaking, threshold and two-hop cap pass. |
 | HA030 | Endpoint one-hop GPU plan and vnode round trip | PASS | One GPU record/resolution ABI selects only endpoint Rails; direct, destination-forward and source-forward complete the 4x2 eight-H200 dispatch/combine inverse with exact output. |
 | HA040 | Bounded selective two-hop local closure | PASS | Adaptive starts from one-hop, moves 8/16 diagonal copies at a 50% cap, passes 64 randomized deterministic GPU plans and the same eight-H200 vnode round trip. Capability remains false. |
-| HA050 | Unified reference/vnode/multinode benchmark and JSON | IN_PROGRESS | Reuse the existing multinode runner and hop workload schema; avoid a second benchmark implementation. |
+| HA050 | Unified reference/vnode/multinode benchmark and JSON | PASS | One CLI reuses the endpoint oracle, 4x2 vnode round trip, and existing strict D>1 A/B runner. Built-in and JSON trace workloads share one result schema and explicit planner-only/single-node/real-multinode claim scopes. CPU contracts pass 4/4 + 5/5 + 23/23 + 12/12; adaptive diagonal vnode passes on eight GPUs. |
 | HA060 | Hop-aware kernel profiling and tuning | PLANNED | Establish profiler-free stage timing first, then use Nsys/NCU only on exposed planner/shuffle/forward work. |
 | HA070 | Real multi-node hop-aware correctness/performance | DEFERRED_ENVIRONMENT | Requires D>1 Gin/Rail. Only this checkpoint can justify capability enablement or a network speedup claim. |
 

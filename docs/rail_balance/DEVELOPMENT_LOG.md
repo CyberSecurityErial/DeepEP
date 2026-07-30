@@ -6510,3 +6510,49 @@ Failures retained:
 The adaptive GPU planner is intentionally single-lane and globally iterative.
 It is correctness evidence, not a performance-accepted implementation; its
 complexity is kept visible for the later profiler-guided planner optimization.
+
+## 2026-07-31 — HA050: one reference/vnode/multinode benchmark contract
+
+Added `tests/elastic/bench_rail_balance_hop.py` as a small orchestration layer,
+not a fourth data path. Reference invokes the endpoint oracle, vnode invokes
+the existing eight-GPU 4x2 round trip, and multinode delegates to the existing
+strict profiler-free DeepEP-V2-off A/B runner. Built-in cases and endpoint
+count JSON traces use one route builder and one result schema. Reports declare
+`planner_only`, `single_node_diagnostic`, or `real_multinode` claim scope.
+
+The real-D>1 runner now accepts `legacy_exact`, `one_hop`, and `adaptive`,
+records the hop parameters in cross-rank identity, and handles the new
+off-diagonal, diagonal, closed-block, and trace workloads. Its path split is
+explicitly labelled as the Python endpoint-oracle expectation until runtime
+kernel counters exist; no simulated counter is presented as measured Gin
+traffic.
+
+Validated:
+
+```text
+unified hop benchmark CPU contracts       4/4 PASS
+Hybrid multinode benchmark CPU contracts  5/5 PASS
+validation contracts                     23/23 PASS
+hop-aware reference/planner contracts    12/12 PASS
+py_compile and focused Ruff                PASS
+git diff --check                           PASS
+eight-GPU adaptive/diag_hot vnode          PASS
+```
+
+The vnode result conserved 32 payload units, kept final endpoints unchanged,
+used 16 direct plus 16 two-hop units under a 50% cap, and completed exact
+dispatch/combine. Its oracle pair peak changed 16 to 8 while recording 16,384
+extra local-hop bytes. This remains single-node diagnostic evidence.
+
+Failures retained:
+
+- The first audit command used `python`, which is absent from the non-login
+  shell. The pinned interpreter is
+  `/home/chen/.cache/deepep-sjlgpt/bin/python`.
+- That pinned environment does not install `pytest`; these repository contract
+  files intentionally have direct runners and all passed directly.
+- `ruff` is likewise not on the non-login PATH; its pinned absolute binary
+  passed. No environment mutation or repository-wide formatting was done.
+
+Real multinode execution remains unrun on this host, capability stays false,
+and HA060 starts with profiler-free local stage timing before any kernel edit.

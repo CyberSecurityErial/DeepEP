@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Profiler-free public Hybrid off/force round-trip benchmark.
+"""Profiler-free public Hybrid baseline/candidate round-trip benchmark.
 
 Run once per node. ``WORLD_SIZE``/``RANK`` are node count/node index.  The
-baseline is native DeepEP V2 ``rail_balance='off'``; the candidate is
-``rail_balance='force'``.  Correctness probes are outside timing, and every
-timed force dispatch ticket is consumed exactly once by its matching combine.
+baseline is native DeepEP V2 ``rail_balance='off'``. Correctness probes are
+outside timing, and every timed RailBalance dispatch ticket is consumed exactly
+once by its matching combine.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import json
 import math
@@ -28,13 +29,23 @@ import torch
 import torch.distributed as dist
 
 import run_rail_balance_hybrid_multinode as c105
+from bench_rail_balance_hop import build_reference_report, load_workload_routes
 from rail_balance_validation_common import (
     build_deterministic_topk,
     build_validation_bundle,
 )
 
 
-_CASES = ("balanced", "two_hot", "one_hot")
+_CASES = (
+    "balanced",
+    "two_hot",
+    "one_hot",
+    "offdiag_hot",
+    "diag_hot",
+    "closed_block",
+    "trace",
+)
+_CANDIDATE_MODES = ("force", "legacy_exact", "one_hop", "adaptive")
 _CUDA_METRICS = ("dispatch_cuda_ms", "combine_cuda_ms", "roundtrip_cuda_ms")
 _ALL_METRICS = _CUDA_METRICS + (
     "dispatch_host_ns",
@@ -212,16 +223,16 @@ def _stats(values: Sequence[float]) -> dict[str, float | int]:
     }
 
 
-def _order(repeats: int) -> list[tuple[int, str, int, str]]:
+def _order(repeats: int, candidate: str = "force") -> list[tuple[int, str, int, str]]:
     blocks = []
     for repeat in range(repeats):
         for pattern, modes in (
-            ("ABBA", "off force force off"),
-            ("BAAB", "force off off force"),
+            ("ABBA", ("off", candidate, candidate, "off")),
+            ("BAAB", (candidate, "off", "off", candidate)),
         ):
             blocks.extend(
                 (repeat, pattern, position, mode)
-                for position, mode in enumerate(modes.split())
+                for position, mode in enumerate(modes)
             )
     return blocks
 
@@ -391,11 +402,13 @@ def _aggregate(blocks: Sequence[dict[str, Any]], mode: str) -> dict[str, Any]:
     return result
 
 
-def _compare(aggregate: dict[str, Any]) -> dict[str, Any]:
+def _compare(
+    aggregate: dict[str, Any], candidate_mode: str = "force"
+) -> dict[str, Any]:
     comparison = {}
     for metric in _CUDA_METRICS:
         baseline = aggregate["off"][metric]["median_of_block_medians"]
-        candidate = aggregate["force"][metric]["median_of_block_medians"]
+        candidate = aggregate[candidate_mode][metric]["median_of_block_medians"]
         comparison[metric] = {
             "baseline_median_ms": baseline,
             "candidate_median_ms": candidate,
@@ -405,13 +418,16 @@ def _compare(aggregate: dict[str, Any]) -> dict[str, Any]:
     return comparison
 
 
-def _paired_roundtrip(blocks: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+def _paired_roundtrip(
+    blocks: Sequence[dict[str, Any]], candidate_mode: str = "force"
+) -> list[dict[str, Any]]:
     pairs = []
     for pair_index in sorted({block["pair_index"] for block in blocks}):
         pair = [block for block in blocks if block["pair_index"] == pair_index]
         _require(
-            len(pair) == 2 and {item["mode"] for item in pair} == {"off", "force"},
-            "each adjacent pair must contain off and force",
+            len(pair) == 2
+            and {item["mode"] for item in pair} == {"off", candidate_mode},
+            "each adjacent pair must contain baseline and candidate",
         )
         medians = {
             item["mode"]: item["summary"]["roundtrip_cuda_ms"]["median"]
@@ -422,7 +438,9 @@ def _paired_roundtrip(blocks: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
                 "pair_index": pair_index,
                 "block_indices": [item["block_index"] for item in pair],
                 "pattern": pair[0]["pattern"],
-                "speedup_baseline_over_candidate": medians["off"] / medians["force"],
+                "speedup_baseline_over_candidate": (
+                    medians["off"] / medians[candidate_mode]
+                ),
             }
         )
     return pairs
@@ -445,6 +463,11 @@ def _write_json(path: Path, report: dict[str, Any]) -> None:
 
 
 def _benchmark_manifest(args: argparse.Namespace) -> dict[str, Any]:
+    workload_sha256 = None
+    if args.workload_json is not None:
+        workload_sha256 = hashlib.sha256(
+            args.workload_json.read_bytes()
+        ).hexdigest()
     return {
         "run_id": args.run_id,
         "case": args.case,
@@ -453,7 +476,18 @@ def _benchmark_manifest(args: argparse.Namespace) -> dict[str, Any]:
         "warmup_iters": args.warmup_iters,
         "steady_iters": args.steady_iters,
         "order_repeats": args.order_repeats,
-        "expanded_order": [row[3] for row in _order(args.order_repeats)],
+        "candidate_mode": args.candidate_mode,
+        "workload_json": (
+            str(args.workload_json.resolve())
+            if args.workload_json is not None else None
+        ),
+        "workload_sha256": workload_sha256,
+        "two_hop_threshold_percent": args.two_hop_threshold_percent,
+        "max_two_hop_percent": args.max_two_hop_percent,
+        "hop_penalty_percent": args.hop_penalty_percent,
+        "expanded_order": [
+            row[3] for row in _order(args.order_repeats, args.candidate_mode)
+        ],
         "allow_contended_smoke": args.allow_contended_smoke,
         "diagnostic_profiler": args.diagnostic_profiler,
         "jit_cache_dir": os.environ.get("EP_JIT_CACHE_DIR"),
@@ -513,13 +547,25 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> 
             rank == int(os.environ["RANK"]) * num_local_ranks + local_rank,
             "global rank ordering is not server-major",
         )
-        routes = build_deterministic_topk(
-            args.case,
-            num_scaleout_ranks=node_count,
-            num_scaleup_ranks=num_local_ranks,
-            num_tokens_per_rank=args.num_tokens,
-            num_topk=args.num_topk,
-            num_experts=args.num_experts,
+        routes = (
+            load_workload_routes(
+                args.workload_json,
+                num_nodes=node_count,
+                rails=num_local_ranks,
+                tokens_per_rank=args.num_tokens,
+                topk=args.num_topk,
+                num_experts=args.num_experts,
+                bytes_per_copy=args.hidden * 2,
+            )
+            if args.workload_json is not None
+            else build_deterministic_topk(
+                args.case,
+                num_scaleout_ranks=node_count,
+                num_scaleup_ranks=num_local_ranks,
+                num_tokens_per_rank=args.num_tokens,
+                num_topk=args.num_topk,
+                num_experts=args.num_experts,
+            )
         )
         x, topk_idx, topk_weights = c105._make_input(
             rank,
@@ -563,27 +609,37 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> 
         combined_reference = c105._phase(
             "combine reference", group, args.timeout, combine_reference
         )
-        oracle = build_validation_bundle(
-            run_id=f"{args.run_id}/benchmark",
-            case=args.case,
-            modes=("off", "force"),
-            num_scaleout_ranks=node_count,
-            num_scaleup_ranks=num_local_ranks,
-            num_tokens_per_rank=args.num_tokens,
-            num_topk=args.num_topk,
-            num_experts=args.num_experts,
-            hidden=args.hidden,
-            num_channels=1,
-            proxy_slots_per_rank=args.proxy_slots_per_rank,
-            policy=args.rail_policy,
-            threshold_percent=args.rail_threshold_percent,
+        oracle = (
+            None
+            if args.workload_json is not None
+            else build_validation_bundle(
+                run_id=f"{args.run_id}/benchmark",
+                case=args.case,
+                modes=("off", "force"),
+                num_scaleout_ranks=node_count,
+                num_scaleup_ranks=num_local_ranks,
+                num_tokens_per_rank=args.num_tokens,
+                num_topk=args.num_topk,
+                num_experts=args.num_experts,
+                hidden=args.hidden,
+                num_channels=1,
+                proxy_slots_per_rank=args.proxy_slots_per_rank,
+                policy=args.rail_policy,
+                threshold_percent=args.rail_threshold_percent,
+            )
         )
-        capacity = oracle["config"]["proxy_slots_per_rank"]
+        capacity = (
+            oracle["config"]["proxy_slots_per_rank"]
+            if oracle is not None
+            else args.proxy_slots_per_rank or num_local_ranks * args.num_tokens
+        )
+        candidate_mode = args.candidate_mode
+        modes = ("off", candidate_mode)
         elastic_module._RAIL_BALANCE_FORCE_HOST_AVAILABLE = True
         _C._rail_balance_force_available = lambda: True
 
         probes = {}
-        for mode in ("off", "force"):
+        for mode in modes:
             live_buffer = c105._phase(
                 f"{mode} probe constructor",
                 group,
@@ -624,34 +680,36 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> 
             lambda: (
                 _require(
                     torch.equal(
-                        probes["off"]["combined_x"], probes["force"]["combined_x"]
+                        probes["off"]["combined_x"],
+                        probes[candidate_mode]["combined_x"]
                     ),
-                    "off/force probe payload differs",
+                    "baseline/candidate probe payload differs",
                 ),
                 _require(
                     torch.equal(
                         probes["off"]["combined_weights"],
-                        probes["force"]["combined_weights"],
+                        probes[candidate_mode]["combined_weights"],
                     ),
-                    "off/force probe weights differ",
+                    "baseline/candidate probe weights differ",
                 ),
             ),
         )
-        oracle = build_validation_bundle(
-            run_id=f"{args.run_id}/benchmark",
-            case=args.case,
-            modes=("off", "force"),
-            num_scaleout_ranks=node_count,
-            num_scaleup_ranks=num_local_ranks,
-            num_tokens_per_rank=args.num_tokens,
-            num_topk=args.num_topk,
-            num_experts=args.num_experts,
-            hidden=args.hidden,
-            num_channels=int(probes["force"]["num_channels"]),
-            proxy_slots_per_rank=capacity,
-            policy=args.rail_policy,
-            threshold_percent=args.rail_threshold_percent,
-        )
+        if oracle is not None:
+            oracle = build_validation_bundle(
+                run_id=f"{args.run_id}/benchmark",
+                case=args.case,
+                modes=("off", "force"),
+                num_scaleout_ranks=node_count,
+                num_scaleup_ranks=num_local_ranks,
+                num_tokens_per_rank=args.num_tokens,
+                num_topk=args.num_topk,
+                num_experts=args.num_experts,
+                hidden=args.hidden,
+                num_channels=int(probes[candidate_mode]["num_channels"]),
+                proxy_slots_per_rank=capacity,
+                policy=args.rail_policy,
+                threshold_percent=args.rail_threshold_percent,
+            )
 
         workers = _gather(
             {
@@ -673,7 +731,7 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> 
             )
         blocks = []
         for block_index, (repeat, pattern, position, mode) in enumerate(
-            _order(args.order_repeats)
+            _order(args.order_repeats, candidate_mode)
         ):
             live_buffer = c105._phase(
                 f"block {block_index} {mode} constructor",
@@ -737,28 +795,68 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> 
             reasons.append("diagnostic_profiler was declared")
         if args.allow_contended_smoke:
             reasons.append("allow_contended_smoke was requested")
-        aggregate = {mode: _aggregate(blocks, mode) for mode in ("off", "force")}
-        comparison = _compare(aggregate)
-        comparison["paired_roundtrip"] = _paired_roundtrip(blocks)
+        aggregate = {mode: _aggregate(blocks, mode) for mode in modes}
+        comparison = _compare(aggregate, candidate_mode)
+        comparison["paired_roundtrip"] = _paired_roundtrip(blocks, candidate_mode)
+        hop_reference = build_reference_report(
+            run_id=args.run_id,
+            case=args.case,
+            mode=(
+                "legacy_exact"
+                if candidate_mode in ("force", "legacy_exact")
+                else candidate_mode
+            ),
+            num_nodes=node_count,
+            rails=num_local_ranks,
+            tokens_per_rank=args.num_tokens,
+            topk=args.num_topk,
+            num_experts=args.num_experts,
+            hidden=args.hidden,
+            chunk_size=1,
+            two_hop_threshold_percent=args.two_hop_threshold_percent,
+            max_two_hop_percent=args.max_two_hop_percent,
+            hop_penalty_percent=args.hop_penalty_percent,
+            seed=args.seed,
+            proxy_slots_per_rank=capacity,
+            workload_json=args.workload_json,
+        )
         report = {
             "schema_version": 1,
             "run_id": args.run_id,
+            "git_commit": identity["git_commit"],
+            "backend": "multinode",
             "created_utc": datetime.now(timezone.utc).isoformat(),
-            "claim_scope": (
-                "real_d_gt_1_profiler_free_public_roundtrip"
-                if not reasons
-                else "diagnostic_only"
-            ),
+            "claim_scope": "real_multinode",
             "baseline": {
                 "mode": "off",
                 "definition": "native DeepEP V2 Hybrid data path",
             },
             "candidate": {
-                "mode": "force",
+                "mode": candidate_mode,
                 "policy": args.rail_policy,
                 "threshold_percent": args.rail_threshold_percent,
+                "two_hop_threshold_percent": args.two_hop_threshold_percent,
+                "max_two_hop_percent": args.max_two_hop_percent,
+                "hop_penalty_percent": args.hop_penalty_percent,
             },
             "identity": identity,
+            "topology": hop_reference["topology"],
+            "planner_config": hop_reference["planner_config"],
+            "kernel_config": {
+                "num_sms": args.num_sms,
+                "num_allocated_qps": args.num_allocated_qps,
+            },
+            "workload_summary": hop_reference["workload_summary"],
+            "correctness": {
+                "passed": True,
+                "off_candidate_equal": True,
+                "endpoint_unchanged": True,
+            },
+            "path_distribution": {
+                "source": "python_endpoint_oracle_expected",
+                **hop_reference["path_distribution"],
+            },
+            "rail_load_before_after": hop_reference["rail_load_before_after"],
             "post_measurement_identity": post_identity,
             "benchmark_manifest": benchmark_manifest,
             "command": [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]],
@@ -796,9 +894,9 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> 
             },
             "correctness_probe": {
                 "timed": False,
-                "off_force_equal": True,
+                "baseline_candidate_equal": True,
                 "off_digest": probes["off"]["global_digest"],
-                "force_digest": probes["force"]["global_digest"],
+                "candidate_digest": probes[candidate_mode]["global_digest"],
             },
             "environment": {
                 "workers": workers,
@@ -810,10 +908,24 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> 
                 "performance_claim_eligible": not reasons,
                 "reasons": reasons,
             },
-            "traffic_oracle": oracle["records"]["force"]["plan"],
+            "traffic_oracle": (
+                oracle["records"]["force"]["plan"]
+                if oracle is not None
+                and candidate_mode in ("force", "legacy_exact")
+                else None
+            ),
             "blocks": blocks,
             "aggregate": aggregate,
             "comparison": comparison,
+            "latency_statistics": {
+                "aggregate": aggregate,
+                "comparison": comparison,
+            },
+            "throughput_statistics": {
+                mode: aggregate[mode]["roundtrip_cuda_ms"]
+                for mode in modes
+            },
+            "fallbacks": reasons,
         }
 
         def write() -> None:
@@ -821,8 +933,9 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> 
                 _write_json(args.output, report)
                 result = comparison["roundtrip_cuda_ms"]
                 print(
-                    f"PASS off/force benchmark: off={result['baseline_median_ms']*1e3:.3f} us, "
-                    f"force={result['candidate_median_ms']*1e3:.3f} us, "
+                    f"PASS off/{candidate_mode} benchmark: "
+                    f"off={result['baseline_median_ms']*1e3:.3f} us, "
+                    f"candidate={result['candidate_median_ms']*1e3:.3f} us, "
                     f"speedup={result['speedup_baseline_over_candidate']:.4f}x, "
                     f"eligible={not reasons} -> {args.output}",
                     flush=True,
@@ -844,7 +957,11 @@ def _parse_args() -> argparse.Namespace:
         parser.error("benchmark correctness checks require Python assertions")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--case", required=True, choices=_CASES)
+    parser.add_argument("--workload-json", type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--candidate-mode", choices=_CANDIDATE_MODES, default="force"
+    )
     parser.add_argument("--num-processes", type=int, default=8)
     parser.add_argument("--num-tokens", type=int, default=8)
     parser.add_argument("--hidden", type=int, default=256)
@@ -857,6 +974,9 @@ def _parse_args() -> argparse.Namespace:
         "--rail-policy", choices=("all", "active", "adaptive"), default="all"
     )
     parser.add_argument("--rail-threshold-percent", type=int, default=0)
+    parser.add_argument("--two-hop-threshold-percent", type=int, default=0)
+    parser.add_argument("--max-two-hop-percent", type=int, default=25)
+    parser.add_argument("--hop-penalty-percent", type=int, default=50)
     parser.add_argument("--warmup-iters", type=int, default=10)
     parser.add_argument("--steady-iters", type=int, default=100)
     parser.add_argument(
@@ -900,6 +1020,14 @@ def _parse_args() -> argparse.Namespace:
         parser.error("top-k, SM count, and allocated QP count are invalid")
     if not 0 <= args.rail_threshold_percent <= 3100:
         parser.error("rail threshold percent must be in [0, 3100]")
+    if not 0 <= args.two_hop_threshold_percent <= 10000:
+        parser.error("two-hop threshold percent must be in [0, 10000]")
+    if not 0 <= args.max_two_hop_percent <= 100:
+        parser.error("max two-hop percent must be in [0, 100]")
+    if not 0 <= args.hop_penalty_percent <= 10000:
+        parser.error("hop penalty percent must be in [0, 10000]")
+    if (args.case == "trace") != (args.workload_json is not None):
+        parser.error("case=trace requires --workload-json, and only trace uses it")
     if args.warmup_iters < 0 or args.steady_iters <= 0 or args.order_repeats <= 0:
         parser.error("warmup must be nonnegative; steady/repeats must be positive")
     if args.timeout <= 0 or args.watchdog_seconds <= args.timeout:

@@ -1167,3 +1167,8 @@ Out of scope until evidence expands the project:
 - Single-node vnode results have diagnostic scope only.  Real Gin/RDMA,
   receiver NIC load, rank-max latency, and capability enablement remain
   deferred to truthful D>1 hardware.
+- HA050 adds one `bench_rail_balance_hop.py` entry for reference, vnode and
+  multinode. It reuses the existing strict DeepEP-V2-off A/B runner rather
+  than creating another distributed lifecycle. Endpoint-count manifests,
+  planner/path/load fields and claim scopes are shared; real runtime path
+  counters remain missing evidence until the kernel exports them.

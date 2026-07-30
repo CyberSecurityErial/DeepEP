@@ -180,6 +180,12 @@ def _local_identity(args: argparse.Namespace, extension: Any) -> dict:
             "proxy_slots_per_rank": args.proxy_slots_per_rank,
             "rail_balance_policy": args.rail_policy,
             "rail_balance_threshold_percent": args.rail_threshold_percent,
+            "candidate_mode": getattr(args, "candidate_mode", "force"),
+            "two_hop_threshold_percent": getattr(
+                args, "two_hop_threshold_percent", 0
+            ),
+            "max_two_hop_percent": getattr(args, "max_two_hop_percent", 0),
+            "hop_penalty_percent": getattr(args, "hop_penalty_percent", 0),
             "sl_idx": args.sl_idx,
             "seed": args.seed,
         },
@@ -384,6 +390,7 @@ def _run_round_trip(
 
 
 def _constructor_kwargs(args: argparse.Namespace, mode: str, capacity: int) -> dict:
+    enabled = mode != "off"
     return {
         "num_max_tokens_per_rank": args.num_tokens,
         "hidden": args.hidden,
@@ -399,10 +406,22 @@ def _constructor_kwargs(args: argparse.Namespace, mode: str, capacity: int) -> d
         "num_gpu_timeout_secs": args.timeout,
         "explicitly_destroy": True,
         "rail_balance": mode,
-        "rail_balance_proxy_slots_per_rank": capacity if mode == "force" else 0,
-        "rail_balance_policy": args.rail_policy if mode == "force" else "all",
+        "rail_balance_proxy_slots_per_rank": capacity if enabled else 0,
+        "rail_balance_policy": args.rail_policy if enabled else "all",
         "rail_balance_threshold_percent": (
-            args.rail_threshold_percent if mode == "force" else 0
+            args.rail_threshold_percent if enabled else 0
+        ),
+        "rail_balance_two_hop_threshold_percent": (
+            getattr(args, "two_hop_threshold_percent", 0)
+            if mode == "adaptive" else 0
+        ),
+        "rail_balance_max_two_hop_percent": (
+            getattr(args, "max_two_hop_percent", 25)
+            if mode == "adaptive" else 0
+        ),
+        "rail_balance_hop_penalty_percent": (
+            getattr(args, "hop_penalty_percent", 50)
+            if mode == "adaptive" else 0
         ),
     }
 

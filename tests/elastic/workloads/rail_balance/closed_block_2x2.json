@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "topology": {"num_nodes": 2, "rails_per_node": 4},
+  "unit": "token_copy",
+  "bytes_per_copy": 512,
+  "records": [
+    {"src_node": 0, "src_local_rank": 0, "dst_node": 1, "dst_local_rank": 1, "count": 16},
+    {"src_node": 0, "src_local_rank": 1, "dst_node": 1, "dst_local_rank": 0, "count": 16},
+    {"src_node": 1, "src_local_rank": 0, "dst_node": 0, "dst_local_rank": 1, "count": 16},
+    {"src_node": 1, "src_local_rank": 1, "dst_node": 0, "dst_local_rank": 0, "count": 16}
+  ]
+}

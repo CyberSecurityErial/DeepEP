@@ -48,8 +48,12 @@ class DeterministicRouteTest(unittest.TestCase):
             "two_hot": 2,
             "one_hot": 1,
             "capacity": 1,
+            "offdiag_hot": 1,
+            "diag_hot": 1,
+            "closed_block": 2,
         }
         experts_per_server = self.E // self.D
+        experts_per_rank = self.E // (self.D * self.G)
         for case in CANONICAL_CASES:
             with self.subTest(case=case):
                 routes = self.build(case)
@@ -64,7 +68,7 @@ class DeterministicRouteTest(unittest.TestCase):
                         if local_rank < expected_active_rails[case]
                         else source_server
                     )
-                    for token_route in rank_routes:
+                    for token, token_route in enumerate(rank_routes):
                         self.assertEqual(len(token_route), self.K)
                         self.assertEqual(len(set(token_route)), self.K)
                         self.assertTrue(all(0 <= expert < self.E for expert in token_route))
@@ -72,6 +76,19 @@ class DeterministicRouteTest(unittest.TestCase):
                             {expert // experts_per_server for expert in token_route},
                             {expected_server},
                         )
+                        if expected_server != source_server and case in (
+                            "offdiag_hot", "diag_hot", "closed_block"
+                        ):
+                            targets = {
+                                (expert % experts_per_server) // experts_per_rank
+                                for expert in token_route
+                            }
+                            expected_target = {
+                                "offdiag_hot": 1 + token % (self.G - 1),
+                                "diag_hot": local_rank,
+                                "closed_block": 1 - local_rank,
+                            }[case]
+                            self.assertEqual(targets, {expected_target})
 
     def test_canonical_remote_counts_and_server_deduplication(self):
         expected_active_rails = {
@@ -79,6 +96,9 @@ class DeterministicRouteTest(unittest.TestCase):
             "two_hot": 2,
             "one_hot": 1,
             "capacity": 1,
+            "offdiag_hot": 1,
+            "diag_hot": 1,
+            "closed_block": 2,
         }
         for case, active_rails in expected_active_rails.items():
             with self.subTest(case=case):
@@ -103,6 +123,9 @@ class DeterministicRouteTest(unittest.TestCase):
             "two_hot": 18,
             "one_hot": 9,
             "capacity": 9,
+            "offdiag_hot": 9,
+            "diag_hot": 9,
+            "closed_block": 18,
         }
         actual_totals = {}
         for case in CANONICAL_CASES:

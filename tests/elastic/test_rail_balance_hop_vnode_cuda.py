@@ -15,9 +15,11 @@ import torch
 import torch.distributed as dist
 
 import deep_ep
+from bench_rail_balance_hop import load_workload_routes
 from deep_ep.utils.envs import init_dist
 from deep_ep.utils.math import align
 from rail_balance_hop_reference import HopPlannerConfig
+from rail_balance_validation_common import build_deterministic_topk
 from rail_balance_hybrid_vnode_reference import (
     VnodeRoundTripCase,
     VnodeTopology,
@@ -48,28 +50,51 @@ _PROXY_CAPACITY = 16
 _GENERATION = 1201
 
 
-def _case(adaptive: bool = False) -> VnodeRoundTripCase:
+def _case(case_name: str, workload_json: Path | None = None) -> VnodeRoundTripCase:
     topology = VnodeTopology(rails_per_node=_G, num_nodes=_D)
-    targets = ((0,) * 16 if adaptive else
-               (0,) * 4 + (1,) * 8 + (2,) * 2 + (3,) * 2)
     experts_per_rank = 2
-    topk_idx = (
-        tuple(((topology.physical(1, target) * experts_per_rank),)
-              for target in targets),
-    ) + ((),) * (_G - 1)
-    topk_weights = (
-        tuple(((Fraction(1),)) for _ in targets),
-    ) + ((),) * (_G - 1)
-    source_values = (
+    all_routes = (
+        load_workload_routes(
+            workload_json,
+            num_nodes=_D,
+            rails=_G,
+            tokens_per_rank=_M,
+            topk=_K,
+            num_experts=topology.world_size * experts_per_rank,
+            bytes_per_copy=_HIDDEN * 2,
+        )
+        if workload_json is not None
+        else build_deterministic_topk(
+            case_name,
+            num_scaleout_ranks=_D,
+            num_scaleup_ranks=_G,
+            num_tokens_per_rank=_M,
+            num_topk=_K,
+            num_experts=topology.world_size * experts_per_rank,
+        )
+    )
+    experts_per_destination = topology.world_size * experts_per_rank // _D
+    topk_idx = tuple(
         tuple(
-            tuple(Fraction(8 * ((token + column) & 7))
-                  for column in range(3))
-            for token in range(len(targets))
-        ),
-    ) + ((),) * (_G - 1)
+            tuple(route)
+            for route in all_routes[owner]
+            if route[0] // experts_per_destination == 1
+        )
+        for owner in range(_G)
+    )
+    topk_weights = tuple(tuple((Fraction(1),) for _ in owner) for owner in topk_idx)
+    source_values = tuple(
+        tuple(
+            tuple(
+                Fraction(8 * ((owner + token + column) & 7))
+                for column in range(3)
+            )
+            for token in range(len(tokens))
+        )
+        for owner, tokens in enumerate(topk_idx)
+    )
     return VnodeRoundTripCase(
-        name="hop_vnode_adaptive_4x2" if adaptive else
-             "hop_vnode_one_hop_4x2",
+        name=f"hop_vnode_{case_name}_4x2",
         topology=topology,
         topk_idx=topk_idx,
         topk_weights=topk_weights,
@@ -111,20 +136,24 @@ def _worker(local_rank: int, num_local_ranks: int,
         device_id=torch.device(f"cuda:{local_rank}"),
         group_desc="hop-aware-vnode-source")
 
-    case = _case(args.adaptive)
+    case = _case(args.case, args.workload_json)
     baseline = run_vnode_roundtrip(case)
     hop_oracle = run_hop_vnode_roundtrip(
-        case, HopPlannerConfig(
-            num_rails=_G, num_destinations=_D,
-            mode="adaptive" if args.adaptive else "one_hop",
-            chunk_size=1, max_two_hop_ratio=0.5 if args.adaptive else 0))
-    if args.adaptive:
-        assert hop_oracle.plan.two_hop_units == 8
-    else:
-        assert {route.path_kind for route in hop_oracle.routes} >= {
-            "direct", "dst_forward", "src_forward"}
-        assert all(route.path_kind != "two_hop"
-                   for route in hop_oracle.routes)
+        case,
+        HopPlannerConfig(
+            num_rails=_G,
+            num_destinations=_D,
+            mode=args.mode,
+            chunk_size=1,
+            two_hop_threshold=args.two_hop_threshold_percent / 100,
+            max_two_hop_ratio=(
+                args.max_two_hop_percent / 100 if args.mode == "adaptive" else 0
+            ),
+            hop_penalty=args.hop_penalty_percent / 100,
+        ),
+    )
+    if args.mode == "one_hop":
+        assert all(route.path_kind != "two_hop" for route in hop_oracle.routes)
 
     source_buffer = None
     world_buffer = None
@@ -186,7 +215,10 @@ def _worker(local_rank: int, num_local_ranks: int,
             return int(source_runtime._rail_balance_hybrid_plan_prepare(
                 topk_idx, _HIDDEN, _CHANNELS, _M, case.num_experts, _D, 0,
                 _PROXY_CAPACITY, source_offset, source_invocation,
-                0, 0, 0, True, 0, 50 if args.adaptive else 0, 0))
+                0, 0, 0, True,
+                args.two_hop_threshold_percent,
+                args.max_two_hop_percent if args.mode == "adaptive" else 0,
+                args.hop_penalty_percent))
 
         statuses = _gather_objects(_checked_phase(
             "hop source prepare", control_group, prepare_source), control_group)
@@ -205,11 +237,10 @@ def _worker(local_rank: int, num_local_ranks: int,
             assert source_plan is not None
             assert source_plan[10].item() == 0
             path_units = tuple(int(value) for value in source_plan[8].cpu())
-            if args.adaptive:
-                assert path_units == (8, 0, 0, 8)
-            else:
-                assert path_units[0] > 0 and path_units[1] > 0
-                assert path_units[2] > 0 and path_units[3] == 0
+            assert path_units == tuple(
+                hop_oracle.plan.units_for(kind)
+                for kind in ("direct", "dst_forward", "src_forward", "two_hop")
+            )
 
         _checked_phase(
             "hop source shuffle", control_group,
@@ -244,7 +275,9 @@ def _worker(local_rank: int, num_local_ranks: int,
                 world_offset, _M, case.num_experts, _D, _G,
                 _PROXY_CAPACITY, _GENERATION, world_invocation,
                 0, 0, 0, hop_records,
-                0, 50 if args.adaptive else 0, 0)))
+                args.two_hop_threshold_percent,
+                args.max_two_hop_percent if args.mode == "adaptive" else 0,
+                args.hop_penalty_percent)))
         assert int(prepared[0]) == 0
 
         outputs = _checked_phase(
@@ -290,10 +323,8 @@ def _worker(local_rank: int, num_local_ranks: int,
             _monitored_barrier(control_group, args.timeout)
         if clean and rank == 0:
             print(
-                "PASS hop-aware vnode: " +
-                ("bounded two-hop escape" if args.adaptive else
-                 "direct + both one-hop paths") +
-                ", dispatch/combine round trip", flush=True)
+                f"PASS hop-aware vnode: {args.mode}/{args.case}, "
+                "dispatch/combine round trip", flush=True)
         dist.destroy_process_group()
 
 
@@ -303,17 +334,59 @@ def main() -> None:
                         help=argparse.SUPPRESS)
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--watchdog-seconds", type=int, default=900)
-    parser.add_argument("--adaptive", action="store_true")
+    parser.add_argument(
+        "--mode", choices=("one_hop", "adaptive"), default="one_hop"
+    )
+    parser.add_argument(
+        "--case",
+        choices=(
+            "balanced",
+            "one_hot",
+            "two_hot",
+            "offdiag_hot",
+            "diag_hot",
+            "closed_block",
+            "trace",
+        ),
+        default=None,
+    )
+    parser.add_argument("--workload-json", type=Path)
+    parser.add_argument("--two-hop-threshold-percent", type=int, default=0)
+    parser.add_argument("--max-two-hop-percent", type=int, default=25)
+    parser.add_argument("--hop-penalty-percent", type=int, default=50)
+    parser.add_argument("--adaptive", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.adaptive:
+        args.mode = "adaptive"
+    if args.case is None:
+        args.case = "diag_hot" if args.mode == "adaptive" else "offdiag_hot"
+    if (args.case == "trace") != (args.workload_json is not None):
+        parser.error("case=trace requires --workload-json, and only trace uses it")
     if args.worker:
         torch.multiprocessing.spawn(
             _worker, args=(_WORLD_SIZE, args), nprocs=_WORLD_SIZE, join=True)
         return
 
-    command = [sys.executable, "-B", str(Path(__file__).resolve()),
-               "--worker", "--timeout", str(args.timeout)]
-    if args.adaptive:
-        command.append("--adaptive")
+    command = [
+        sys.executable,
+        "-B",
+        str(Path(__file__).resolve()),
+        "--worker",
+        "--timeout",
+        str(args.timeout),
+        "--mode",
+        args.mode,
+        "--case",
+        args.case,
+        "--two-hop-threshold-percent",
+        str(args.two_hop_threshold_percent),
+        "--max-two-hop-percent",
+        str(args.max_two_hop_percent),
+        "--hop-penalty-percent",
+        str(args.hop_penalty_percent),
+    ]
+    if args.workload_json is not None:
+        command.extend(("--workload-json", str(args.workload_json)))
     process = subprocess.Popen(command, start_new_session=True)
     try:
         return_code = process.wait(timeout=args.watchdog_seconds)

@@ -7,7 +7,15 @@ from rail_balance_hybrid_reference import build_hybrid_rail_schedule
 
 
 RESULT_SCHEMA_VERSION = 1
-CANONICAL_CASES = ("balanced", "two_hot", "one_hot", "capacity")
+CANONICAL_CASES = (
+    "balanced",
+    "two_hot",
+    "one_hot",
+    "capacity",
+    "offdiag_hot",
+    "diag_hot",
+    "closed_block",
+)
 VALIDATION_MODES = ("off", "force")
 EVIDENCE_LABEL = "REAL_HYBRID_RUNTIME_UNTESTED"
 _MAX_FORCE_V1_DIM = 32
@@ -82,11 +90,20 @@ def build_deterministic_topk(
 
     world_size = num_scaleout_ranks * num_scaleup_ranks
     experts_per_server = num_experts // num_scaleout_ranks
+    experts_per_rank = num_experts // world_size
+    if case in ("offdiag_hot", "diag_hot", "closed_block"):
+        if num_scaleup_ranks < 2:
+            raise ValueError("hop-aware cases require at least two local ranks")
+        if num_topk > experts_per_rank:
+            raise ValueError("hop-aware cases require top-k <= experts per rank")
     active_rails = {
         "balanced": num_scaleup_ranks,
         "two_hot": 2,
         "one_hot": 1,
         "capacity": 1,
+        "offdiag_hot": 1,
+        "diag_hot": 1,
+        "closed_block": min(2, num_scaleup_ranks),
     }[case]
 
     routes: List[List[List[int]]] = []
@@ -102,13 +119,30 @@ def build_deterministic_topk(
 
         rank_routes: List[List[int]] = []
         for token_idx in range(num_tokens_per_rank):
-            first_expert = (rank * num_tokens_per_rank + token_idx * num_topk) % experts_per_server
-            rank_routes.append(
-                [
-                    expert_base + (first_expert + topk_idx) % experts_per_server
-                    for topk_idx in range(num_topk)
-                ]
-            )
+            if target_server != source_server and case in (
+                "offdiag_hot", "diag_hot", "closed_block"
+            ):
+                if case == "offdiag_hot":
+                    target_local = 1 + token_idx % (num_scaleup_ranks - 1)
+                elif case == "diag_hot":
+                    target_local = local_rank
+                else:
+                    target_local = 1 - local_rank
+                target_base = expert_base + target_local * experts_per_rank
+                rank_routes.append(
+                    [target_base + topk_idx for topk_idx in range(num_topk)]
+                )
+            else:
+                first_expert = (
+                    rank * num_tokens_per_rank + token_idx * num_topk
+                ) % experts_per_server
+                rank_routes.append(
+                    [
+                        expert_base
+                        + (first_expert + topk_idx) % experts_per_server
+                        for topk_idx in range(num_topk)
+                    ]
+                )
         routes.append(rank_routes)
     return routes
 

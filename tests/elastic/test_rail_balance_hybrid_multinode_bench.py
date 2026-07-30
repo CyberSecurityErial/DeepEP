@@ -81,6 +81,12 @@ def test_order_is_symmetric_and_each_neighbor_pair_is_off_force() -> None:
     for begin in range(0, len(rows), 2):
         assert {rows[begin][3], rows[begin + 1][3]} == {"off", "force"}
 
+    adaptive = bench._order(1, "adaptive")
+    assert tuple(row[3] for row in adaptive[:4]) == (
+        "off", "adaptive", "adaptive", "off")
+    assert tuple(row[3] for row in adaptive[4:]) == (
+        "adaptive", "off", "off", "adaptive")
+
 
 def test_stats_percentiles_and_invalid_samples() -> None:
     stats = bench._stats((1, 2, 3, 4, 5))
@@ -140,16 +146,16 @@ def test_snapshot_reasons_fail_closed() -> None:
         assert fragment in reasons
 
 
-def test_source_keeps_v2_baseline_force_candidate_and_clean_steady_loop() -> None:
+def test_source_keeps_v2_baseline_selectable_candidate_and_clean_steady_loop() -> None:
     source = Path(bench.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
     worker = _source(source, _function(tree, "_worker"))
     assert '"mode": "off"' in worker
     assert '"native DeepEP V2 Hybrid data path"' in worker
-    assert '"mode": "force"' in worker
-    assert 'for mode in ("off", "force")' in worker
+    assert 'candidate_mode = args.candidate_mode' in worker
+    assert 'modes = ("off", candidate_mode)' in worker
     assert 'probes["off"]["combined_x"]' in worker
-    assert 'probes["force"]["combined_x"]' in worker
+    assert 'probes[candidate_mode]["combined_x"]' in worker
     assert '"benchmark manifest"' in worker
     assert "_benchmark_manifest(args)" in worker
     assert '"post-measurement cluster identity"' in worker

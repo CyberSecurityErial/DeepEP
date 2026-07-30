@@ -2191,3 +2191,17 @@ measure exposed planner time relative to source shuffle and forwarding.  Only
 if planner time is material will the next experiment parallelize candidate
 evaluation or batch third-Rail moves; otherwise the simpler implementation is
 retained.
+
+## Scope decision O090 — unified tests are not an optimization result
+
+The reference/vnode/multinode wrapper changes measurement organization only.
+Its vnode diagonal case proves that the bounded plan and inverse data path
+agree: 16 of 32 payload units use two-hop, pair peak falls from 16 to 8, and
+the report records 16,384 extra local-hop bytes. These are oracle/diagnostic
+quantities, not measured network speed.
+
+The multinode backend still compares every candidate with native DeepEP V2
+`off` using the existing ABBA+BAAB, rank-max profiler-free protocol. Until a
+real D>1 run exports actual path counters, the report labels its path split as
+the Python endpoint-oracle expectation. No kernel tuning is accepted from
+this checkpoint.
