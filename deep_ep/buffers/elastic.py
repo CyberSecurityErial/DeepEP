@@ -54,7 +54,7 @@ _RAIL_BALANCE_PHASE_PREPARE = 1
 _RAIL_BALANCE_PHASE_SIZING = 2
 _RAIL_BALANCE_PHASE_PLAN = 2
 _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS = 10
-_RAIL_BALANCE_CONSTRUCTOR_MANIFEST_WIDTH = 18 + _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS
+_RAIL_BALANCE_CONSTRUCTOR_MANIFEST_WIDTH = 21 + _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS
 _RAIL_BALANCE_CONSTRUCTOR_SIZING_MANIFEST_WIDTH = 20
 _RAIL_BALANCE_CONSTRUCTOR_PARSE_ERROR = 10
 _RAIL_BALANCE_CONSTRUCTOR_VALIDATION_ERROR = 11
@@ -95,7 +95,11 @@ def _parse_rail_balance_config(
         mode: str,
         proxy_slots_per_rank: int,
         policy: str = 'all',
-        threshold_percent: int = 0) -> Tuple[str, int, int, int]:
+        threshold_percent: int = 0,
+        two_hop_threshold_percent: int = 0,
+        max_two_hop_percent: int = 25,
+        hop_penalty_percent: int = 50
+) -> Tuple[str, int, int, int, int, int, int]:
     """Validate the constructor-fixed rail-balance mode without touching CUDA or collectives."""
     if type(mode) is not str or mode not in _RAIL_BALANCE_MODES:
         raise ValueError(_rail_balance_error(
@@ -118,6 +122,17 @@ def _parse_rail_balance_config(
             'InvalidConfiguration',
             'rail_balance_threshold_percent must be an integer in '
             f'[0, {_RAIL_BALANCE_MAX_THRESHOLD_PERCENT}]'))
+    adaptive_fields = (
+        ('rail_balance_two_hop_threshold_percent',
+         two_hop_threshold_percent, 10000),
+        ('rail_balance_max_two_hop_percent', max_two_hop_percent, 100),
+        ('rail_balance_hop_penalty_percent', hop_penalty_percent, 10000),
+    )
+    for name, value, maximum in adaptive_fields:
+        if type(value) is not int or not 0 <= value <= maximum:
+            raise ValueError(_rail_balance_error(
+                'InvalidConfiguration',
+                f'{name} must be an integer in [0, {maximum}]'))
     if mode == 'off' and proxy_slots_per_rank != 0:
         raise ValueError(_rail_balance_error(
             'InvalidConfiguration',
@@ -135,8 +150,15 @@ def _parse_rail_balance_config(
             'InvalidConfiguration',
             'rail_balance_threshold_percent must be 0 when '
             "rail_balance='off'"))
-    return (mode, proxy_slots_per_rank,
-            _RAIL_BALANCE_POLICY_IDS[policy], threshold_percent)
+    if mode != 'adaptive':
+        two_hop_threshold_percent = 0
+        max_two_hop_percent = 0
+        hop_penalty_percent = 0
+    return (
+        mode, proxy_slots_per_rank,
+        _RAIL_BALANCE_POLICY_IDS[policy], threshold_percent,
+        two_hop_threshold_percent, max_two_hop_percent,
+        hop_penalty_percent)
 
 
 def _validate_rail_balance_force_constructor(
@@ -346,7 +368,10 @@ def _make_rail_balance_constructor_manifest(
         allow_multiple_reduction: bool = False,
         arena_layout: Sequence[int] = (),
         policy: int = 0,
-        threshold_percent: int = 0) -> Tuple[int, ...]:
+        threshold_percent: int = 0,
+        two_hop_threshold_percent: int = 0,
+        max_two_hop_percent: int = 0,
+        hop_penalty_percent: int = 0) -> Tuple[int, ...]:
     """Encode only fields that must agree before the symmetric window exists."""
     if type(mode) is not str or mode not in _RAIL_BALANCE_MODES:
         raise ValueError('rail-balance constructor manifest mode is invalid')
@@ -356,6 +381,15 @@ def _make_rail_balance_constructor_manifest(
     if type(threshold_percent) is not int or not (
             0 <= threshold_percent <= _RAIL_BALANCE_MAX_THRESHOLD_PERCENT):
         raise ValueError('rail-balance constructor threshold is invalid')
+    if type(two_hop_threshold_percent) is not int or not (
+            0 <= two_hop_threshold_percent <= 10000):
+        raise ValueError('rail-balance two-hop threshold is invalid')
+    if type(max_two_hop_percent) is not int or not (
+            0 <= max_two_hop_percent <= 100):
+        raise ValueError('rail-balance two-hop cap is invalid')
+    if type(hop_penalty_percent) is not int or not (
+            0 <= hop_penalty_percent <= 10000):
+        raise ValueError('rail-balance hop penalty is invalid')
     mode_id = _RAIL_BALANCE_MODE_IDS[mode]
     if mode_id:
         if len(arena_layout) != _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS or not all(
@@ -372,11 +406,14 @@ def _make_rail_balance_constructor_manifest(
             int(allow_multiple_reduction),
             policy,
             threshold_percent,
+            two_hop_threshold_percent,
+            max_two_hop_percent,
+            hop_penalty_percent,
             len(arena_layout),
         )
         layout_fields = tuple(arena_layout)
     else:
-        force_fields = (0,) * 11
+        force_fields = (0,) * 14
         layout_fields = (0,) * _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS
 
     fields = (
@@ -742,7 +779,10 @@ class ElasticBuffer:
                  rail_balance: str = 'off',
                  rail_balance_proxy_slots_per_rank: int = 0,
                  rail_balance_policy: str = 'all',
-                 rail_balance_threshold_percent: int = 0):
+                 rail_balance_threshold_percent: int = 0,
+                 rail_balance_two_hop_threshold_percent: int = 0,
+                 rail_balance_max_two_hop_percent: int = 25,
+                 rail_balance_hop_penalty_percent: int = 50):
         """
         Initialize the elastic communication buffer.
 
@@ -768,7 +808,8 @@ class ElasticBuffer:
             rail_balance: experimental source-side rail-balancing mode. ``'off'``
                 preserves DeepEP; ``'force'``/``'legacy_exact'`` use the original
                 all-Rail prototype; ``'one_hop'`` restricts egress to endpoint
-                Rails; ``'adaptive'`` is reserved for bounded selective 2-hop.
+                Rails; ``'adaptive'`` first builds the same endpoint plan and
+                then permits a bounded number of profitable third-Rail moves.
                 The default ``'off'`` path preserves the legacy buffer sizing, runtime arguments,
                 JIT specialization, handles, and results; only local configuration parsing and
                 mode guards are added.
@@ -777,11 +818,18 @@ class ElasticBuffer:
             rail_balance_policy: planner policy: ``'all'`` balances across every
                 local rail, ``'active'`` keeps the original nonempty rail set,
                 and ``'adaptive'`` expands that set only when each added rail
-                clears ``rail_balance_threshold_percent``.
+                clears ``rail_balance_threshold_percent``. This compatibility
+                policy applies to the legacy planner, not selective 2-hop.
             rail_balance_threshold_percent: tolerated integer percentage by
                 which the current peak may exceed the selected-set balanced
                 target. Zero disables the gate and preserves the original
                 exact ``'all'`` plan.
+            rail_balance_two_hop_threshold_percent: minimum predicted relative
+                gain required for an adaptive third-Rail move.
+            rail_balance_max_two_hop_percent: maximum percentage of token-copy
+                units that adaptive mode may send through a third Rail.
+            rail_balance_hop_penalty_percent: score penalty for each additional
+                node-local forwarding hop in adaptive mode.
         """
         rail_balance_arena_layout = None
         rail_balance_policy_id = 0
@@ -792,12 +840,17 @@ class ElasticBuffer:
             # protocol is enabled, every mode instead joins the universal gate
             # below so a valid off rank cannot diverge from a valid force rank.
             (rail_balance, rail_balance_proxy_slots_per_rank,
-             rail_balance_policy_id,
-             rail_balance_threshold_percent) = \
+             rail_balance_policy_id, rail_balance_threshold_percent,
+             rail_balance_two_hop_threshold_percent,
+             rail_balance_max_two_hop_percent,
+             rail_balance_hop_penalty_percent) = \
                 _parse_rail_balance_config(
                     rail_balance, rail_balance_proxy_slots_per_rank,
                     rail_balance_policy,
-                    rail_balance_threshold_percent)
+                    rail_balance_threshold_percent,
+                    rail_balance_two_hop_threshold_percent,
+                    rail_balance_max_two_hop_percent,
+                    rail_balance_hop_penalty_percent)
             if rail_balance != 'off':
                 _validate_rail_balance_force_constructor(
                     num_bytes, num_cpu_bytes,
@@ -818,17 +871,25 @@ class ElasticBuffer:
             constructor_manifest = None
             try:
                 (rail_balance, rail_balance_proxy_slots_per_rank,
-                 rail_balance_policy_id,
-                 rail_balance_threshold_percent) = \
+                 rail_balance_policy_id, rail_balance_threshold_percent,
+                 rail_balance_two_hop_threshold_percent,
+                 rail_balance_max_two_hop_percent,
+                 rail_balance_hop_penalty_percent) = \
                     _parse_rail_balance_config(
                         rail_balance, rail_balance_proxy_slots_per_rank,
                         rail_balance_policy,
-                        rail_balance_threshold_percent)
+                        rail_balance_threshold_percent,
+                        rail_balance_two_hop_threshold_percent,
+                        rail_balance_max_two_hop_percent,
+                        rail_balance_hop_penalty_percent)
             except BaseException:
                 rail_balance = 'off'
                 rail_balance_proxy_slots_per_rank = 0
                 rail_balance_policy_id = 0
                 rail_balance_threshold_percent = 0
+                rail_balance_two_hop_threshold_percent = 0
+                rail_balance_max_two_hop_percent = 0
+                rail_balance_hop_penalty_percent = 0
                 constructor_error_priority = \
                     _RAIL_BALANCE_CONSTRUCTOR_PARSE_ERROR
 
@@ -871,7 +932,13 @@ class ElasticBuffer:
                             rail_balance_arena_layout or (),
                             policy=rail_balance_policy_id,
                             threshold_percent=
-                                rail_balance_threshold_percent)
+                                rail_balance_threshold_percent,
+                            two_hop_threshold_percent=
+                                rail_balance_two_hop_threshold_percent,
+                            max_two_hop_percent=
+                                rail_balance_max_two_hop_percent,
+                            hop_penalty_percent=
+                                rail_balance_hop_penalty_percent)
                 except BaseException:
                     constructor_manifest = None
                     constructor_error_priority = \
@@ -1102,6 +1169,12 @@ class ElasticBuffer:
             self._rail_balance_policy = rail_balance_policy_id
             self._rail_balance_threshold_percent = \
                 rail_balance_threshold_percent
+            self._rail_balance_two_hop_threshold_percent = \
+                rail_balance_two_hop_threshold_percent
+            self._rail_balance_max_two_hop_percent = \
+                rail_balance_max_two_hop_percent
+            self._rail_balance_hop_penalty_percent = \
+                rail_balance_hop_penalty_percent
             self._rail_balance_arena_offset = legacy_num_bytes
             self._rail_balance_arena_bytes = rail_balance_arena_bytes
             self._rail_balance_world_gate_device_words = \
@@ -1712,9 +1785,6 @@ class ElasticBuffer:
                     raise RuntimeError('rail-balance buffer is terminal')
                 if self._rail_balance_live_ticket is not None:
                     raise RuntimeError('rail-balance dispatch is already live')
-                if self._rail_balance_mode == 'adaptive':
-                    raise RuntimeError(
-                        'adaptive RailBalance requires the selective 2-hop GPU planner')
                 if handle is not None:
                     raise ValueError('cached force dispatch is unsupported')
                 if isinstance(x, tuple):
@@ -1840,7 +1910,10 @@ class ElasticBuffer:
                             invocation_id, 0,
                             self._rail_balance_policy,
                             self._rail_balance_threshold_percent,
-                            self._rail_balance_mode == 'one_hop')
+                            self._rail_balance_mode in ('one_hop', 'adaptive'),
+                            self._rail_balance_two_hop_threshold_percent,
+                            self._rail_balance_max_two_hop_percent,
+                            self._rail_balance_hop_penalty_percent)
                     if type(prepare_result) is not tuple or \
                             len(prepare_result) != 1 + \
                             _RAIL_BALANCE_DISPATCH_COMMON_FIELDS or \

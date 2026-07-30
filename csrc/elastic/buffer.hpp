@@ -296,7 +296,10 @@ public:
         const int& num_max_tokens_per_rank,
         const int& num_topk,
         const int& num_destinations,
-        const int& num_channels) {
+        const int& num_channels,
+        const int& two_hop_threshold_percent,
+        const int& max_two_hop_percent,
+        const int& hop_penalty_percent) {
         const int64_t record_count =
             static_cast<int64_t>(num_max_tokens_per_rank) * num_topk;
         const int64_t record_bytes = rail_balance::checked_mul_i64(
@@ -328,6 +331,9 @@ public:
             .local_records = local_records,
             .peer_records = peer_records,
             .record_bytes = static_cast<size_t>(record_bytes),
+            .two_hop_threshold_percent = two_hop_threshold_percent,
+            .max_two_hop_percent = max_two_hop_percent,
+            .hop_penalty_percent = hop_penalty_percent,
             .prepared = prepare_rail_balance_hop_plan(num_channels),
         };
     }
@@ -346,7 +352,10 @@ public:
         const pybind11::object& remainder_seed,
         const pybind11::object& policy,
         const pybind11::object& threshold_percent,
-        const bool& hop_aware) {
+        const bool& hop_aware,
+        const int& two_hop_threshold_percent,
+        const int& max_two_hop_percent,
+        const int& hop_penalty_percent) {
         // Everything below is noncollective. Fail before touching the arena if
         // another private force transaction still owns it.
         EP_HOST_ASSERT(not destroyed);
@@ -391,6 +400,13 @@ public:
         EP_HOST_ASSERT(local_scaleout_rank >= 0 and
                        local_scaleout_rank < num_scaleout_ranks);
         EP_HOST_ASSERT(proxy_capacity_per_egress >= num_tokens);
+        EP_HOST_ASSERT(two_hop_threshold_percent >= 0 and
+                       two_hop_threshold_percent <= 10000);
+        EP_HOST_ASSERT(max_two_hop_percent >= 0 and
+                       max_two_hop_percent <= 100);
+        EP_HOST_ASSERT(hop_penalty_percent >= 0 and
+                       hop_penalty_percent <= 10000);
+        EP_HOST_ASSERT(hop_aware or max_two_hop_percent == 0);
         EP_HOST_ASSERT(hidden > 0 and hidden % 256 == 0);
         EP_HOST_ASSERT(
             num_experts % (num_scaleout_ranks * num_rails) == 0);
@@ -499,7 +515,9 @@ public:
             hop.emplace(make_rail_balance_hop_plan_state(
                 topk_idx, arena_layout, num_rails,
                 num_max_tokens_per_rank, num_topk,
-                num_scaleout_ranks, num_channels));
+                num_scaleout_ranks, num_channels,
+                two_hop_threshold_percent, max_two_hop_percent,
+                hop_penalty_percent));
         const int64_t active_count_values =
             static_cast<int64_t>(num_channels) * num_scaleout_ranks;
         EP_HOST_ASSERT(active_count_values > 0 and
@@ -592,7 +610,10 @@ public:
         const pybind11::object& remainder_seed,
         const pybind11::object& policy,
         const pybind11::object& threshold_percent,
-        const bool& hop_aware) {
+        const bool& hop_aware,
+        const int& two_hop_threshold_percent,
+        const int& max_two_hop_percent,
+        const int& hop_penalty_percent) {
         // This is the production-shaped, noncollective half of force dispatch.
         // It deliberately accepts no topology, local-rank, hidden, top-k, or
         // channel argument: all of those values are derived and frozen here.
@@ -642,6 +663,13 @@ public:
         EP_HOST_ASSERT(num_qps > 0 and
                        num_qps <= nccl_context->num_allocated_qps);
         EP_HOST_ASSERT(proxy_capacity_per_egress >= num_tokens);
+        EP_HOST_ASSERT(two_hop_threshold_percent >= 0 and
+                       two_hop_threshold_percent <= 10000);
+        EP_HOST_ASSERT(max_two_hop_percent >= 0 and
+                       max_two_hop_percent <= 100);
+        EP_HOST_ASSERT(hop_penalty_percent >= 0 and
+                       hop_penalty_percent <= 10000);
+        EP_HOST_ASSERT(hop_aware or max_two_hop_percent == 0);
 
         const int num_destinations = nccl_context->num_scaleout_ranks;
         const int num_rails = nccl_context->num_scaleup_ranks;
@@ -765,10 +793,6 @@ public:
         const auto compute_stream =
             at::cuda::getCurrentCUDAStream(device_index);
         const int invocation_key = ~invocation_id;
-        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
-            &arena_layout.get_control_ptr()->invocation_id,
-            &invocation_key, sizeof(invocation_key), cudaMemcpyHostToDevice,
-            comm_stream));
         const auto int_options = topk_idx.options().dtype(torch::kInt);
 
         // Allocate every plan/handle tensor before the first symmetric arena
@@ -904,7 +928,9 @@ public:
             hop.emplace(make_rail_balance_hop_plan_state(
                 topk_idx, arena_layout, num_rails,
                 num_max_tokens_per_rank, num_topk,
-                num_destinations, num_channels));
+                num_destinations, num_channels,
+                two_hop_threshold_percent, max_two_hop_percent,
+                hop_penalty_percent));
 
         auto host_workspace_layout = layout::WorkspaceLayout(
             host_workspace, num_destinations, num_rails, num_experts);
@@ -1089,6 +1115,10 @@ public:
                 scaleout_rank_idx, comm_stream);
         }
 
+        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+            &arena_layout.get_control_ptr()->invocation_id,
+            &invocation_key, sizeof(invocation_key), cudaMemcpyHostToDevice,
+            comm_stream));
         int host_status = 0;
         CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
             &host_status, pending.raw.status, sizeof(host_status),
@@ -1159,7 +1189,7 @@ public:
                     hop.peer_records[owner], hop.record_bytes,
                     cudaMemcpyDeviceToDevice, comm_stream));
             }
-            launch_prepared_rail_balance_hop_one_hop_plan(
+            launch_prepared_rail_balance_hop_plan(
                 hop.prepared, records,
                 reinterpret_cast<rail_balance::HopCopyResolution*>(
                     hop.resolutions.data_ptr<int>()),
@@ -1174,7 +1204,10 @@ public:
                 pending.num_channels, pending.num_destinations,
                 pending.num_max_tokens_per_rank,
                 pending.proxy_capacity_per_egress,
-                pending.normalized_remainder_seed, comm_stream);
+                pending.normalized_remainder_seed,
+                hop.two_hop_threshold_percent,
+                hop.max_two_hop_percent,
+                hop.hop_penalty_percent, comm_stream);
         } else {
             auto* snapshot = pending.raw.channel_count;
             for (int owner = 0; owner < pending.num_rails; ++owner) {
@@ -2139,10 +2172,20 @@ public:
         const pybind11::object& remainder_seed,
         const pybind11::object& policy,
         const pybind11::object& threshold_percent,
-        const std::optional<torch::Tensor>& hop_records) {
+        const std::optional<torch::Tensor>& hop_records,
+        const int& two_hop_threshold_percent,
+        const int& max_two_hop_percent,
+        const int& hop_penalty_percent) {
         constexpr int kWorldRanks = 8;
         constexpr int64_t kArenaGuardBytes = 4096;
         const bool hop_aware = hop_records.has_value();
+        EP_HOST_ASSERT(two_hop_threshold_percent >= 0 and
+                       two_hop_threshold_percent <= 10000);
+        EP_HOST_ASSERT(max_two_hop_percent >= 0 and
+                       max_two_hop_percent <= 100);
+        EP_HOST_ASSERT(hop_penalty_percent >= 0 and
+                       hop_penalty_percent <= 10000);
+        EP_HOST_ASSERT(hop_aware or max_two_hop_percent == 0);
 
         // This bridge is a private, pure-single-node proof.  The real Hybrid
         // buffer and its public ABI remain untouched.
@@ -2434,6 +2477,9 @@ public:
                 .local_records = nullptr,
                 .peer_records = {},
                 .record_bytes = 0,
+                .two_hop_threshold_percent = two_hop_threshold_percent,
+                .max_two_hop_percent = max_two_hop_percent,
+                .hop_penalty_percent = hop_penalty_percent,
                 .prepared = prepare_rail_balance_hop_plan(num_channels),
             });
         }
@@ -2494,7 +2540,7 @@ public:
             plan.channel_count.data_ptr<int>(), channel_count.data_ptr<int>(),
             channel_count.nbytes(), cudaMemcpyDeviceToDevice, comm_stream));
         if (hop_aware) {
-            launch_prepared_rail_balance_hop_one_hop_plan(
+            launch_prepared_rail_balance_hop_plan(
                 hop->prepared,
                 reinterpret_cast<const rail_balance::HopCopyRecord*>(
                     hop->records.data_ptr<int64_t>()),
@@ -2510,7 +2556,10 @@ public:
                 plan.moved_copies.data_ptr<int>(), plan.status.data_ptr<int>(),
                 num_source_ranks, num_max_tokens_per_rank, num_topk,
                 num_channels, num_destinations, num_max_tokens_per_rank,
-                proxy_capacity, normalized_remainder_seed, comm_stream);
+                proxy_capacity, normalized_remainder_seed,
+                hop->two_hop_threshold_percent,
+                hop->max_two_hop_percent,
+                hop->hop_penalty_percent, comm_stream);
         } else {
             launch_prepared_rail_balance_hybrid_plan(
                 prepared_plan,
@@ -5609,7 +5658,10 @@ static void register_apis(pybind11::module_& m) {
             pybind11::arg("policy") =
                 static_cast<int>(rail_balance::HybridPolicy::All),
             pybind11::arg("threshold_percent") = 0,
-            pybind11::arg("hop_aware") = false)
+            pybind11::arg("hop_aware") = false,
+            pybind11::arg("two_hop_threshold_percent") = 0,
+            pybind11::arg("max_two_hop_percent") = 0,
+            pybind11::arg("hop_penalty_percent") = 0)
         .def(
             "_rail_balance_hybrid_plan_prepare",
             &ElasticBuffer::rail_balance_hybrid_plan_prepare,
@@ -5627,7 +5679,10 @@ static void register_apis(pybind11::module_& m) {
             pybind11::arg("policy") =
                 static_cast<int>(rail_balance::HybridPolicy::All),
             pybind11::arg("threshold_percent") = 0,
-            pybind11::arg("hop_aware") = false)
+            pybind11::arg("hop_aware") = false,
+            pybind11::arg("two_hop_threshold_percent") = 0,
+            pybind11::arg("max_two_hop_percent") = 0,
+            pybind11::arg("hop_penalty_percent") = 0)
         .def(
             "_rail_balance_hybrid_plan_finish",
             &ElasticBuffer::rail_balance_hybrid_plan_finish,
@@ -5702,7 +5757,10 @@ static void register_apis(pybind11::module_& m) {
             pybind11::arg("policy") =
                 static_cast<int>(rail_balance::HybridPolicy::All),
             pybind11::arg("threshold_percent") = 0,
-            pybind11::arg("hop_records") = pybind11::none())
+            pybind11::arg("hop_records") = pybind11::none(),
+            pybind11::arg("two_hop_threshold_percent") = 0,
+            pybind11::arg("max_two_hop_percent") = 0,
+            pybind11::arg("hop_penalty_percent") = 0)
         .def(
             "_rail_balance_hybrid_vnode_finish",
             &ElasticBuffer::rail_balance_hybrid_vnode_finish,

@@ -18,7 +18,17 @@ def _record(destination: int, target_mask: int) -> int:
     return (destination << 32) | target_mask
 
 
-def _build(records, *, channels, destinations, capacity, seed=0):
+def _build(
+    records,
+    *,
+    channels,
+    destinations,
+    capacity,
+    seed=0,
+    threshold_percent=0,
+    max_two_hop_percent=0,
+    hop_penalty_percent=0,
+):
     tensor = torch.tensor(records, device="cuda", dtype=torch.int64)
     outputs = _C._build_rail_balance_hop_one_hop_plan(
         tensor,
@@ -27,6 +37,9 @@ def _build(records, *, channels, destinations, capacity, seed=0):
         tensor.size(1),
         capacity,
         seed,
+        threshold_percent,
+        max_two_hop_percent,
+        hop_penalty_percent,
     )
     return tensor, tuple(output.cpu() for output in outputs)
 
@@ -72,7 +85,14 @@ def _validate_greedy_choices(
                     + remaining[egress][destination] <= num_tokens
                 ]
 
-                def score(egress: int) -> tuple[int, int, int, int, int]:
+                def score(
+                    egress: int,
+                    *,
+                    destination: int = destination,
+                    owner: int = owner,
+                    mask: int = mask,
+                    flat: int = flat,
+                ) -> tuple[int, int, int, int, int]:
                     return (
                         max(load + (rail == egress)
                             for rail, load in enumerate(pair[destination])),
@@ -110,6 +130,7 @@ def _validate(
     channels: int,
     destinations: int,
     seed: int = 0,
+    max_two_hop_percent: int = 0,
 ) -> None:
     (
         resolutions,
@@ -157,7 +178,10 @@ def _validate(
                 present += 1
                 assert 0 <= destination < destinations
                 assert 0 <= egress < rails
-                assert (target_mask | (1 << owner)) & (1 << egress)
+                endpoint = bool(
+                    (target_mask | (1 << owner)) & (1 << egress))
+                if max_two_hop_percent == 0:
+                    assert endpoint
                 assert 0 <= channel < channels and remote_slot >= 0
                 is_moved = egress != owner
                 if is_moved:
@@ -173,9 +197,10 @@ def _validate(
                 expected_source[egress] += 1
                 if egress == owner:
                     path = 0 if target_mask == 1 << owner else 1
-                else:
-                    assert target_mask & (1 << egress)
+                elif target_mask & (1 << egress):
                     path = 2
+                else:
+                    path = 3
                 expected_paths[path] += 1
 
     assert torch.equal(pair_load, expected_pair)
@@ -183,11 +208,12 @@ def _validate(
     assert torch.equal(retained, expected_retained)
     assert torch.equal(moved, expected_moved)
     assert torch.equal(path_units, expected_paths)
-    assert path_units[3].item() == 0
+    assert path_units[3].item() <= \
+        present * max_two_hop_percent // 100
     assert path_units.sum().item() == present
     assert moved_copies.item() == moved.sum().item()
     assert torch.all(pair_load <= num_tokens)
-    if status.tolist() != [4]:
+    if status.tolist() != [4] and max_two_hop_percent == 0:
         _validate_greedy_choices(
             records, resolutions, channels=channels, seed=seed
         )
@@ -262,6 +288,51 @@ def test_diagonal_has_no_one_hop_escape() -> None:
     assert outputs[7].tolist() == [8, 0, 0, 0]
 
 
+def test_adaptive_diagonal_uses_bounded_third_rail_escape() -> None:
+    records = tuple(
+        tuple(
+            (_record(1, 1),) if owner == 0 else (_UNUSED,)
+            for _ in range(8)
+        )
+        for owner in range(4)
+    )
+    tensor, outputs = _build(
+        records, channels=2, destinations=2, capacity=32,
+        max_two_hop_percent=50,
+    )
+    _validate(
+        tensor, outputs, channels=2, destinations=2,
+        max_two_hop_percent=50,
+    )
+    assert outputs[7].tolist() == [4, 0, 0, 4]
+    assert max(outputs[1][1]).item() == 4
+
+
+def test_adaptive_threshold_and_cap_stop_extra_hops() -> None:
+    records = tuple(
+        tuple(
+            (_record(1, 1),) if owner == 0 else (_UNUSED,)
+            for _ in range(8)
+        )
+        for owner in range(4)
+    )
+    _tensor, rejected = _build(
+        records, channels=2, destinations=2, capacity=32,
+        threshold_percent=100, max_two_hop_percent=50,
+    )
+    assert rejected[7].tolist() == [8, 0, 0, 0]
+
+    tensor, capped = _build(
+        records, channels=2, destinations=2, capacity=32,
+        max_two_hop_percent=25,
+    )
+    _validate(
+        tensor, capped, channels=2, destinations=2,
+        max_two_hop_percent=25,
+    )
+    assert capped[7].tolist() == [6, 0, 0, 2]
+
+
 def test_random_one_hop_invariants_and_determinism() -> None:
     for seed in range(128):
         rng = random.Random(seed)
@@ -330,6 +401,39 @@ def test_proxy_capacity_and_corrupt_records_fail_closed() -> None:
                         corrupt, 2, 2, 8, 64, 0
                     ))
     assert outputs[-1].tolist() == [4]
+
+
+def test_random_adaptive_invariants_cap_and_determinism() -> None:
+    for seed in range(64):
+        rng = random.Random(1000 + seed)
+        rails = rng.choice((3, 4, 8))
+        num_tokens = rng.randint(1, 12)
+        records = []
+        for _owner in range(rails):
+            owner_records = []
+            for _token in range(num_tokens):
+                target = rng.randrange(rails)
+                owner_records.append((_record(1, 1 << target),))
+            records.append(tuple(owner_records))
+        ratio = rng.choice((10, 25, 50))
+        kwargs = {
+            "channels": rng.randint(1, 4),
+            "destinations": 2,
+            "capacity": rails * num_tokens,
+            "seed": rng.randrange(64),
+            "max_two_hop_percent": ratio,
+            "hop_penalty_percent": rng.choice((0, 25, 50)),
+        }
+        tensor, first = _build(tuple(records), **kwargs)
+        _tensor, second = _build(tuple(records), **kwargs)
+        assert all(torch.equal(lhs, rhs) for lhs, rhs in zip(first, second))
+        _validate(
+            tensor,
+            first,
+            channels=kwargs["channels"],
+            destinations=2,
+            max_two_hop_percent=ratio,
+        )
 
 
 def test_zero_tokens() -> None:

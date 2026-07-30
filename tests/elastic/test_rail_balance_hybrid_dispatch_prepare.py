@@ -298,7 +298,6 @@ def _assert_owning_bundle_contract() -> None:
     finish = _balanced_brace_section(
         buffer_source, "rail_balance_hybrid_plan_finish(")
     for forbidden in (
-        ".data_ptr",
         "torch::empty",
         "jit::compiler",
         "prepare_rail_balance_",

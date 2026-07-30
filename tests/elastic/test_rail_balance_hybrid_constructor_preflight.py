@@ -16,7 +16,7 @@ from deep_ep.buffers import elastic as elastic_module
 
 
 _WORDS = 128
-_MANIFEST_WIDTH = 28
+_MANIFEST_WIDTH = 31
 _MODE_FIELD = 5
 _WORLD_FIELD = 6
 _M_FIELD = 7
@@ -25,8 +25,11 @@ _K_FIELD = 9
 _PCAP_FIELD = 10
 _POLICY_FIELD = 15
 _THRESHOLD_FIELD = 16
-_LAYOUT_LEN_FIELD = 17
-_LAYOUT_BEGIN = 18
+_TWO_HOP_THRESHOLD_FIELD = 17
+_MAX_TWO_HOP_FIELD = 18
+_HOP_PENALTY_FIELD = 19
+_LAYOUT_LEN_FIELD = 20
+_LAYOUT_BEGIN = 21
 _POLICY_IDS = {'all': 0, 'active': 1, 'adaptive': 2}
 
 _SIZING_WIDTH = 20
@@ -201,7 +204,7 @@ def _assert_manifest_semantics(fields, config, world_size):
     else:
         # Off contributes only mode/world protocol identity.  It must not call
         # a force sizing/layout helper merely to populate the temporary gate.
-        assert fields[_M_FIELD:_LAYOUT_LEN_FIELD + 1] == [0] * 11
+        assert fields[_M_FIELD:_LAYOUT_LEN_FIELD + 1] == [0] * 14
         assert fields[_LAYOUT_LEN_FIELD] == 0
         assert fields[_LAYOUT_BEGIN:_MANIFEST_WIDTH] == [0] * len(_LAYOUT)
 
@@ -222,7 +225,7 @@ def _peer_manifest(local_fields, peer_config):
         fields[_LAYOUT_LEN_FIELD] = len(peer_layout)
         fields[_LAYOUT_BEGIN:_MANIFEST_WIDTH] = peer_layout
     else:
-        fields[_M_FIELD:_LAYOUT_LEN_FIELD + 1] = [0] * 11
+        fields[_M_FIELD:_LAYOUT_LEN_FIELD + 1] = [0] * 14
         fields[_LAYOUT_LEN_FIELD] = 0
         fields[_LAYOUT_BEGIN:_MANIFEST_WIDTH] = [0] * len(_LAYOUT)
     # Protocol identity and WORLD size must be identical for this fake pair.
@@ -637,6 +640,9 @@ def test_unanimous_force_retains_the_exact_gate_storage_and_idle_owner():
         '_rail_balance_proxy_slots_per_rank',
         '_rail_balance_policy',
         '_rail_balance_threshold_percent',
+        '_rail_balance_two_hop_threshold_percent',
+        '_rail_balance_max_two_hop_percent',
+        '_rail_balance_hop_penalty_percent',
         '_rail_balance_arena_offset',
         '_rail_balance_arena_bytes',
         '_rail_balance_world_gate_device_words',

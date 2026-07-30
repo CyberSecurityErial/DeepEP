@@ -1141,3 +1141,29 @@ Out of scope until evidence expands the project:
 - CPU evidence is 5/5 new benchmark contracts plus the unchanged C105 23/23
   suite.  The current workspace cannot execute real D>1 Gin, so the report
   schema and commands are ready but no DeepEP V2 speedup number exists yet.
+
+## Hop-aware branch context (2026-07-31)
+
+- Branch `feat/rail-balance-hop-aware` starts from the existing prototype and
+  keeps the native public capability closed.  The semantic source of truth is
+  the endpoint-aware Python reference plus
+  `docs/rail_balance_hop_aware_audit.md` and
+  `docs/rail_balance_hop_aware_design.md`.
+- DeepEP shares one payload across the target local-rank mask `T`; therefore
+  the implementation retains `(owner, destination node, target mask, egress)`.
+  The literal per-copy rule remains: endpoint Rails are one-hop candidates and
+  any Rail outside owner plus targets is two-hop.
+- One-hop and adaptive use one record/resolution ABI, one source shuffle, one
+  vnode pack/demux specialization, and the existing destination/combine path.
+  Adaptive first completes one-hop and then performs bounded, profitable
+  third-Rail moves.  No expert endpoint changes.
+- Current local evidence: planner CUDA 8/8; one-hop and adaptive 4x2 round trips
+  pass on eight H200s; API and constructor preflight are 9/9; public ticket and
+  H4b/H4c source contracts pass.  Adaptive's synthetic diagonal proof moves 8
+  of 16 copies under a 50% cap and returns exact BF16 values and weights.
+- Current planner selection is deterministic single-lane code.  It is a
+  correctness implementation pending profiler-free timing and Nsys/NCU
+  attribution, not an accepted hot-path optimization.
+- Single-node vnode results have diagnostic scope only.  Real Gin/RDMA,
+  receiver NIC load, rank-max latency, and capability enablement remain
+  deferred to truthful D>1 hardware.

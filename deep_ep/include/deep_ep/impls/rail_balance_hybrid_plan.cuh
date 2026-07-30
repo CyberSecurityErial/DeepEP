@@ -182,12 +182,13 @@ void rail_balance_hop_record_impl(
     }
 }
 
-// Correctness-first deterministic one-hop planner. One lane performs the
-// fixed-order assignment; later profiling decides whether this phase warrants
-// a parallel implementation. There are no data-plane atomics or queues.
+// Correctness-first deterministic hop planner. It always builds the endpoint
+// plan first, then optionally moves only profitable residual copies to a
+// third Rail. One lane keeps selection order reproducible; later profiling
+// decides whether this phase warrants parallelization.
 template <int kInstantiation = 0>
 __global__ __launch_bounds__(32, 1)
-void rail_balance_hop_one_hop_plan_impl(
+void rail_balance_hop_plan_impl(
         const HopCopyRecord* records,
         HopCopyResolution* resolutions,
         int* pair_load,
@@ -207,7 +208,10 @@ void rail_balance_hop_one_hop_plan_impl(
         const int num_destinations,
         const int num_max_tokens_per_rank,
         const int proxy_capacity_per_egress,
-        const int planner_seed) {
+        const int planner_seed,
+        const int two_hop_threshold_percent,
+        const int max_two_hop_percent,
+        const int hop_penalty_percent) {
     if (threadIdx.x != 0)
         return;
     if (records == nullptr or resolutions == nullptr or pair_load == nullptr or
@@ -219,7 +223,11 @@ void rail_balance_hop_one_hop_plan_impl(
         num_channels < 1 or num_channels > kNumHybridMaxChannels or
         num_destinations < 2 or num_destinations > 32 or
         num_max_tokens_per_rank < num_tokens or
-        proxy_capacity_per_egress < 0 or planner_seed < 0) {
+        proxy_capacity_per_egress < 0 or planner_seed < 0 or
+        two_hop_threshold_percent < 0 or
+        two_hop_threshold_percent > 10000 or
+        max_two_hop_percent < 0 or max_two_hop_percent > 100 or
+        hop_penalty_percent < 0 or hop_penalty_percent > 10000) {
         hybrid_plan_detail::report_error(
             status, HybridPlanError::InvalidSchedule);
         return;
@@ -248,6 +256,7 @@ void rail_balance_hop_one_hop_plan_impl(
     // Validate the fixed table and reserve every owner's still-unscheduled
     // traffic. This prevents inbound moves from consuming an owner's only
     // feasible direct capacity.
+    int total_units = 0;
     for (int64_t index = 0; index < num_records; ++index) {
         resolutions[index] = {-1, -1, -1, -1};
         const auto record = records[index];
@@ -269,6 +278,7 @@ void rail_balance_hop_one_hop_plan_impl(
         const int owner = static_cast<int>(
             index / (static_cast<int64_t>(num_tokens) * num_topk));
         ++owner_remaining[owner * num_destinations + record.destination];
+        ++total_units;
     }
 
     for (int64_t index = 0; index < num_records; ++index) {
@@ -337,6 +347,148 @@ void rail_balance_hop_one_hop_plan_impl(
             return;
         }
 
+        resolutions[index] = {best_egress, -1, -1, -1};
+        ++pair_load[destination * num_rails + best_egress];
+        ++source_load[best_egress];
+        if (best_egress != owner)
+            ++proxy_required[best_egress];
+    }
+
+    const int two_hop_cap = static_cast<int>(
+        static_cast<int64_t>(total_units) * max_two_hop_percent / 100);
+    int selected_two_hop = 0;
+    while (selected_two_hop < two_hop_cap) {
+        int best_index = -1;
+        int best_egress = -1;
+        int64_t best_net_gain = INT64_MIN;
+        int best_pair_after = INT_MAX;
+        int best_source_after = INT_MAX;
+        int best_added_hops = INT_MAX;
+        int best_tie = INT_MAX;
+
+        for (int64_t index = 0; index < num_records; ++index) {
+            const auto record = records[index];
+            if (record.target_mask == 0)
+                continue;
+            const int owner = static_cast<int>(
+                index / (static_cast<int64_t>(num_tokens) * num_topk));
+            const int old_egress = resolutions[index].egress;
+            const uint32_t endpoints =
+                record.target_mask | (uint32_t{1} << owner);
+            if ((endpoints & (uint32_t{1} << old_egress)) == 0)
+                continue;
+
+            int pair_before = 0;
+            int source_before = 0;
+            for (int rail = 0; rail < num_rails; ++rail) {
+                pair_before = max(
+                    pair_before,
+                    pair_load[record.destination * num_rails + rail]);
+                source_before = max(source_before, source_load[rail]);
+            }
+            const int old_pair = pair_load[
+                record.destination * num_rails + old_egress];
+            const int old_source = source_load[old_egress];
+            if (old_pair < pair_before and old_source < source_before)
+                continue;
+
+            const int old_forwards = (old_egress != owner) +
+                __popc(record.target_mask &
+                       ~(uint32_t{1} << old_egress));
+            for (int egress = 0; egress < num_rails; ++egress) {
+                if ((endpoints & (uint32_t{1} << egress)) != 0 or
+                    pair_load[record.destination * num_rails + egress] >=
+                        num_max_tokens_per_rank or
+                    proxy_required[egress] >= proxy_capacity_per_egress)
+                    continue;
+
+                int pair_after = 0;
+                int source_after = 0;
+                for (int rail = 0; rail < num_rails; ++rail) {
+                    const int pair_value =
+                        pair_load[record.destination * num_rails + rail] -
+                        (rail == old_egress) + (rail == egress);
+                    const int source_value = source_load[rail] -
+                        (rail == old_egress) + (rail == egress);
+                    pair_after = max(pair_after, pair_value);
+                    source_after = max(source_after, source_value);
+                }
+                const int new_pair = pair_load[
+                    record.destination * num_rails + egress];
+                const int new_source = source_load[egress];
+                const int pair_relief = min(1, max(0, old_pair - new_pair));
+                const int source_relief =
+                    min(1, max(0, old_source - new_source));
+                const int new_forwards = 1 + __popc(record.target_mask);
+                const int added_hops = new_forwards - old_forwards;
+                const int64_t net_gain =
+                    static_cast<int64_t>(pair_relief + source_relief) * 100 -
+                    static_cast<int64_t>(hop_penalty_percent) * added_hops;
+                const int64_t threshold =
+                    static_cast<int64_t>(two_hop_threshold_percent) *
+                    (pair_before + source_before);
+                if (net_gain <= 0 or net_gain <= threshold)
+                    continue;
+
+                const int origin = static_cast<int>(
+                    (static_cast<int64_t>(planner_seed) +
+                     record.destination + index) % num_rails);
+                const int tie = (egress - origin + num_rails) % num_rails;
+                bool better = net_gain > best_net_gain;
+                if (net_gain == best_net_gain) {
+                    if (pair_after != best_pair_after)
+                        better = pair_after < best_pair_after;
+                    else if (source_after != best_source_after)
+                        better = source_after < best_source_after;
+                    else if (added_hops != best_added_hops)
+                        better = added_hops < best_added_hops;
+                    else if (tie != best_tie)
+                        better = tie < best_tie;
+                    else if (egress != best_egress)
+                        better = egress < best_egress;
+                    else
+                        better = index < best_index;
+                }
+                if (better) {
+                    best_index = static_cast<int>(index);
+                    best_egress = egress;
+                    best_net_gain = net_gain;
+                    best_pair_after = pair_after;
+                    best_source_after = source_after;
+                    best_added_hops = added_hops;
+                    best_tie = tie;
+                }
+            }
+        }
+        if (best_index < 0)
+            break;
+
+        const auto record = records[best_index];
+        const int owner = static_cast<int>(
+            static_cast<int64_t>(best_index) /
+            (static_cast<int64_t>(num_tokens) * num_topk));
+        const int old_egress = resolutions[best_index].egress;
+        --pair_load[record.destination * num_rails + old_egress];
+        ++pair_load[record.destination * num_rails + best_egress];
+        --source_load[old_egress];
+        ++source_load[best_egress];
+        if (old_egress != owner)
+            --proxy_required[old_egress];
+        ++proxy_required[best_egress];
+        resolutions[best_index].egress = best_egress;
+        ++selected_two_hop;
+    }
+
+    // Materialize dense channel-local slots only after two-hop selection has
+    // finalized every egress. This keeps data-plane offsets static.
+    for (int64_t index = 0; index < num_records; ++index) {
+        const auto record = records[index];
+        if (record.target_mask == 0)
+            continue;
+        const int owner = static_cast<int>(
+            index / (static_cast<int64_t>(num_tokens) * num_topk));
+        const int token = static_cast<int>((index / num_topk) % num_tokens);
+        const int egress = resolutions[index].egress;
         int best_channel = -1;
         int best_group_load = INT_MAX;
         int best_channel_tie = INT_MAX;
@@ -345,8 +497,8 @@ void rail_balance_hop_one_hop_plan_impl(
             (num_max_tokens_per_rank + num_channels - 1) / num_channels;
         for (int channel = 0; channel < num_channels; ++channel) {
             const int group =
-                (best_egress * num_channels + channel) * num_destinations +
-                destination;
+                (egress * num_channels + channel) * num_destinations +
+                record.destination;
             const int group_load = retained[group] + moved[group];
             const int channel_tie =
                 (channel - source_channel + num_channels) % num_channels;
@@ -368,23 +520,19 @@ void rail_balance_hop_one_hop_plan_impl(
         }
 
         const int group =
-            (best_egress * num_channels + best_channel) * num_destinations +
-            destination;
-        const bool is_moved = best_egress != owner;
+            (egress * num_channels + best_channel) * num_destinations +
+            record.destination;
+        const bool is_moved = egress != owner;
         int& group_count = is_moved ? moved[group] : retained[group];
-        const int remote_slot = group_count++;
-        resolutions[index] = {
-            best_egress, best_channel, remote_slot, -1};
-        ++pair_load[destination * num_rails + best_egress];
-        ++source_load[best_egress];
+        resolutions[index] = {egress, best_channel, group_count++, -1};
 
         int path = static_cast<int>(HopPathKind::TwoHop);
-        if (best_egress == owner) {
+        if (egress == owner) {
             path = record.target_mask == (uint32_t{1} << owner) ?
                 static_cast<int>(HopPathKind::Direct) :
                 static_cast<int>(HopPathKind::DestinationForward);
         } else if ((record.target_mask &
-                    (uint32_t{1} << best_egress)) != 0) {
+                    (uint32_t{1} << egress)) != 0) {
             path = static_cast<int>(HopPathKind::SourceForward);
         }
         ++path_units[path];

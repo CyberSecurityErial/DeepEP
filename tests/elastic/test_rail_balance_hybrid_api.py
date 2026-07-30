@@ -30,6 +30,7 @@ def _expect_error(error_type, expected_message, function):
 def _run_force_constructor(legacy_helper=None, layout_helper=None,
                            force_size_helper=None, **rail_balance_kwargs):
     calls = {'order': []}
+    mode = rail_balance_kwargs.pop('rail_balance', 'force')
 
     class FakeGroup:
         def rank(self):
@@ -125,7 +126,7 @@ def _run_force_constructor(legacy_helper=None, layout_helper=None,
                 num_max_tokens_per_rank=128,
                 hidden=1024,
                 num_topk=4,
-                rail_balance='force',
+                rail_balance=mode,
                 rail_balance_proxy_slots_per_rank=32,
                 **rail_balance_kwargs)
         except Exception as caught:
@@ -151,22 +152,32 @@ def _run_force_constructor(legacy_helper=None, layout_helper=None,
 
 def test_config_parser_is_strict_and_deterministic():
     parse = elastic_module._parse_rail_balance_config
-    assert parse('off', 0) == ('off', 0, 0, 0)
-    assert parse('force', 1) == ('force', 1, 0, 0)
-    assert parse('force', 1, 'active', 20) == ('force', 1, 1, 20)
+    assert parse('off', 0) == ('off', 0, 0, 0, 0, 0, 0)
+    assert parse('force', 1) == ('force', 1, 0, 0, 0, 0, 0)
+    assert parse('force', 1, 'active', 20) == \
+        ('force', 1, 1, 20, 0, 0, 0)
     assert parse('force', 1, 'adaptive', 3100) == \
-        ('force', 1, 2, 3100)
-    assert parse('legacy_exact', 1) == ('legacy_exact', 1, 0, 0)
-    assert parse('one_hop', 1) == ('one_hop', 1, 0, 0)
-    assert parse('adaptive', 1) == ('adaptive', 1, 0, 0)
+        ('force', 1, 2, 3100, 0, 0, 0)
+    assert parse('legacy_exact', 1) == \
+        ('legacy_exact', 1, 0, 0, 0, 0, 0)
+    assert parse('one_hop', 1) == ('one_hop', 1, 0, 0, 0, 0, 0)
+    assert parse('adaptive', 1) == ('adaptive', 1, 0, 0, 0, 25, 50)
+    assert parse('adaptive', 1, 'all', 0, 7, 40, 90) == \
+        ('adaptive', 1, 0, 0, 7, 40, 90)
     assert parse('force', (1 << 31) - 1) == \
-        ('force', (1 << 31) - 1, 0, 0)
+        ('force', (1 << 31) - 1, 0, 0, 0, 0, 0)
     make_manifest = elastic_module._make_rail_balance_constructor_manifest
     layout = (0,) * elastic_module._RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS
     assert make_manifest('force', 8, arena_layout=layout)[5] == 1
     assert make_manifest('legacy_exact', 8, arena_layout=layout)[5] == 1
     assert make_manifest('one_hop', 8, arena_layout=layout)[5] == 2
-    assert make_manifest('adaptive', 8, arena_layout=layout)[5] == 3
+    adaptive_manifest = make_manifest(
+        'adaptive', 8, arena_layout=layout,
+        two_hop_threshold_percent=7,
+        max_two_hop_percent=40,
+        hop_penalty_percent=90)
+    assert adaptive_manifest[5] == 3
+    assert adaptive_manifest[17:20] == (7, 40, 90)
 
     invalid = (
         (None, 0,
@@ -286,16 +297,19 @@ def test_new_constructor_arguments_are_keyword_only_suffixes():
         'num_allocated_qps', 'num_cpu_timeout_secs', 'num_gpu_timeout_secs',
         'explicitly_destroy',
     )
-    assert tuple(parameter.name for parameter in parameters[:-4]) == old_names
+    assert tuple(parameter.name for parameter in parameters[:-7]) == old_names
     assert all(parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-               for parameter in parameters[:-4])
-    assert tuple(parameter.name for parameter in parameters[-4:]) == (
+               for parameter in parameters[:-7])
+    assert tuple(parameter.name for parameter in parameters[-7:]) == (
         'rail_balance', 'rail_balance_proxy_slots_per_rank',
-        'rail_balance_policy', 'rail_balance_threshold_percent')
+        'rail_balance_policy', 'rail_balance_threshold_percent',
+        'rail_balance_two_hop_threshold_percent',
+        'rail_balance_max_two_hop_percent',
+        'rail_balance_hop_penalty_percent')
     assert all(parameter.kind is inspect.Parameter.KEYWORD_ONLY
-               for parameter in parameters[-4:])
-    assert tuple(parameter.default for parameter in parameters[-4:]) == (
-        'off', 0, 'all', 0)
+               for parameter in parameters[-7:])
+    assert tuple(parameter.default for parameter in parameters[-7:]) == (
+        'off', 0, 'all', 0, 0, 25, 50)
 
 
 def test_default_ep_handle_fields_are_unchanged():
@@ -503,6 +517,9 @@ def test_force_path_owns_checked_tail_arena_and_runtime_total():
         '_rail_balance_proxy_slots_per_rank',
         '_rail_balance_policy',
         '_rail_balance_threshold_percent',
+        '_rail_balance_two_hop_threshold_percent',
+        '_rail_balance_max_two_hop_percent',
+        '_rail_balance_hop_penalty_percent',
         '_rail_balance_arena_offset',
         '_rail_balance_arena_bytes',
         '_rail_balance_world_gate_device_words',
@@ -518,6 +535,9 @@ def test_force_path_owns_checked_tail_arena_and_runtime_total():
     assert buffer._rail_balance_proxy_slots_per_rank == 32
     assert buffer._rail_balance_policy == 0
     assert buffer._rail_balance_threshold_percent == 0
+    assert buffer._rail_balance_two_hop_threshold_percent == 0
+    assert buffer._rail_balance_max_two_hop_percent == 0
+    assert buffer._rail_balance_hop_penalty_percent == 0
     assert buffer._rail_balance_arena_offset == _LEGACY_BYTES
     assert buffer._rail_balance_arena_bytes == _ARENA_BYTES
     assert buffer._rail_balance_next_invocation_id == 1
@@ -534,6 +554,16 @@ def test_force_path_owns_checked_tail_arena_and_runtime_total():
     assert error is None, error
     assert buffer._rail_balance_policy == 2
     assert buffer._rail_balance_threshold_percent == 20
+
+    calls, buffer, error = _run_force_constructor(
+        rail_balance='adaptive',
+        rail_balance_two_hop_threshold_percent=7,
+        rail_balance_max_two_hop_percent=40,
+        rail_balance_hop_penalty_percent=90)
+    assert error is None, error
+    assert buffer._rail_balance_two_hop_threshold_percent == 7
+    assert buffer._rail_balance_max_two_hop_percent == 40
+    assert buffer._rail_balance_hop_penalty_percent == 90
 
 
 def test_force_size_mismatch_fails_before_runtime_construction():

@@ -115,7 +115,9 @@ def _assert_commit_contract() -> None:
     guard_begin = code.index(device_guard)
     assert code.count(device_guard) == 1
     assert guard_begin < invalid_begin
-    source_begin, source_end = _call_span(
+    hop_source_begin, hop_source_end = _call_span(
+        code, "submit_prepared_rail_balance_hop_source_shuffle")
+    legacy_source_begin, legacy_source_end = _call_span(
         code, "submit_prepared_rail_balance_hybrid_source_shuffle")
     barrier_begin, barrier_end = _call_span(
         code, "submit_prepared_rail_balance_hybrid_local_barrier")
@@ -126,14 +128,18 @@ def _assert_commit_contract() -> None:
     live_begin = code.index(live)
     live_end = live_begin + len(live)
 
-    assert code[invalid_end:source_begin].strip() == ""
-    assert code[source_end:barrier_begin].strip() == ""
+    source_region = code[invalid_end:barrier_begin]
+    assert source_region.strip().startswith("if (hop_aware) {")
+    assert hop_source_begin < hop_source_end < legacy_source_begin < \
+        legacy_source_end < barrier_begin
     assert code[barrier_end:dispatch_begin].strip() == ""
     assert code[dispatch_end:shuffled_begin].strip() == ""
     assert code[shuffled_end:live_begin].strip() == ""
     assert code[live_end:].strip() == "}"
     critical = code[invalid_begin:live_end]
-    assert critical.count(";") == 6
+    assert critical.count(";") == 7
+    assert critical.count(
+        "submit_prepared_rail_balance_hop_source_shuffle(") == 1
     assert critical.count(
         "submit_prepared_rail_balance_hybrid_source_shuffle(") == 1
     assert critical.count(
@@ -149,10 +155,11 @@ def _assert_commit_contract() -> None:
         "CUDAGuard",
     ):
         assert forbidden not in critical, forbidden
+    assert critical.count("if (hop_aware)") == 1
     assert not re.search(
-        r"\b(if|for|while|try|catch|return|throw)\b", critical)
+        r"\b(for|while|try|catch|return|throw)\b", critical)
 
-    source_call = code[source_begin:source_end]
+    source_call = code[legacy_source_begin:legacy_source_end]
     for field in (
         "raw.x", "raw.topk_idx", "raw.topk_weights", "raw.arena",
         "raw.owner_channel_prefix", "raw.keep_count", "raw.segments",
@@ -160,6 +167,13 @@ def _assert_commit_contract() -> None:
         "raw.group_prefix", "raw.proxy_required", "raw.status",
     ):
         assert field in source_call, field
+    hop_source_call = code[hop_source_begin:hop_source_end]
+    for field in (
+        "raw.x", "raw.topk_idx", "raw.topk_weights", "raw.arena",
+        "hop_records", "hop_resolutions", "raw.retained",
+        "raw.group_prefix", "raw.proxy_required", "raw.status",
+    ):
+        assert field in hop_source_call, field
     barrier_call = code[barrier_begin:barrier_end]
     for field in (
         "prepared_local_barrier", "local_barrier_launch_args",
@@ -181,7 +195,7 @@ def _assert_commit_contract() -> None:
     ):
         assert field in dispatch_call, field
     assert "raw.psum_num_recv_tokens_per_expert_inclusive" not in dispatch_call
-    assert critical.count("comm_stream") == 3
+    assert critical.count("comm_stream") == 4
 
     # H4c is private until the full dispatch epilogue/handle transaction is
     # complete.  It must not leak into the public Python dispatch yet.

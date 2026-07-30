@@ -2176,3 +2176,18 @@ deliberately simple correctness implementation, not a proposed production hot
 path.  It will not be tuned in isolation: selective two-hop must first share
 the same resolution ABI, after which profiling can decide whether compaction,
 segment merging, or a fused producer is justified.
+
+## Scope decision O089 — adaptive correctness precedes planner parallelism
+
+Selective two-hop now shares the one-hop record/resolution ABI and completes an
+eight-H200 vnode round trip.  The current planner uses one CUDA lane and
+rescans records and Rails after each accepted move.  This makes tie-breaking
+deterministic and the cap easy to audit, but it is not assumed fast.
+
+No latency result was accepted in this checkpoint.  The observed reduction of
+the synthetic diagonal pair peak from 8 to 4 is a scheduling invariant, not an
+end-to-end speedup.  Before changing the algorithm, the unified benchmark must
+measure exposed planner time relative to source shuffle and forwarding.  Only
+if planner time is material will the next experiment parallelize candidate
+evaluation or batch third-Rail moves; otherwise the simpler implementation is
+retained.

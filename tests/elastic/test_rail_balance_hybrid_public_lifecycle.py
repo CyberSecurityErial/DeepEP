@@ -261,6 +261,7 @@ class _FakeRuntime:
         self._combine_weights: torch.Tensor | None = None
         self._prepared_ticket: object | None = None
         self.hop_aware: bool | None = None
+        self.two_hop_config: tuple[int, int, int] | None = None
 
     def _rail_balance_hybrid_dispatch_prepare(self, *args: object) -> tuple[int, ...]:
         self.trace.append("dispatch_prepare")
@@ -269,9 +270,10 @@ class _FakeRuntime:
         self._x = args[0]  # type: ignore[assignment]
         self._topk_idx = args[1]  # type: ignore[assignment]
         self._topk_weights = args[2]  # type: ignore[assignment]
-        assert args[-3:-1] == (0, 0)
-        assert type(args[-1]) is bool
-        self.hop_aware = args[-1]
+        assert args[-6:-4] == (0, 0)
+        assert type(args[-4]) is bool
+        self.hop_aware = args[-4]
+        self.two_hop_config = args[-3:]  # type: ignore[assignment]
         # Exact H4b manifest width: status then immutable public geometry/ABI.
         return 0, *_DISPATCH_COMMON_FIELDS
 
@@ -376,6 +378,9 @@ def _make_buffer(
         buffer._rail_balance_proxy_slots_per_rank = 8
         buffer._rail_balance_policy = 0
         buffer._rail_balance_threshold_percent = 0
+        buffer._rail_balance_two_hop_threshold_percent = 0
+        buffer._rail_balance_max_two_hop_percent = 0
+        buffer._rail_balance_hop_penalty_percent = 0
         buffer._rail_balance_arena_offset = 2 << 20
         buffer._rail_balance_arena_bytes = 2 << 20
         buffer._rail_balance_owner_token = object()
@@ -497,9 +502,12 @@ def _assert_one_hop_selects_endpoint_planner() -> None:
 
 def _assert_adaptive_does_not_fall_back() -> None:
     buffer, runtime, _ = _make_buffer(force=True, mode="adaptive")
-    _expect_raises(lambda: _force_dispatch(buffer))
-    assert runtime.hop_aware is None
-    assert runtime.trace == ["gate"]
+    buffer._rail_balance_two_hop_threshold_percent = 7
+    buffer._rail_balance_max_two_hop_percent = 40
+    buffer._rail_balance_hop_penalty_percent = 90
+    _force_dispatch(buffer)
+    assert runtime.hop_aware is True
+    assert runtime.two_hop_config == (7, 40, 90)
 
 
 def _assert_zero_move_plan_bypasses_force() -> None:

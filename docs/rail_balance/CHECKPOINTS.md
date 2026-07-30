@@ -31,6 +31,13 @@ Checkpoint states: `PLANNED`, `IN_PROGRESS`, `PASS`, `FAIL`, `BLOCKED`,
 | C107 | DeepEP V2 performance baseline harness | PASS | A real-D>1 profiler-free public Hybrid runner alternates fresh `off/force` blocks in ABBA+BAAB order, consumes every force ticket through matching combine, retains all rank/sample statistics, and reports DeepEP-V2-over-candidate speedup. Official and timed-path correctness, benchmark WORLD manifest, pre/post source/extension identity, GPU/co-tenant fail-close, actual force-channel traffic oracle, pairwise ratios, watchdog and atomic JSON are covered by 5/5 new CPU contracts plus unchanged C105 23/23. No production code changed and no speedup was measured locally. |
 | C110 | Real-cluster Gin/RDMA scale and performance validation | DEFERRED_ENVIRONMENT | Requires multi-node rail/NIC environment; C080-H owns first correctness, while C110 owns repeated scale, performance, and fabric characterization. |
 | C120 | Production fusion and auto policy | PLANNED | Fused implementation passes correctness and evidence-based performance gates. |
+| HA010 | Endpoint-aware audit and path semantics | PASS | Actual planner/data/ticket paths were audited; shared target-mask semantics and the legacy `[owner][destination]` information loss are documented. |
+| HA020 | Python one-hop/adaptive oracle and invariants | PASS | C0-C7 reference tests, exhaustive/random properties, deterministic tie-breaking, threshold and two-hop cap pass. |
+| HA030 | Endpoint one-hop GPU plan and vnode round trip | PASS | One GPU record/resolution ABI selects only endpoint Rails; direct, destination-forward and source-forward complete the 4x2 eight-H200 dispatch/combine inverse with exact output. |
+| HA040 | Bounded selective two-hop local closure | PASS | Adaptive starts from one-hop, moves 8/16 diagonal copies at a 50% cap, passes 64 randomized deterministic GPU plans and the same eight-H200 vnode round trip. Capability remains false. |
+| HA050 | Unified reference/vnode/multinode benchmark and JSON | IN_PROGRESS | Reuse the existing multinode runner and hop workload schema; avoid a second benchmark implementation. |
+| HA060 | Hop-aware kernel profiling and tuning | PLANNED | Establish profiler-free stage timing first, then use Nsys/NCU only on exposed planner/shuffle/forward work. |
+| HA070 | Real multi-node hop-aware correctness/performance | DEFERRED_ENVIRONMENT | Requires D>1 Gin/Rail. Only this checkpoint can justify capability enablement or a network speedup claim. |
 
 ## Checkpoint update template
 

@@ -15,7 +15,6 @@ import torch
 import torch.distributed as dist
 
 import deep_ep
-import deep_ep._C as _C
 from deep_ep.utils.envs import init_dist
 from deep_ep.utils.math import align
 from rail_balance_hop_reference import HopPlannerConfig
@@ -44,14 +43,15 @@ _D = 2
 _HIDDEN = 256
 _M = 16
 _K = 1
-_C = 2
+_CHANNELS = 2
 _PROXY_CAPACITY = 16
 _GENERATION = 1201
 
 
-def _case() -> VnodeRoundTripCase:
+def _case(adaptive: bool = False) -> VnodeRoundTripCase:
     topology = VnodeTopology(rails_per_node=_G, num_nodes=_D)
-    targets = (0,) * 4 + (1,) * 8 + (2,) * 2 + (3,) * 2
+    targets = ((0,) * 16 if adaptive else
+               (0,) * 4 + (1,) * 8 + (2,) * 2 + (3,) * 2)
     experts_per_rank = 2
     topk_idx = (
         tuple(((topology.physical(1, target) * experts_per_rank),)
@@ -68,13 +68,14 @@ def _case() -> VnodeRoundTripCase:
         ),
     ) + ((),) * (_G - 1)
     return VnodeRoundTripCase(
-        name="hop_vnode_one_hop_4x2",
+        name="hop_vnode_adaptive_4x2" if adaptive else
+             "hop_vnode_one_hop_4x2",
         topology=topology,
         topk_idx=topk_idx,
         topk_weights=topk_weights,
         source_values=source_values,
         num_topk=_K,
-        num_channels=_C,
+        num_channels=_CHANNELS,
         num_max_tokens_per_rank=_M,
         num_experts=topology.world_size * experts_per_rank,
         experts_per_physical_rank=experts_per_rank,
@@ -84,13 +85,13 @@ def _case() -> VnodeRoundTripCase:
 
 
 def _channel_count(case: VnodeRoundTripCase) -> torch.Tensor:
-    count = torch.zeros((_G, _C, _D), dtype=torch.int32)
+    count = torch.zeros((_G, _CHANNELS, _D), dtype=torch.int32)
     experts_per_destination = case.num_experts // _D
     for owner, tokens in enumerate(case.topk_idx):
         for token, experts in enumerate(tokens):
             for destination in {
                     expert // experts_per_destination for expert in experts}:
-                count[owner, token % _C, destination] += 1
+                count[owner, token % _CHANNELS, destination] += 1
     return count
 
 
@@ -110,15 +111,20 @@ def _worker(local_rank: int, num_local_ranks: int,
         device_id=torch.device(f"cuda:{local_rank}"),
         group_desc="hop-aware-vnode-source")
 
-    case = _case()
+    case = _case(args.adaptive)
     baseline = run_vnode_roundtrip(case)
     hop_oracle = run_hop_vnode_roundtrip(
         case, HopPlannerConfig(
-            num_rails=_G, num_destinations=_D, mode="one_hop",
-            chunk_size=1))
-    assert {route.path_kind for route in hop_oracle.routes} >= {
-        "direct", "dst_forward", "src_forward"}
-    assert all(route.path_kind != "two_hop" for route in hop_oracle.routes)
+            num_rails=_G, num_destinations=_D,
+            mode="adaptive" if args.adaptive else "one_hop",
+            chunk_size=1, max_two_hop_ratio=0.5 if args.adaptive else 0))
+    if args.adaptive:
+        assert hop_oracle.plan.two_hop_units == 8
+    else:
+        assert {route.path_kind for route in hop_oracle.routes} >= {
+            "direct", "dst_forward", "src_forward"}
+        assert all(route.path_kind != "two_hop"
+                   for route in hop_oracle.routes)
 
     source_buffer = None
     world_buffer = None
@@ -178,9 +184,9 @@ def _worker(local_rank: int, num_local_ranks: int,
             if source_runtime is None:
                 return None
             return int(source_runtime._rail_balance_hybrid_plan_prepare(
-                topk_idx, _HIDDEN, _C, _M, case.num_experts, _D, 0,
+                topk_idx, _HIDDEN, _CHANNELS, _M, case.num_experts, _D, 0,
                 _PROXY_CAPACITY, source_offset, source_invocation,
-                0, 0, 0, True))
+                0, 0, 0, True, 0, 50 if args.adaptive else 0, 0))
 
         statuses = _gather_objects(_checked_phase(
             "hop source prepare", control_group, prepare_source), control_group)
@@ -199,8 +205,11 @@ def _worker(local_rank: int, num_local_ranks: int,
             assert source_plan is not None
             assert source_plan[10].item() == 0
             path_units = tuple(int(value) for value in source_plan[8].cpu())
-            assert path_units[0] > 0 and path_units[1] > 0
-            assert path_units[2] > 0 and path_units[3] == 0
+            if args.adaptive:
+                assert path_units == (8, 0, 0, 8)
+            else:
+                assert path_units[0] > 0 and path_units[1] > 0
+                assert path_units[2] > 0 and path_units[3] == 0
 
         _checked_phase(
             "hop source shuffle", control_group,
@@ -234,7 +243,8 @@ def _worker(local_rank: int, num_local_ranks: int,
                 x, topk_idx, topk_weights, proxy_dispatch, channel_count,
                 world_offset, _M, case.num_experts, _D, _G,
                 _PROXY_CAPACITY, _GENERATION, world_invocation,
-                0, 0, 0, hop_records)))
+                0, 0, 0, hop_records,
+                0, 50 if args.adaptive else 0, 0)))
         assert int(prepared[0]) == 0
 
         outputs = _checked_phase(
@@ -280,8 +290,10 @@ def _worker(local_rank: int, num_local_ranks: int,
             _monitored_barrier(control_group, args.timeout)
         if clean and rank == 0:
             print(
-                "PASS hop-aware vnode: direct + both one-hop paths, "
-                "dispatch/combine round trip", flush=True)
+                "PASS hop-aware vnode: " +
+                ("bounded two-hop escape" if args.adaptive else
+                 "direct + both one-hop paths") +
+                ", dispatch/combine round trip", flush=True)
         dist.destroy_process_group()
 
 
@@ -291,6 +303,7 @@ def main() -> None:
                         help=argparse.SUPPRESS)
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--watchdog-seconds", type=int, default=900)
+    parser.add_argument("--adaptive", action="store_true")
     args = parser.parse_args()
     if args.worker:
         torch.multiprocessing.spawn(
@@ -299,6 +312,8 @@ def main() -> None:
 
     command = [sys.executable, "-B", str(Path(__file__).resolve()),
                "--worker", "--timeout", str(args.timeout)]
+    if args.adaptive:
+        command.append("--adaptive")
     process = subprocess.Popen(command, start_new_session=True)
     try:
         return_code = process.wait(timeout=args.watchdog_seconds)

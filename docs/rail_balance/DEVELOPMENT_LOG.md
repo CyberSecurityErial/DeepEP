@@ -6461,3 +6461,52 @@ Accepted evidence:
 
 This closes the one-hop single-node semantic proof.  It does not prove real
 Gin/RDMA behavior or performance, and capability remains closed.
+
+### Selective two-hop GPU and public-config checkpoint
+
+The endpoint planner now always materializes the deterministic one-hop plan
+first.  Adaptive mode then moves only records whose egress is still an endpoint
+Rail to a non-endpoint Rail, stopping at the integer percentage cap or when no
+candidate clears the configured gain and extra-hop cost.  Dense channel slots
+are assigned only after egress choices are final, so the existing source
+shuffle, vnode pack/demux, destination path, and combine inverse share one
+resolution ABI.
+
+Three constructor-fixed values are now carried through the Python manifest and
+the production-shaped C++ prepare call:
+
+- `rail_balance_two_hop_threshold_percent`;
+- `rail_balance_max_two_hop_percent`;
+- `rail_balance_hop_penalty_percent`.
+
+They are zeroed for non-adaptive modes.  `adaptive` defaults to a 25% cap;
+`off` still creates no RailBalance state, and the real D>1 capability remains
+false.
+
+Accepted evidence:
+
+- SM90 extension build passes;
+- API 9/9, constructor preflight 9/9, public ticket lifecycle, and H4b/H4c
+  source contracts pass;
+- GPU hop planner 8/8 passes, including 64 deterministic randomized adaptive
+  matrices, cap, threshold, capacity, corruption, and zero-token cases;
+- the 4x2 eight-H200 one-hop vnode round trip passes;
+- the adaptive diagonal case moves exactly 8 of 16 copies under a 50% cap,
+  records eight direct and eight two-hop units, and completes the same full
+  dispatch/combine round trip with exact BF16 output and weights.
+
+Failures retained:
+
+- A vnode run without `EP_DISABLE_GIN=1` failed during native DeepEP buffer
+  construction because this single-node environment has no usable GIN.  The
+  corrected diagnostic command passed.
+- An immediate repeat on the default TCPStore port 8361 hit `EADDRINUSE`.
+  Separate `MASTER_PORT` values passed; no kernel workaround was added.
+- The old H4b/H4c textual contracts still assumed a single legacy source
+  submit.  They were updated to audit the hop/legacy branch.  During that
+  audit, the invocation-id arena write was moved behind pending ownership and
+  the count/record launch while preserving same-stream order before return.
+
+The adaptive GPU planner is intentionally single-lane and globally iterative.
+It is correctness evidence, not a performance-accepted implementation; its
+complexity is kept visible for the later profiler-guided planner optimization.

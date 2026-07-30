@@ -180,6 +180,9 @@ public:
         int num_max_tokens_per_rank;
         int proxy_capacity_per_egress;
         int planner_seed;
+        int two_hop_threshold_percent;
+        int max_two_hop_percent;
+        int hop_penalty_percent;
         jit::LaunchArgs launch_args;
     };
 
@@ -191,7 +194,7 @@ using namespace deep_ep::elastic;
 
 static void __instantiate_kernel() {
     auto ptr = reinterpret_cast<void*>(
-        &rail_balance::rail_balance_hop_one_hop_plan_impl<0>);
+        &rail_balance::rail_balance_hop_plan_impl<0>);
 }
 )";
     }
@@ -208,7 +211,9 @@ static void __instantiate_kernel() {
             args.status, args.num_rails, args.num_tokens, args.num_topk,
             args.num_channels, args.num_destinations,
             args.num_max_tokens_per_rank,
-            args.proxy_capacity_per_egress, args.planner_seed));
+            args.proxy_capacity_per_egress, args.planner_seed,
+            args.two_hop_threshold_percent, args.max_two_hop_percent,
+            args.hop_penalty_percent));
     }
 };
 
@@ -259,6 +264,9 @@ static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
         .num_max_tokens_per_rank = 0,
         .proxy_capacity_per_egress = 0,
         .planner_seed = 0,
+        .two_hop_threshold_percent = 0,
+        .max_two_hop_percent = 0,
+        .hop_penalty_percent = 0,
         .launch_args = jit::LaunchArgs(1, 32),
     };
     return {
@@ -266,7 +274,7 @@ static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
             "rail_balance_hop_record_v1",
             RailBalanceHopRecordRuntime::generate(record_args)),
         .plan = jit::compiler->build(
-            "rail_balance_hop_one_hop_plan_v1",
+            "rail_balance_hop_plan_v2",
             RailBalanceHopPlanRuntime::generate(plan_args)),
         .record_launch_args = record_args.launch_args,
         .plan_launch_args = plan_args.launch_args,
@@ -307,7 +315,7 @@ static void launch_prepared_rail_balance_hop_record(
         stream);
 }
 
-static void launch_prepared_rail_balance_hop_one_hop_plan(
+static void launch_prepared_rail_balance_hop_plan(
     const PreparedRailBalanceHopPlan& prepared,
     const rail_balance::HopCopyRecord* records,
     rail_balance::HopCopyResolution* resolutions,
@@ -329,6 +337,9 @@ static void launch_prepared_rail_balance_hop_one_hop_plan(
     const int& num_max_tokens_per_rank,
     const int& proxy_capacity_per_egress,
     const int& planner_seed,
+    const int& two_hop_threshold_percent,
+    const int& max_two_hop_percent,
+    const int& hop_penalty_percent,
     const at::cuda::CUDAStream& stream) {
     RailBalanceHopPlanRuntime::launch(
         prepared.plan,
@@ -353,6 +364,9 @@ static void launch_prepared_rail_balance_hop_one_hop_plan(
             .num_max_tokens_per_rank = num_max_tokens_per_rank,
             .proxy_capacity_per_egress = proxy_capacity_per_egress,
             .planner_seed = planner_seed,
+            .two_hop_threshold_percent = two_hop_threshold_percent,
+            .max_two_hop_percent = max_two_hop_percent,
+            .hop_penalty_percent = hop_penalty_percent,
             .launch_args = prepared.plan_launch_args,
         },
         stream);
@@ -1070,6 +1084,9 @@ struct RailBalanceHopPlanState {
     rail_balance::HopCopyRecord* local_records;
     std::array<const rail_balance::HopCopyRecord*, 32> peer_records;
     size_t record_bytes;
+    int two_hop_threshold_percent;
+    int max_two_hop_percent;
+    int hop_penalty_percent;
     PreparedRailBalanceHopPlan prepared;
 };
 
@@ -1584,13 +1601,16 @@ static RailBalanceHopRecordTensors build_rail_balance_hop_records(
     return {records, status};
 }
 
-static RailBalanceHopPlanTensors build_rail_balance_hop_one_hop_plan(
+static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
     const torch::Tensor& records,
     const int& num_channels,
     const int& num_destinations,
     const int& num_max_tokens_per_rank,
     const int& proxy_capacity_per_egress,
-    const int& planner_seed) {
+    const int& planner_seed,
+    const int& two_hop_threshold_percent,
+    const int& max_two_hop_percent,
+    const int& hop_penalty_percent) {
     EP_HOST_ASSERT(records.dim() == 3);
     EP_HOST_ASSERT(records.is_cuda() and records.is_contiguous());
     EP_HOST_ASSERT(records.scalar_type() == torch::kLong);
@@ -1609,6 +1629,12 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_one_hop_plan(
     EP_HOST_ASSERT(num_max_tokens_per_rank >= num_tokens);
     EP_HOST_ASSERT(proxy_capacity_per_egress >= 0);
     EP_HOST_ASSERT(planner_seed >= 0);
+    EP_HOST_ASSERT(two_hop_threshold_percent >= 0 and
+                   two_hop_threshold_percent <= 10000);
+    EP_HOST_ASSERT(max_two_hop_percent >= 0 and
+                   max_two_hop_percent <= 100);
+    EP_HOST_ASSERT(hop_penalty_percent >= 0 and
+                   hop_penalty_percent <= 10000);
 
     c10::cuda::CUDAGuard device_guard(records.device());
     const int device_index = records.get_device();
@@ -1665,10 +1691,13 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_one_hop_plan(
         .num_max_tokens_per_rank = 0,
         .proxy_capacity_per_egress = 0,
         .planner_seed = 0,
+        .two_hop_threshold_percent = 0,
+        .max_two_hop_percent = 0,
+        .hop_penalty_percent = 0,
         .launch_args = jit::LaunchArgs(1, 32),
     };
     const auto runtime = jit::compiler->build(
-        "rail_balance_hop_one_hop_plan_v1",
+        "rail_balance_hop_plan_v2",
         RailBalanceHopPlanRuntime::generate(prototype));
     RailBalanceHopPlanRuntime::launch(
         runtime,
@@ -1696,6 +1725,9 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_one_hop_plan(
             .num_max_tokens_per_rank = num_max_tokens_per_rank,
             .proxy_capacity_per_egress = proxy_capacity_per_egress,
             .planner_seed = planner_seed,
+            .two_hop_threshold_percent = two_hop_threshold_percent,
+            .max_two_hop_percent = max_two_hop_percent,
+            .hop_penalty_percent = hop_penalty_percent,
             .launch_args = prototype.launch_args,
         },
         stream);
@@ -1881,13 +1913,16 @@ static void register_rail_balance_hybrid_plan_apis(pybind11::module_& m) {
         pybind11::arg("local_destination"));
     m.def(
         "_build_rail_balance_hop_one_hop_plan",
-        &build_rail_balance_hop_one_hop_plan,
+        &build_rail_balance_hop_plan,
         pybind11::arg("records"),
         pybind11::arg("num_channels"),
         pybind11::arg("num_destinations"),
         pybind11::arg("num_max_tokens_per_rank"),
         pybind11::arg("proxy_capacity_per_egress"),
-        pybind11::arg("planner_seed") = 0);
+        pybind11::arg("planner_seed") = 0,
+        pybind11::arg("two_hop_threshold_percent") = 0,
+        pybind11::arg("max_two_hop_percent") = 0,
+        pybind11::arg("hop_penalty_percent") = 0);
     m.def(
         "_build_rail_balance_hybrid_plan",
         &build_rail_balance_hybrid_plan,
