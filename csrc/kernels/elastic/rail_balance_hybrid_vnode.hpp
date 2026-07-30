@@ -17,6 +17,7 @@ namespace deep_ep::elastic {
 struct RailBalanceHybridVNodeSpec {
     int hidden;
     int num_topk;
+    bool hop_aware;
 };
 
 class RailBalanceHybridPackVNodeBaseRuntime final:
@@ -39,6 +40,9 @@ public:
         const int* moved_channel_prefix;
         const int* group_prefix;
         const int* proxy_required;
+        const rail_balance::HopCopyRecord* hop_records;
+        const rail_balance::HopCopyResolution* hop_resolutions;
+        const int* hop_pair_load;
         int* status;
         int num_tokens;
         int num_experts;
@@ -61,9 +65,9 @@ using namespace deep_ep::elastic;
 
 static void __instantiate_kernel() {{
     auto ptr = reinterpret_cast<void*>(
-        &rail_balance_hybrid_pack_vnode_base_impl<{}, {}>);
+        &rail_balance_hybrid_pack_vnode_base_impl<{}, {}, {}>);
 }}
-)", spec.hidden, spec.num_topk);
+)", spec.hidden, spec.num_topk, spec.hop_aware);
     }
 
     static void launch_impl(const jit::KernelHandle& kernel,
@@ -77,7 +81,8 @@ static void __instantiate_kernel() {{
             args.segments, args.num_segments,
             args.owner_channel_prefix, args.retained, args.moved,
             args.moved_channel_prefix, args.group_prefix,
-            args.proxy_required, args.status,
+            args.proxy_required, args.hop_records,
+            args.hop_resolutions, args.hop_pair_load, args.status,
             args.num_tokens, args.num_experts, args.num_destinations,
             args.num_rails, args.egress, args.num_channels,
             args.num_max_tokens_per_rank, args.proxy_capacity,
@@ -103,6 +108,9 @@ public:
         const int* moved_channel_prefix;
         const int* group_prefix;
         const int* proxy_required;
+        const rail_balance::HopCopyRecord* hop_records;
+        const rail_balance::HopCopyResolution* hop_resolutions;
+        const int* hop_pair_load;
         int* status;
         int num_experts;
         int num_destinations;
@@ -124,9 +132,9 @@ using namespace deep_ep::elastic;
 
 static void __instantiate_kernel() {{
     auto ptr = reinterpret_cast<void*>(
-        &rail_balance_hybrid_return_demux_impl<{}, {}>);
+        &rail_balance_hybrid_return_demux_impl<{}, {}, {}>);
 }}
-)", spec.hidden, spec.num_topk);
+)", spec.hidden, spec.num_topk, spec.hop_aware);
     }
 
     static void launch_impl(const jit::KernelHandle& kernel,
@@ -139,7 +147,9 @@ static void __instantiate_kernel() {{
             args.quota, args.keep_count, args.segments,
             args.num_segments, args.owner_channel_prefix,
             args.retained, args.moved, args.moved_channel_prefix,
-            args.group_prefix, args.proxy_required, args.status,
+            args.group_prefix, args.proxy_required,
+            args.hop_records, args.hop_resolutions,
+            args.hop_pair_load, args.status,
             args.num_experts, args.num_destinations,
             args.num_rails, args.egress, args.num_channels,
             args.num_max_tokens_per_rank, args.proxy_capacity,
@@ -207,6 +217,7 @@ struct RailBalanceHybridVNodePending {
     torch::Tensor topk_weights;
     torch::Tensor proxy_dispatch;
     RailBalanceHybridPlanOutputs plan;
+    std::optional<RailBalanceHopPlanState> hop;
     torch::Tensor compact_quota;
     torch::Tensor proxy_return;
     torch::Tensor reduce_seed;
@@ -282,19 +293,23 @@ static void validate_rail_balance_hybrid_vnode_layout(
 static PreparedRailBalanceHybridVNode
 prepare_rail_balance_hybrid_vnode(
         const int& hidden,
-        const int& num_topk) {
+        const int& num_topk,
+        const bool& hop_aware = false) {
     EP_HOST_ASSERT(hidden > 0 and hidden % 256 == 0);
     EP_HOST_ASSERT(num_topk >= 1 and num_topk <= 32);
     const RailBalanceHybridVNodeSpec spec = {
         .hidden = hidden,
         .num_topk = num_topk,
+        .hop_aware = hop_aware,
     };
     return {
         .pack = jit::compiler->build(
-            "rail_balance_hybrid_pack_vnode_base",
+            hop_aware ? "rail_balance_hop_pack_vnode_base" :
+                        "rail_balance_hybrid_pack_vnode_base",
             RailBalanceHybridPackVNodeBaseRuntime::generate(spec)),
         .demux = jit::compiler->build(
-            "rail_balance_hybrid_return_demux",
+            hop_aware ? "rail_balance_hop_return_demux" :
+                        "rail_balance_hybrid_return_demux",
             RailBalanceHybridReturnDemuxRuntime::generate(spec)),
     };
 }
@@ -307,6 +322,7 @@ static void launch_prepared_rail_balance_hybrid_pack_vnode_base(
         const void* proxy_dispatch,
         void* vnode_arena,
         const RailBalanceHybridPlanOutputs& plan,
+        const RailBalanceHopPlanState* hop,
         int* status,
         const int& num_tokens,
         const int& hidden,
@@ -344,6 +360,14 @@ static void launch_prepared_rail_balance_hybrid_pack_vnode_base(
         .moved_channel_prefix = plan.moved_channel_prefix.data_ptr<int>(),
         .group_prefix = plan.group_prefix.data_ptr<int>(),
         .proxy_required = plan.proxy_required.data_ptr<int>(),
+        .hop_records = hop == nullptr ? nullptr :
+            reinterpret_cast<const rail_balance::HopCopyRecord*>(
+                hop->records.data_ptr<int64_t>()),
+        .hop_resolutions = hop == nullptr ? nullptr :
+            reinterpret_cast<const rail_balance::HopCopyResolution*>(
+                hop->resolutions.data_ptr<int>()),
+        .hop_pair_load = hop == nullptr ? nullptr :
+            hop->pair_load.data_ptr<int>(),
         .status = status,
         .num_tokens = num_tokens,
         .num_experts = num_experts,
@@ -367,6 +391,7 @@ static void launch_prepared_rail_balance_hybrid_return_demux(
         void* reduce_seed,
         void* proxy_return,
         const RailBalanceHybridPlanOutputs& plan,
+        const RailBalanceHopPlanState* hop,
         int* status,
         const int& hidden,
         const int& num_topk,
@@ -399,6 +424,14 @@ static void launch_prepared_rail_balance_hybrid_return_demux(
         .moved_channel_prefix = plan.moved_channel_prefix.data_ptr<int>(),
         .group_prefix = plan.group_prefix.data_ptr<int>(),
         .proxy_required = plan.proxy_required.data_ptr<int>(),
+        .hop_records = hop == nullptr ? nullptr :
+            reinterpret_cast<const rail_balance::HopCopyRecord*>(
+                hop->records.data_ptr<int64_t>()),
+        .hop_resolutions = hop == nullptr ? nullptr :
+            reinterpret_cast<const rail_balance::HopCopyResolution*>(
+                hop->resolutions.data_ptr<int>()),
+        .hop_pair_load = hop == nullptr ? nullptr :
+            hop->pair_load.data_ptr<int>(),
         .status = status,
         .num_experts = num_experts,
         .num_destinations = num_destinations,

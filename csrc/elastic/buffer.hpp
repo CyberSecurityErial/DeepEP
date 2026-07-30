@@ -2138,9 +2138,11 @@ public:
         const int& invocation_id,
         const pybind11::object& remainder_seed,
         const pybind11::object& policy,
-        const pybind11::object& threshold_percent) {
+        const pybind11::object& threshold_percent,
+        const std::optional<torch::Tensor>& hop_records) {
         constexpr int kWorldRanks = 8;
         constexpr int64_t kArenaGuardBytes = 4096;
+        const bool hop_aware = hop_records.has_value();
 
         // This bridge is a private, pure-single-node proof.  The real Hybrid
         // buffer and its public ABI remain untouched.
@@ -2201,6 +2203,16 @@ public:
                        channel_count.is_contiguous() and
                        channel_count.dim() == 3);
         EP_HOST_ASSERT(channel_count.scalar_type() == torch::kInt32);
+        if (hop_aware) {
+            EP_HOST_ASSERT(hop_records->is_cuda() and
+                           hop_records->is_contiguous() and
+                           hop_records->dim() == 3);
+            EP_HOST_ASSERT(hop_records->scalar_type() == torch::kInt64);
+            EP_HOST_ASSERT(hop_records->size(0) == num_source_ranks and
+                           hop_records->size(1) ==
+                               num_max_tokens_per_rank and
+                           hop_records->size(2) == topk_idx.size(1));
+        }
 
         const int64_t num_tokens_i64 = x.size(0);
         const int64_t hidden_i64 = x.size(1);
@@ -2240,6 +2252,8 @@ public:
         EP_HOST_ASSERT(topk_weights.get_device() == tensor_device);
         EP_HOST_ASSERT(proxy_dispatch.get_device() == tensor_device);
         EP_HOST_ASSERT(channel_count.get_device() == tensor_device);
+        if (hop_aware)
+            EP_HOST_ASSERT(hop_records->get_device() == tensor_device);
         const c10::cuda::CUDAGuard device_guard(tensor_device);
         int expected_process_device = -1;
         if (not rail_balance_hybrid_plan_process_device.compare_exchange_strong(
@@ -2325,6 +2339,8 @@ public:
         assert_owning_input(topk_weights);
         assert_owning_input(proxy_dispatch);
         assert_owning_input(channel_count);
+        if (hop_aware)
+            assert_owning_input(*hop_records);
 
         // The common count tensor is the one cross-object bridge input.  A
         // host snapshot is used only for strict pre-commit validation; the GPU
@@ -2401,6 +2417,26 @@ public:
         const auto int_options = channel_count.options();
         auto plan = allocate_rail_balance_hybrid_plan_outputs(
             int_options, num_source_ranks, num_channels, num_destinations);
+        std::optional<RailBalanceHopPlanState> hop;
+        if (hop_aware) {
+            hop.emplace(RailBalanceHopPlanState{
+                .records = *hop_records,
+                .resolutions = torch::full(
+                    {num_source_ranks, num_max_tokens_per_rank, num_topk, 4},
+                    -1, int_options),
+                .pair_load = torch::zeros(
+                    {num_destinations, num_source_ranks}, int_options),
+                .source_load = torch::zeros(
+                    {num_source_ranks}, int_options),
+                .owner_remaining = torch::zeros(
+                    {num_source_ranks, num_destinations}, int_options),
+                .path_units = torch::zeros({4}, int_options),
+                .local_records = nullptr,
+                .peer_records = {},
+                .record_bytes = 0,
+                .prepared = prepare_rail_balance_hop_plan(num_channels),
+            });
+        }
         auto compact_quota = torch::empty(
             {num_source_ranks, num_destinations - 1}, int_options);
         auto proxy_return = torch::zeros(
@@ -2444,7 +2480,7 @@ public:
         auto prepared_plan = prepare_rail_balance_hybrid_plan(
             1, num_source_ranks, num_channels, num_destinations);
         auto prepared_adapter = prepare_rail_balance_hybrid_vnode(
-            hidden, num_topk);
+            hidden, num_topk, hop_aware);
         auto prepared_vnode = prepare_rail_balance_vnode(hidden, num_topk);
         auto prepared_world_barrier =
             prepare_rail_balance_hybrid_local_barrier(
@@ -2457,38 +2493,60 @@ public:
         CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
             plan.channel_count.data_ptr<int>(), channel_count.data_ptr<int>(),
             channel_count.nbytes(), cudaMemcpyDeviceToDevice, comm_stream));
-        launch_prepared_rail_balance_hybrid_plan(
-            prepared_plan,
-            plan.channel_count.data_ptr<int>(), plan.count.data_ptr<int>(),
-            plan.quota.data_ptr<int>(), plan.keep_count.data_ptr<int>(),
-            plan.segments.data_ptr<int>(),
-            plan.num_segments.data_ptr<int>(),
-            num_source_ranks, num_channels, num_destinations,
-            normalized_remainder_seed,
-            policy_value, threshold_percent_value, comm_stream);
-        launch_prepared_rail_balance_hybrid_prefix(
-            prepared_plan,
-            plan.channel_count.data_ptr<int>(), plan.quota.data_ptr<int>(),
-            plan.keep_count.data_ptr<int>(),
-            plan.owner_channel_prefix.data_ptr<int>(),
-            plan.retained.data_ptr<int>(), plan.moved.data_ptr<int>(),
-            plan.moved_channel_prefix.data_ptr<int>(),
-            plan.group_prefix.data_ptr<int>(),
-            plan.proxy_required.data_ptr<int>(),
-            plan.moved_copies.data_ptr<int>(), plan.status.data_ptr<int>(),
-            num_source_ranks, num_channels, num_destinations,
-            num_max_tokens_per_rank, proxy_capacity, comm_stream);
+        if (hop_aware) {
+            launch_prepared_rail_balance_hop_one_hop_plan(
+                hop->prepared,
+                reinterpret_cast<const rail_balance::HopCopyRecord*>(
+                    hop->records.data_ptr<int64_t>()),
+                reinterpret_cast<rail_balance::HopCopyResolution*>(
+                    hop->resolutions.data_ptr<int>()),
+                hop->pair_load.data_ptr<int>(),
+                hop->source_load.data_ptr<int>(),
+                hop->owner_remaining.data_ptr<int>(),
+                plan.retained.data_ptr<int>(), plan.moved.data_ptr<int>(),
+                plan.group_prefix.data_ptr<int>(),
+                plan.proxy_required.data_ptr<int>(),
+                hop->path_units.data_ptr<int>(),
+                plan.moved_copies.data_ptr<int>(), plan.status.data_ptr<int>(),
+                num_source_ranks, num_max_tokens_per_rank, num_topk,
+                num_channels, num_destinations, num_max_tokens_per_rank,
+                proxy_capacity, normalized_remainder_seed, comm_stream);
+        } else {
+            launch_prepared_rail_balance_hybrid_plan(
+                prepared_plan,
+                plan.channel_count.data_ptr<int>(), plan.count.data_ptr<int>(),
+                plan.quota.data_ptr<int>(), plan.keep_count.data_ptr<int>(),
+                plan.segments.data_ptr<int>(),
+                plan.num_segments.data_ptr<int>(),
+                num_source_ranks, num_channels, num_destinations,
+                normalized_remainder_seed,
+                policy_value, threshold_percent_value, comm_stream);
+            launch_prepared_rail_balance_hybrid_prefix(
+                prepared_plan,
+                plan.channel_count.data_ptr<int>(), plan.quota.data_ptr<int>(),
+                plan.keep_count.data_ptr<int>(),
+                plan.owner_channel_prefix.data_ptr<int>(),
+                plan.retained.data_ptr<int>(), plan.moved.data_ptr<int>(),
+                plan.moved_channel_prefix.data_ptr<int>(),
+                plan.group_prefix.data_ptr<int>(),
+                plan.proxy_required.data_ptr<int>(),
+                plan.moved_copies.data_ptr<int>(), plan.status.data_ptr<int>(),
+                num_source_ranks, num_channels, num_destinations,
+                num_max_tokens_per_rank, proxy_capacity, comm_stream);
+        }
 
         // Dropping destination zero with a pointer offset would retain the D
         // source-row pitch.  Copy every row into its true contiguous [G,D-1]
         // representation before the old vnode kernels can observe it.
-        CUDA_RUNTIME_CHECK(cudaMemcpy2DAsync(
-            compact_quota.data_ptr<int>(),
-            static_cast<size_t>(num_destinations - 1) * sizeof(int),
-            plan.quota.data_ptr<int>() + 1,
-            static_cast<size_t>(num_destinations) * sizeof(int),
-            static_cast<size_t>(num_destinations - 1) * sizeof(int),
-            num_source_ranks, cudaMemcpyDeviceToDevice, comm_stream));
+        if (not hop_aware) {
+            CUDA_RUNTIME_CHECK(cudaMemcpy2DAsync(
+                compact_quota.data_ptr<int>(),
+                static_cast<size_t>(num_destinations - 1) * sizeof(int),
+                plan.quota.data_ptr<int>() + 1,
+                static_cast<size_t>(num_destinations) * sizeof(int),
+                static_cast<size_t>(num_destinations - 1) * sizeof(int),
+                num_source_ranks, cudaMemcpyDeviceToDevice, comm_stream));
+        }
 
         int host_status = 0;
         CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
@@ -2496,6 +2554,25 @@ public:
             cudaMemcpyDeviceToHost, comm_stream));
         CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
         EP_HOST_ASSERT(host_status == 0 or host_status == 1);
+        if (host_status == 0 and hop_aware) {
+            const auto pair_cpu = hop->pair_load.cpu().contiguous();
+            const int* pair_ptr = pair_cpu.data_ptr<int>();
+            std::vector<int> compact_values(
+                static_cast<size_t>(num_source_ranks) *
+                (num_destinations - 1));
+            for (int egress = 0; egress < num_source_ranks; ++egress)
+                for (int destination = 1;
+                     destination < num_destinations; ++destination)
+                    compact_values[
+                        egress * (num_destinations - 1) + destination - 1] =
+                            pair_ptr[
+                                destination * num_source_ranks + egress];
+            CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+                compact_quota.data_ptr<int>(), compact_values.data(),
+                compact_values.size() * sizeof(int),
+                cudaMemcpyHostToDevice, comm_stream));
+            CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
+        }
         if (host_status == 0) {
             const auto compact_cpu = compact_quota.cpu().contiguous();
             const int* compact_ptr = compact_cpu.data_ptr<int>();
@@ -2537,6 +2614,7 @@ public:
                 .topk_weights = topk_weights,
                 .proxy_dispatch = proxy_dispatch,
                 .plan = std::move(plan),
+                .hop = std::move(hop),
                 .compact_quota = std::move(compact_quota),
                 .proxy_return = std::move(proxy_return),
                 .reduce_seed = std::move(reduce_seed),
@@ -2606,7 +2684,9 @@ public:
                     pending.topk_idx.data_ptr<topk_idx_t>(),
                     pending.topk_weights.data_ptr<float>(),
                     pending.proxy_dispatch.data_ptr(), pending.arena,
-                    pending.plan, status,
+                    pending.plan,
+                    pending.hop.has_value() ? &*pending.hop : nullptr,
+                    status,
                     pending.num_tokens, pending.hidden,
                     pending.num_topk, pending.num_experts,
                     pending.num_destinations, pending.num_rails,
@@ -2701,6 +2781,7 @@ public:
                     pending.arena, pending.proxy_dispatch.data_ptr(),
                     pending.reduce_seed.data_ptr(),
                     pending.proxy_return.data_ptr(), pending.plan,
+                    pending.hop.has_value() ? &*pending.hop : nullptr,
                     status + 5 * pending.status_stride,
                     pending.hidden, pending.num_topk, pending.num_experts,
                     pending.num_destinations, pending.num_rails,
@@ -5620,7 +5701,8 @@ static void register_apis(pybind11::module_& m) {
             pybind11::arg("remainder_seed") = pybind11::int_(0),
             pybind11::arg("policy") =
                 static_cast<int>(rail_balance::HybridPolicy::All),
-            pybind11::arg("threshold_percent") = 0)
+            pybind11::arg("threshold_percent") = 0,
+            pybind11::arg("hop_records") = pybind11::none())
         .def(
             "_rail_balance_hybrid_vnode_finish",
             &ElasticBuffer::rail_balance_hybrid_vnode_finish,

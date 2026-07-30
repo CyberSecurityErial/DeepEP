@@ -6419,3 +6419,45 @@ Accepted evidence:
 GPU co-tenants were `mmunlearner`, not Megatron.  They were left running.  No
 latency or bandwidth number from this checkpoint is accepted as performance
 evidence.
+
+### Endpoint one-hop GPU vnode round-trip checkpoint
+
+The existing vnode pack/demux kernels now have a compile-time hop-aware
+specialization.  The legacy specialization is unchanged; the new one consumes
+the same `HopCopyRecord` and `HopCopyResolution` tensors as source shuffle,
+packs retained and moved records into the existing dense scale-out layout, and
+finds the exact record again when combine demuxes the return.  There is no
+parallel vnode implementation or second numeric oracle.
+
+The focused 4x2 test uses one workload containing direct,
+destination-forward, and source-forward copies.  It runs true four-GPU source
+LSA shuffle, virtual scale-out and expert forwarding across all eight H200s,
+then the production return-unshuffle and unchanged combine epilogue.  Final
+BF16 output and weights on every original owner equal the legacy numeric
+oracle, all six stage-status rows are zero, and the arena guard is intact.
+
+Failures retained during this checkpoint:
+
+- Two old non-hop vnode fixtures cannot reach the new code: their source rank
+  has four or six tokens while `proxy_capacity_per_egress` is one or four, so
+  the existing source-plan contract rejects them.  A rounding fixture with
+  capacity one entered the old source shuffle but hit the same pre-existing
+  undersized proxy layout.  This was not hidden by weakening capacity checks;
+  the all-zero legacy specialization was used as the compatible JIT regression
+  and passed.
+- The first hop JIT compile read a nonexistent `ProxyDescriptor::owner` field.
+  Owner is now derived from the token layout's authoritative
+  `src_token_global_idx / M`, eliminating a duplicate identity field.
+
+Accepted evidence:
+
+- extension rebuild passes for SM90;
+- 16 Python hop planner/vnode tests pass;
+- endpoint-record CUDA 5/5 and one-hop planner CUDA 5/5 pass;
+- hop-aware 4x2 GPU vnode round trip passes twice;
+- legacy all-zero vnode specialization passes;
+- one-hop path counters contain direct, destination-forward and source-forward
+  work and exactly zero two-hop work.
+
+This closes the one-hop single-node semantic proof.  It does not prove real
+Gin/RDMA behavior or performance, and capability remains closed.

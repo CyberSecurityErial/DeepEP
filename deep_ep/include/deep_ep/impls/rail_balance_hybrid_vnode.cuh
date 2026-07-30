@@ -220,7 +220,7 @@ __forceinline__ __device__ int validate_vnode_descriptor(
 // vnode transport namespace. One warp owns one source/target egress channel.
 // It emits both retained local records and moved proxy records into the same
 // dense [destination][slot] prefix consumed by the old vnode scaleout stage.
-template <int kHidden, int kNumTopk>
+template <int kHidden, int kNumTopk, bool kHopAware = false>
 __global__ __launch_bounds__(32, 1)
 void rail_balance_hybrid_pack_vnode_base_impl(
         const __nv_bfloat16* x,
@@ -239,6 +239,9 @@ void rail_balance_hybrid_pack_vnode_base_impl(
         const int* moved_channel_prefix,
         const int* group_prefix,
         const int* proxy_required,
+        const rail_balance::HopCopyRecord* hop_records,
+        const rail_balance::HopCopyResolution* hop_resolutions,
+        const int* hop_pair_load,
         int* status,
         const int num_tokens,
         const int num_experts,
@@ -263,9 +266,13 @@ void rail_balance_hybrid_pack_vnode_base_impl(
         (num_tokens > 0 and
          (x == nullptr or topk_idx == nullptr or topk_weights == nullptr)) or
         proxy_dispatch == nullptr or vnode_arena == nullptr or
-        channel_count == nullptr or quota == nullptr or
-        keep_count == nullptr or segments == nullptr or
-        num_segments == nullptr or owner_channel_prefix == nullptr or
+        (kHopAware and (hop_records == nullptr or
+                        hop_resolutions == nullptr or
+                        hop_pair_load == nullptr)) or
+        (not kHopAware and
+         (channel_count == nullptr or quota == nullptr or
+          keep_count == nullptr or segments == nullptr or
+          num_segments == nullptr or owner_channel_prefix == nullptr)) or
         retained == nullptr or moved == nullptr or
         moved_channel_prefix == nullptr or group_prefix == nullptr or
         proxy_required == nullptr or status == nullptr or
@@ -407,6 +414,114 @@ void rail_balance_hybrid_pack_vnode_base_impl(
                 generation);
         return true;
     };
+
+    if constexpr (kHopAware) {
+        const int64_t owner_stride =
+            static_cast<int64_t>(num_max_tokens_per_rank) * kNumTopk;
+        for (int destination = 1;
+             destination < num_destinations; ++destination) {
+            const auto group_offset =
+                rail_balance::hybrid_plan_detail::gcd_offset(
+                    egress, channel, destination,
+                    num_channels, num_destinations);
+            const int retained_count = __ldg(retained + group_offset);
+            const int moved_count = __ldg(moved + group_offset);
+            const int target = __ldg(
+                hop_pair_load + destination * num_rails + egress);
+            int channel_base = 0;
+            for (int previous = 0; previous < channel; ++previous) {
+                const auto previous_offset =
+                    rail_balance::hybrid_plan_detail::gcd_offset(
+                        egress, previous, destination,
+                        num_channels, num_destinations);
+                channel_base += __ldg(retained + previous_offset) +
+                                __ldg(moved + previous_offset);
+            }
+            const int required = __ldg(proxy_required + egress);
+            const bool group_valid =
+                retained_count >= 0 and moved_count >= 0 and
+                channel_base >= 0 and
+                channel_base + retained_count + moved_count <= target and
+                (channel != num_channels - 1 or
+                 channel_base + retained_count + moved_count == target) and
+                target >= 0 and target <= destination_capacity and
+                required >= 0 and required <= proxy_capacity;
+            if (not group_valid) {
+                rail_balance::hybrid_vnode_detail::report(
+                    status, work_idx,
+                    static_cast<int>(
+                        rail_balance::hybrid_vnode_detail::AdapterError::
+                            InvalidPlan));
+                return;
+            }
+
+            int emitted = 0;
+            for (int owner = 0; owner < num_rails; ++owner) {
+                for (int token = 0;
+                     token < num_max_tokens_per_rank; ++token) {
+                    for (int record_slot = 0;
+                         record_slot < kNumTopk; ++record_slot) {
+                        const int64_t index =
+                            static_cast<int64_t>(owner) * owner_stride +
+                            static_cast<int64_t>(token) * kNumTopk +
+                            record_slot;
+                        const auto record = hop_records[index];
+                        const auto resolution = hop_resolutions[index];
+                        if (record.target_mask == 0 or
+                            record.destination != destination or
+                            resolution.egress != egress or
+                            resolution.channel != channel)
+                            continue;
+                        const bool is_moved = owner != egress;
+                        const int count = is_moved ? moved_count :
+                                                   retained_count;
+                        const int proxy_slot = is_moved ?
+                            resolution.proxy_slot : -1;
+                        const int expected_proxy_slot = is_moved ?
+                            __ldg(group_prefix + group_offset) +
+                                resolution.remote_slot : -1;
+                        const int logical_slot =
+                            (is_moved ? retained_count : 0) +
+                            resolution.remote_slot;
+                        const int dense_slot = channel_base + logical_slot;
+                        const int physical_slot =
+                            (destination - 1) * destination_capacity +
+                            dense_slot;
+                        const bool resolution_valid =
+                            resolution.remote_slot >= 0 and
+                            resolution.remote_slot < count and
+                            ((not is_moved and proxy_slot == -1 and
+                              token < num_tokens) or
+                             (is_moved and proxy_slot >= 0 and
+                              proxy_slot < required and
+                              proxy_slot == expected_proxy_slot));
+                        if (not resolution_valid or
+                            not publish_record(
+                                physical_slot, destination, owner, token,
+                                token * kNumTopk + record_slot,
+                                logical_slot, proxy_slot)) {
+                            rail_balance::hybrid_vnode_detail::report(
+                                status, work_idx,
+                                static_cast<int>(
+                                    rail_balance::hybrid_vnode_detail::
+                                        AdapterError::InvalidProxy));
+                            return;
+                        }
+                        ++emitted;
+                    }
+                }
+            }
+            if (emitted != retained_count + moved_count) {
+                rail_balance::hybrid_vnode_detail::report(
+                    status, work_idx,
+                    static_cast<int>(
+                        rail_balance::hybrid_vnode_detail::AdapterError::
+                            InvalidPlan));
+                return;
+            }
+        }
+        return;
+    }
 
     for (int destination = 1;
          destination < num_destinations;
@@ -586,7 +701,7 @@ void rail_balance_hybrid_pack_vnode_base_impl(
 // destination-level combine records. One warp validates and reduces one old
 // vnode base slot. Retained records seed the legacy reduce buffer locally;
 // moved records return to proxy_return[p] for the production LSA unshuffle.
-template <int kHidden, int kNumTopk>
+template <int kHidden, int kNumTopk, bool kHopAware = false>
 __global__ __launch_bounds__(32, 1)
 void rail_balance_hybrid_return_demux_impl(
         const void* vnode_arena,
@@ -603,6 +718,9 @@ void rail_balance_hybrid_return_demux_impl(
         const int* moved_channel_prefix,
         const int* group_prefix,
         const int* proxy_required,
+        const rail_balance::HopCopyRecord* hop_records,
+        const rail_balance::HopCopyResolution* hop_resolutions,
+        const int* hop_pair_load,
         int* status,
         const int num_experts,
         const int num_destinations,
@@ -628,8 +746,12 @@ void rail_balance_hybrid_return_demux_impl(
     const bool invalid_arguments =
         vnode_arena == nullptr or proxy_dispatch == nullptr or
         reduce_seed == nullptr or proxy_return == nullptr or
-        quota == nullptr or keep_count == nullptr or segments == nullptr or
-        num_segments == nullptr or owner_channel_prefix == nullptr or
+        (kHopAware and (hop_records == nullptr or
+                        hop_resolutions == nullptr or
+                        hop_pair_load == nullptr)) or
+        (not kHopAware and
+         (quota == nullptr or keep_count == nullptr or segments == nullptr or
+          num_segments == nullptr or owner_channel_prefix == nullptr)) or
         retained == nullptr or moved == nullptr or
         moved_channel_prefix == nullptr or group_prefix == nullptr or
         proxy_required == nullptr or status == nullptr or
@@ -665,7 +787,9 @@ void rail_balance_hybrid_return_demux_impl(
     const auto matrix_offset =
         rail_balance::hybrid_plan_detail::gd_offset(
             egress, destination, num_destinations);
-    const int target = __ldg(quota + matrix_offset);
+    const int target = kHopAware ?
+        __ldg(hop_pair_load + destination * num_rails + egress) :
+        __ldg(quota + matrix_offset);
     if (target < 0 or target > num_max_tokens_per_rank) {
         rail_balance::hybrid_vnode_detail::report(
             status, work_idx,
@@ -716,7 +840,7 @@ void rail_balance_hybrid_return_demux_impl(
     int proxy_begin = -1;
     int matches = 0;
     int cursor = 0;
-    const int keep = __ldg(keep_count + matrix_offset);
+    const int keep = kHopAware ? 0 : __ldg(keep_count + matrix_offset);
     for (int channel = 0; channel < num_channels; ++channel) {
         const auto tensor_offset =
             rail_balance::hybrid_plan_detail::gcd_offset(
@@ -726,18 +850,18 @@ void rail_balance_hybrid_return_demux_impl(
             rail_balance::hybrid_plan_detail::moved_prefix_offset(
                 egress, destination, channel,
                 num_channels, num_destinations);
-        const int channel_owner_prefix =
+        const int channel_owner_prefix = kHopAware ? 0 :
             __ldg(owner_channel_prefix + tensor_offset);
         const int channel_retained = __ldg(retained + tensor_offset);
         const int channel_moved = __ldg(moved + tensor_offset);
-        const int channel_incoming_begin =
+        const int channel_incoming_begin = kHopAware ? 0 :
             __ldg(moved_channel_prefix + prefix_offset);
-        const int channel_incoming_end =
+        const int channel_incoming_end = kHopAware ? channel_moved :
             __ldg(moved_channel_prefix + prefix_offset + 1);
         const int channel_proxy_begin = __ldg(group_prefix + tensor_offset);
-        const int computed_base =
+        const int computed_base = kHopAware ? cursor :
             (channel_owner_prefix < keep ? channel_owner_prefix : keep) +
-            channel_incoming_begin;
+                channel_incoming_begin;
         if (channel_owner_prefix < 0 or channel_retained < 0 or
             channel_moved < 0 or channel_incoming_begin < 0 or
             channel_incoming_end - channel_incoming_begin != channel_moved or
@@ -784,13 +908,17 @@ void rail_balance_hybrid_return_demux_impl(
         }
         proxy_slot = proxy_begin + group_local;
         const int required = __ldg(proxy_required + egress);
-        if (proxy_slot < 0 or proxy_slot >= required or
-            required < 0 or required > proxy_capacity or
-            not rail_balance::hybrid_vnode_detail::invert_moved_ordinal(
-                segments, num_segments, num_rails, destination,
-                egress, incoming_begin + group_local,
-                expected_owner, expected_owner_ordinal) or
-            expected_owner == egress) {
+        bool route_valid = proxy_slot >= 0 and proxy_slot < required and
+            required >= 0 and required <= proxy_capacity;
+        if constexpr (not kHopAware) {
+            route_valid = route_valid and
+                rail_balance::hybrid_vnode_detail::invert_moved_ordinal(
+                    segments, num_segments, num_rails, destination,
+                    egress, incoming_begin + group_local,
+                    expected_owner, expected_owner_ordinal) and
+                expected_owner != egress;
+        }
+        if (not route_valid) {
             rail_balance::hybrid_vnode_detail::report(
                 status, work_idx,
                 static_cast<int>(
@@ -810,12 +938,52 @@ void rail_balance_hybrid_return_demux_impl(
     owner_token = ptx::exchange(owner_token, 0);
     base_src_token_global_idx = ptx::exchange(
         base_src_token_global_idx, 0);
+    const int descriptor_owner = base_src_token_global_idx >= 0 ?
+        base_src_token_global_idx / num_max_tokens_per_rank : -1;
+    if constexpr (kHopAware) {
+        int matched_slot = -1;
+        int record_matches = 0;
+        if (descriptor_owner >= 0 and descriptor_owner < num_rails and
+            owner_token >= 0 and
+            owner_token < num_max_tokens_per_rank) {
+            const int64_t base_index =
+                (static_cast<int64_t>(descriptor_owner) *
+                     num_max_tokens_per_rank + owner_token) * kNumTopk;
+            for (int record_slot = 0;
+                 record_slot < kNumTopk; ++record_slot) {
+                const auto record = hop_records[base_index + record_slot];
+                const auto resolution =
+                    hop_resolutions[base_index + record_slot];
+                const int expected_remote = is_moved ? group_local :
+                                                       channel_local;
+                if (record.target_mask != 0 and
+                    record.destination == destination and
+                    resolution.egress == egress and
+                    resolution.channel == source_channel and
+                    resolution.remote_slot == expected_remote and
+                    resolution.proxy_slot == proxy_slot) {
+                    matched_slot = record_slot;
+                    ++record_matches;
+                }
+            }
+        }
+        if (record_matches == 1 and
+            (descriptor_owner != egress) == is_moved) {
+            expected_owner = descriptor_owner;
+            expected_owner_ordinal =
+                owner_token * kNumTopk + matched_slot;
+        } else {
+            error = static_cast<int>(
+                rail_balance::hybrid_vnode_detail::AdapterError::InvalidPlan);
+        }
+    }
     if (lane == 0)
-        error = rail_balance::hybrid_vnode_detail::validate_vnode_descriptor(
-            base_descriptor, generation, expected_owner, owner_token,
-            old_destination, expected_owner_ordinal, egress,
-            source_channel, logical_slot, physical_slot,
-            num_max_tokens_per_rank, num_destinations);
+        error = error != 0 ? error :
+            rail_balance::hybrid_vnode_detail::validate_vnode_descriptor(
+                base_descriptor, generation, expected_owner, owner_token,
+                old_destination, expected_owner_ordinal, egress,
+                source_channel, logical_slot, physical_slot,
+                num_max_tokens_per_rank, num_destinations);
     error = ptx::exchange(error, 0);
     if (owner_token < 0 or owner_token >= num_max_tokens_per_rank or
         static_cast<int64_t>(base_src_token_global_idx) !=
@@ -868,7 +1036,8 @@ void rail_balance_hybrid_return_demux_impl(
         const int linked = lane < kNumTopk ?
             __ldg(base_token.get_linked_list_idx_ptr() + lane) : -1;
         if (ptx::gather(lane < kNumTopk and linked != -1) != 0 or
-            owner_token % num_channels != source_channel) {
+            (not kHopAware and
+             owner_token % num_channels != source_channel)) {
             rail_balance::hybrid_vnode_detail::report(
                 status, work_idx,
                 static_cast<int>(

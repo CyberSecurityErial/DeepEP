@@ -2161,3 +2161,18 @@ The next accepted optimization experiment starts only after a full hop-aware
 dispatch/combine vnode round trip.  It will compare profiler-free native
 `off`, `legacy_exact`, and `one_hop` first; Nsys/NCU will then target exposed
 source-shuffle or receiver-forward time rather than this control-plane wiring.
+
+## Scope decision O088 — vnode closure proves semantics, not speed
+
+The endpoint-aware vnode reuses the existing scale-out, destination expert,
+return and combine stages.  Only route materialization at pack/demux differs,
+so the passing 4x2 run proves that source-forward reaches its final target
+without a second destination forwarding step and that combine follows the
+inverse route.  It is still an LSA-backed virtual network and contributes no
+accepted latency or bandwidth claim.
+
+The hop pack currently scans the fixed-capacity record table.  That is a
+deliberately simple correctness implementation, not a proposed production hot
+path.  It will not be tuned in isolation: selective two-hop must first share
+the same resolution ABI, after which profiling can decide whether compaction,
+segment merging, or a fused producer is justified.
