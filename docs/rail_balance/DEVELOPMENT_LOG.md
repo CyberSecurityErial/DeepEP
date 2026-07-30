@@ -6185,3 +6185,37 @@ Retained failures/corrections:
 
 The exact human-labelled two-node commands and result interpretation are in
 `docs/rail_balance/BASELINE_BENCHMARK.md`.
+
+## 2026-07-31 — Hop-aware audit and endpoint reference
+
+Created `feat/rail-balance-hop-aware` from the clean fork commit
+`5199a04bea86cae03f52e1316672d7b092b62dd5`.  The read-only audit is preserved
+in `docs/rail_balance_hop_aware_audit.md` and committed as `88f212a` before any
+planner or CUDA behavior changed.
+
+The audit found that the existing scale-out atom is one deduplicated
+token-to-destination-node payload.  Its top-k lanes may target several local
+ranks on that node.  A literal conversion to independent `(o,d,t)` network
+copies would duplicate that payload and inflate RDMA bytes.  The accepted
+reference identity is therefore `(o,d,T)`, where `T` is a non-empty target-rank
+set; `T={t}` exactly recovers the supplied 0/1/2-hop definitions.
+
+Added a dependency-free endpoint-aware reference planner and its first
+contracts.  It uses fixed chunks, deterministic endpoint-only greedy
+assignment, and a second bounded third-Rail pass.  The second pass initially
+compared only the numeric maximum load.  That prototype stalled on a closed
+2x2 hotspot because moving the first chunk off either of two tied peak Rails
+does not immediately lower the maximum.  The retained fix scores local relief
+from a critical Rail, allowing the first move across a tied plateau while
+still rejecting moves from noncritical Rails.
+
+Accepted functional evidence:
+
+- C0-C7, legacy third-Rail contrast, and multi-target payload reuse: 11/11;
+- randomized deterministic properties: 1,500 seeds with `G=2..4`;
+- existing Hybrid CPU reference regression: 15/15;
+- new files pass `py_compile` and `git diff --check`.
+
+Retained environment limitation: the active shell has no `ruff`, `yapf`, or
+`pyrefly` executable.  No package was installed and no claim of those checks is
+made; direct functional tests remain the accepted evidence for this checkpoint.
