@@ -212,3 +212,30 @@ thread. These reports are diagnostic planner evidence, not network timing:
 Correctness evidence is GPU planner 9/9 plus exact eight-GPU one-hop and
 adaptive vnode round trips. Compute Sanitizer memcheck, synccheck and initcheck
 all report zero errors on the full focused CUDA suite.
+
+## HA060-C: prepared source/return diagnostic entry
+
+The existing C100 checked-adapter runner now executes `legacy`, `one_hop`, and
+`adaptive` through the same prepared plan transaction. Hop source/return JSON
+reports deliberately publish no logical byte numerator: the runner's movement
+table is the legacy reference, while the runtime hop path counters are not yet
+retained. Reporting a GB/s value would therefore attribute the wrong plan.
+
+After fixing a fail-closed retained-staging capacity boundary, four cold
+single-sample hop smokes and one legacy control completed:
+
+| Mode | Stage | Cold rank-max stage (us) | Scope |
+| --- | --- | ---: | --- |
+| legacy | source | 496.658 | checked-adapter diagnostic |
+| one_hop | source | 3242.746 | checked-adapter diagnostic |
+| adaptive | source | 2838.342 | checked-adapter diagnostic |
+| one_hop | return | 269.417 | checked-adapter diagnostic |
+| adaptive | return | 416.797 | checked-adapter diagnostic |
+
+Reports are retained under `/tmp/ha060-c100-*-smoke.json` for this workspace.
+They are not accepted performance evidence: the tree was dirty, each mode has
+one cold sample, the capacity differs between legacy and hop mode, and
+`nvidia-smi` reported the devices as L20X. The only justified conclusion is a
+next hypothesis: hop source-shuffle has exposed work worth attributing with a
+clean profiler-free distribution and Nsys before any kernel edit. Real Gin,
+RDMA, NIC load and end-to-end DeepEP speed remain missing evidence.

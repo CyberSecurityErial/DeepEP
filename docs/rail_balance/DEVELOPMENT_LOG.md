@@ -6641,3 +6641,71 @@ focused Ruff, py_compile and git diff --check             PASS
 
 The output ABI, record table, greedy score, adaptive cap, public capability and
 data plane are unchanged. Real Gin/RDMA remains unmeasured.
+
+## 2026-07-31 — HA060-C: full prepared Hybrid source/return entry
+
+Extended the existing C100 checked-adapter benchmark with one narrow selector:
+`--hop-mode legacy|one_hop|adaptive`. The public runtime and capability gate
+are unchanged. The benchmark passes endpoint hop controls into the same
+prepare/finish transaction, records them in cross-rank identity and JSON, and
+expects the exact hop-aware record, plan and source-shuffle cubins. It does not
+duplicate the eight-rank lifecycle.
+
+The first full-size one-hop source run found a real capacity bug before timing:
+the source shuffle asserted because retained destination copies use dense
+staging indexed up to `N*K`, while the C100 fixture's legacy proxy capacity was
+7,168 for 8,192 possible copies. The fix is intentionally small:
+
+- the GPU planner rejects both moved and retained staging overflow before the
+  committed source shuffle;
+- the hop diagnostic reserves `max(existing capacity, N*K)`;
+- a focused CUDA regression proves retained overflow returns
+  `CapacityExceeded` before any data-plane launch.
+
+No fallback, partial plan, second allocation field, or silent truncation was
+introduced. A later measured design can decide whether retained payload reuse
+deserves a distinct capacity; the current prototype remains safe and simple.
+
+The next run completed the source stage but the report rejected the transaction
+because its JIT identity list still required the legacy source-shuffle name.
+The generated cubin was correctly named `rail_balance_hop_source_shuffle`.
+The report now shares the common cubin list and substitutes exactly one legacy
+or hop source family; it still requires one and only one matching cubin per
+family. Hop reports set their logical byte numerator unavailable because the
+existing movement table describes the legacy plan, not the consumed endpoint
+plan. This preserves evidence integrity until measured path counters are
+retained.
+
+Accepted functional evidence:
+
+```text
+Python endpoint oracle                              12/12 PASS
+unified benchmark contracts                          4/4 PASS
+GPU one-hop/adaptive planner (including capacity)   10/10 PASS
+legacy C100 prepared source control                      PASS
+C100 one-hop source / return                         PASS / PASS
+C100 adaptive source / return                        PASS / PASS
+4x2 one-hop offdiag dispatch/combine round trip          PASS
+4x2 adaptive diag dispatch/combine round trip            PASS
+compute-sanitizer memcheck/initcheck/synccheck       0 errors
+focused Ruff, py_compile and git diff --check            PASS
+```
+
+Failures retained:
+
+- an initial help invocation used `python`, absent from the non-login shell;
+  the pinned interpreter is `/home/chen/.cache/deepep-sjlgpt/bin/python`;
+- the first JSON smoke used the unified wrapper's `--output-json` spelling;
+  this older C100 harness uses `--json-out`;
+- `c100_volume_h256` has a stale 896-slot fixture for 1,024 local tokens and
+  correctly fails the pre-existing `capacity >= N` contract; the matrix case
+  was used rather than weakening the runtime check;
+- the original 7,168-slot hop run hit the retained staging device assertion;
+  this is the capacity failure fixed and regression-tested above;
+- after the data path passed, the stale legacy JIT-name assertion rejected the
+  report; exact conditional JIT identity fixed it without weakening checks.
+
+The smoke stage medians are recorded only as clues in `OPTIMIZATION_LOG.md`.
+They are cold, one-sample, dirty-tree diagnostics, and `nvidia-smi` identified
+the current devices as L20X. They are not H200, NVLink, Gin, RDMA, or end-to-end
+performance claims. Real D>1 capability remains false.

@@ -430,6 +430,21 @@ def test_proxy_capacity_and_corrupt_records_fail_closed() -> None:
     assert outputs[-1].tolist() == [4]
 
 
+def test_retained_staging_capacity_fails_before_shuffle() -> None:
+    records = tuple(
+        tuple(
+            (_record(1, 1 << owner), _record(2, 1 << owner))
+            if owner == 0 else (_UNUSED, _UNUSED)
+            for _ in range(4)
+        )
+        for owner in range(4)
+    )
+    _tensor, outputs = _build(
+        records, channels=2, destinations=3, capacity=4
+    )
+    assert outputs[-1].tolist() == [1]
+
+
 def test_random_adaptive_invariants_cap_and_determinism() -> None:
     for seed in range(64):
         rng = random.Random(1000 + seed)

@@ -39,6 +39,7 @@ import sys
 import tempfile
 import time
 import traceback
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, NamedTuple, Sequence, TypeVar
@@ -128,17 +129,29 @@ _CODE_IDENTITY_PATHS = (
     "tests/elastic/test_rail_balance_hybrid_shuffle_lsa.py",
     "tests/elastic/test_rail_balance_hybrid_unshuffle_lsa.py",
 )
-_JIT_KERNEL_PREFIXES = (
+_COMMON_JIT_KERNEL_PREFIXES = (
     "kernel.combine_reduce_epilogue.",
     "kernel.rail_balance_hybrid_count_v1.",
     "kernel.rail_balance_hybrid_local_barrier_g8_",
     "kernel.rail_balance_hybrid_plan_v2.",
     "kernel.rail_balance_hybrid_prefix_v1.",
     "kernel.rail_balance_hybrid_return_unshuffle.",
+)
+_LEGACY_SOURCE_JIT_KERNEL_PREFIX = (
     "kernel.rail_balance_hybrid_source_shuffle.",
+)
+_HOP_JIT_KERNEL_PREFIXES = (
+    "kernel.rail_balance_hop_record_v1.",
+    "kernel.rail_balance_hop_plan_v2.",
+    "kernel.rail_balance_hop_source_shuffle.",
+)
+_JIT_KERNEL_PREFIXES = (
+    _COMMON_JIT_KERNEL_PREFIXES + _LEGACY_SOURCE_JIT_KERNEL_PREFIX +
+    _HOP_JIT_KERNEL_PREFIXES
 )
 _WATCHDOG_CHILD_ENV = "EP_RAIL_BALANCE_BENCH_WATCHDOG_CHILD"
 _INTERFERENCE_MODES = ("none", "compute-only", "concurrent")
+_HOP_MODES = ("legacy", "one_hop", "adaptive")
 _INTERFERENCE_COMPUTE_SHAPE = (1024, 7168, 7168)
 _TYPE = TypeVar("_TYPE")
 
@@ -157,6 +170,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--stage", required=True, choices=("source", "return"))
     parser.add_argument(
         "--case-name", required=True, choices=_C100_CASE_NAMES)
+    parser.add_argument("--hop-mode", choices=_HOP_MODES, default="legacy")
+    parser.add_argument("--two-hop-threshold-percent", type=int, default=0)
+    parser.add_argument("--max-two-hop-percent", type=int, default=25)
+    parser.add_argument("--hop-penalty-percent", type=int, default=0)
     parser.add_argument("--warmup-iters", type=int, default=10)
     parser.add_argument("--steady-iters", type=int, default=100)
     parser.add_argument("--json-out", type=Path)
@@ -197,6 +214,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--warmup-iters must be non-negative")
     if args.steady_iters <= 0:
         parser.error("--steady-iters must be positive")
+    if not 0 <= args.two_hop_threshold_percent <= 10000:
+        parser.error("--two-hop-threshold-percent must be in [0, 10000]")
+    if not 0 <= args.max_two_hop_percent <= 100:
+        parser.error("--max-two-hop-percent must be in [0, 100]")
+    if not 0 <= args.hop_penalty_percent <= 10000:
+        parser.error("--hop-penalty-percent must be in [0, 10000]")
     if args.timeout <= 0 or args.watchdog_seconds <= 0:
         parser.error("timeouts must be positive")
     if args.watchdog_seconds <= \
@@ -361,6 +384,10 @@ def _prepare_checked(
     *,
     arena_offset: int,
     invocation_id: int,
+    hop_mode: str,
+    two_hop_threshold_percent: int,
+    max_two_hop_percent: int,
+    hop_penalty_percent: int,
 ) -> int:
     status, error = _prepare_case(
         runtime,
@@ -370,6 +397,12 @@ def _prepare_checked(
         arena_offset=arena_offset,
         invocation_id=invocation_id,
         stream=None,
+        hop_aware=hop_mode != "legacy",
+        two_hop_threshold_percent=two_hop_threshold_percent,
+        max_two_hop_percent=(
+            max_two_hop_percent if hop_mode == "adaptive" else 0
+        ),
+        hop_penalty_percent=hop_penalty_percent,
     )
     if error is not None:
         raise RuntimeError(error)
@@ -422,6 +455,10 @@ def _run_iteration(
     category: str,
     category_index: int,
     logical_bytes_by_rank: Sequence[int],
+    hop_mode: str,
+    two_hop_threshold_percent: int,
+    max_two_hop_percent: int,
+    hop_penalty_percent: int,
     nvtx: bool,
     interference_mode: str,
     compute_state: ComputeInterferenceState | None,
@@ -447,6 +484,10 @@ def _run_iteration(
             spec,
             arena_offset=arena_offset,
             invocation_id=invocation_id,
+            hop_mode=hop_mode,
+            two_hop_threshold_percent=two_hop_threshold_percent,
+            max_two_hop_percent=max_two_hop_percent,
+            hop_penalty_percent=hop_penalty_percent,
         )
         if nvtx:
             prepare_function = _nvtx_wrapped(
@@ -462,7 +503,12 @@ def _run_iteration(
                     spec.hidden,
                     arena_offset=arena_offset,
                     arena_bytes=arena_bytes,
-                )),
+                )) + [
+                    hop_mode,
+                    two_hop_threshold_percent,
+                    max_two_hop_percent if hop_mode == "adaptive" else 0,
+                    hop_penalty_percent,
+                ],
                 "num_tokens": int(topk_idx.shape[0]),
             },
             control_group,
@@ -1116,11 +1162,15 @@ def _build_report(
         for artifact in post_jit["artifacts"]
         if str(artifact["relative_path"]).endswith("/kernel.cubin")
     })
-    for prefix in _JIT_KERNEL_PREFIXES:
+    required_jit_prefixes = _COMMON_JIT_KERNEL_PREFIXES + (
+        _LEGACY_SOURCE_JIT_KERNEL_PREFIX
+        if args.hop_mode == "legacy" else _HOP_JIT_KERNEL_PREFIXES
+    )
+    for prefix in required_jit_prefixes:
         matches = [name for name in cubin_directories
                    if name.startswith(prefix)]
         assert len(matches) == 1, (prefix, matches)
-    assert len(cubin_directories) == len(_JIT_KERNEL_PREFIXES)
+    assert len(cubin_directories) == len(required_jit_prefixes)
     init_rows = sorted(
         (row for row in buffer_init_rows if isinstance(row, dict)),
         key=lambda row: int(row["rank"]),
@@ -1145,6 +1195,12 @@ def _build_report(
         "local_destination": spec.plan.local_scaleout_rank,
         "proxy_capacity_per_egress":
             spec.plan.proxy_capacity_per_egress,
+        "hop_mode": args.hop_mode,
+        "two_hop_threshold_percent": args.two_hop_threshold_percent,
+        "max_two_hop_percent": (
+            args.max_two_hop_percent if args.hop_mode == "adaptive" else 0
+        ),
+        "hop_penalty_percent": args.hop_penalty_percent,
         "moved_copies_global": schedule.moved_copies,
         "proxy_required_per_egress": list(schedule.proxy_required),
         "owner_to_egress_moved_copies":
@@ -1228,23 +1284,36 @@ def _build_report(
         movement["selected_logical_bytes_per_rank"])
     selected_logical_bytes_aggregate = int(
         movement["selected_logical_bytes_aggregate"])
-    if args.interference_mode == "compute-only":
+    logical_numerator_available = (
+        args.interference_mode != "compute-only" and args.hop_mode == "legacy"
+    )
+    if not logical_numerator_available:
         logical_bytes_by_rank = [0] * _WORLD_SIZE
         assert logical_bytes == 0
     else:
         logical_bytes_by_rank = selected_logical_bytes_by_rank
         assert logical_bytes == selected_logical_bytes_aggregate
     traffic_accounting: dict[str, object] = {
+        "path_accounting_scope": (
+            "measured legacy plan" if args.hop_mode == "legacy" else
+            "legacy reference only; hop counters are not retained"
+        ),
         "logical_numerator_scope": (
             "no moved-record numerator; target window is the fixed BF16 GEMM"
             if args.interference_mode == "compute-only" else
+            "unavailable until measured hop-plan path counters are retained"
+            if args.hop_mode != "legacy" else
             "moved TokenLayout record bytes counted once, aggregated across "
             "all 8 ranks; not physical link or memory-controller traffic"),
         "stage_rank_scope": movement["selected_rank_scope"],
         "logical_bytes_per_rank": logical_bytes_by_rank,
         "logical_bytes_aggregate": logical_bytes,
-        "stage_logical_bytes_per_rank": selected_logical_bytes_by_rank,
-        "stage_logical_bytes_aggregate": selected_logical_bytes_aggregate,
+        "stage_logical_bytes_per_rank": logical_bytes_by_rank,
+        "stage_logical_bytes_aggregate": logical_bytes,
+        "legacy_reference_logical_bytes_per_rank":
+            selected_logical_bytes_by_rank,
+        "legacy_reference_logical_bytes_aggregate":
+            selected_logical_bytes_aggregate,
         "owner_to_egress_moved_copies":
             movement["owner_to_egress_moved_copies"],
         "outgoing_moved_copies_per_rank":
@@ -1472,6 +1541,17 @@ def _worker(local_rank: int, num_local_ranks: int,
     cold_jit_identity = None
     try:
         spec = _selected_case(args.case_name)
+        if args.hop_mode != "legacy":
+            hop_capacity = max(
+                spec.plan.proxy_capacity_per_egress,
+                spec.plan.num_max_tokens_per_rank * spec.plan.num_topk,
+            )
+            spec = replace(
+                spec,
+                plan=replace(
+                    spec.plan, proxy_capacity_per_egress=hop_capacity
+                ),
+            )
         case = spec.plan
         layout = tuple(int(value) for value in
                        _C._get_rail_balance_hybrid_layout(
@@ -1556,7 +1636,8 @@ def _worker(local_rank: int, num_local_ranks: int,
         stage_logical_bytes = int(movement["selected_logical_bytes_aggregate"])
         assert stage_logical_bytes == \
             spec.expected_moved_copies * logical_token_bytes
-        if args.interference_mode == "compute-only":
+        if args.interference_mode == "compute-only" or \
+                args.hop_mode != "legacy":
             logical_bytes_by_rank = (0,) * _WORLD_SIZE
             logical_bytes = 0
         else:
@@ -1613,6 +1694,10 @@ def _worker(local_rank: int, num_local_ranks: int,
                 category=category,
                 category_index=category_index,
                 logical_bytes_by_rank=logical_bytes_by_rank,
+                hop_mode=args.hop_mode,
+                two_hop_threshold_percent=args.two_hop_threshold_percent,
+                max_two_hop_percent=args.max_two_hop_percent,
+                hop_penalty_percent=args.hop_penalty_percent,
                 nvtx=args.nvtx,
                 interference_mode=args.interference_mode,
                 compute_state=compute_state,
@@ -1713,8 +1798,9 @@ def _worker(local_rank: int, num_local_ranks: int,
                 stage_stats = summary["stage_truth_ns"]
                 bandwidth = summary["logical_bytes_per_second"]
                 bandwidth_text = (
-                    "aggregate logical median=n/a for compute-only, "
-                    if args.interference_mode == "compute-only" else
+                    "aggregate logical median=n/a, "
+                    if args.interference_mode == "compute-only" or
+                    args.hop_mode != "legacy" else
                     "aggregate logical median="
                     f"{bandwidth['median'] / 1e9:.3f} GB/s, "
                 )
@@ -1767,6 +1853,10 @@ def _run_watchdog(
         "--worker-suite",
         "--stage", args.stage,
         "--case-name", args.case_name,
+        "--hop-mode", args.hop_mode,
+        "--two-hop-threshold-percent", str(args.two_hop_threshold_percent),
+        "--max-two-hop-percent", str(args.max_two_hop_percent),
+        "--hop-penalty-percent", str(args.hop_penalty_percent),
         "--warmup-iters", str(args.warmup_iters),
         "--steady-iters", str(args.steady_iters),
         "--timeout", str(args.timeout),

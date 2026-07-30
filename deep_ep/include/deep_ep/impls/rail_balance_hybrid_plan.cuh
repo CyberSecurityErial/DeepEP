@@ -617,6 +617,7 @@ void rail_balance_hop_plan_impl(
 
     for (int egress = 0; egress < num_rails; ++egress) {
         int prefix = 0;
+        int retained_total = 0;
         for (int channel = 0; channel < num_channels; ++channel) {
             for (int destination = 0;
                  destination < num_destinations; ++destination) {
@@ -625,10 +626,12 @@ void rail_balance_hop_plan_impl(
                     destination;
                 group_prefix[group] = prefix;
                 prefix += moved[group];
+                retained_total += retained[group];
             }
         }
         proxy_required[egress] = prefix;
-        if (prefix > proxy_capacity_per_egress)
+        if (prefix > proxy_capacity_per_egress or
+                retained_total > proxy_capacity_per_egress)
             hybrid_plan_detail::report_error(
                 status, HybridPlanError::CapacityExceeded);
     }

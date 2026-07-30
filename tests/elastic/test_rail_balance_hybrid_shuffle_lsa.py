@@ -776,6 +776,10 @@ def _prepare_case(
     arena_offset: int,
     invocation_id: int,
     stream: torch.cuda.Stream | None,
+    hop_aware: bool = False,
+    two_hop_threshold_percent: int = 0,
+    max_two_hop_percent: int = 0,
+    hop_penalty_percent: int = 0,
 ) -> tuple[int, str | None]:
     try:
         def call() -> int:
@@ -791,6 +795,12 @@ def _prepare_case(
                 arena_offset,
                 invocation_id,
                 case.remainder_seed,
+                0,
+                0,
+                hop_aware,
+                two_hop_threshold_percent,
+                max_two_hop_percent,
+                hop_penalty_percent,
             ))
 
         if stream is None:

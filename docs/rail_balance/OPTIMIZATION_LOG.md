@@ -2247,3 +2247,22 @@ lane 0 execute the unchanged planner. Matched N128/N512 one-hop medians improve
 1.372x/1.254x and adaptive 1.244x/1.174x. Nsys one-hop kernel time improves
 1.397x and NCU instructions 1.363x. Both vnode paths and all three focused
 sanitizers pass. The optimization is accepted for the planner only.
+
+## O094 — retain the source-shuffle gap as an open measurement target
+
+The first full C100 hop-aware source run exposed a correctness boundary before
+it exposed a tuning target: retained destination copies are densely staged,
+so their count can exceed the legacy moved-copy proxy capacity. The planner
+now fails closed before shuffle when either moved or retained staging exceeds
+capacity; the benchmark reserves the simple worst-case `N*K`. This is a
+capacity contract, not an optimization, and no second buffer-size field was
+added before measurements justify it.
+
+After that fix, one cold source smoke measured 496.658 us for legacy,
+3,242.746 us for one-hop, and 2,838.342 us for adaptive. These are dirty-tree,
+single-sample diagnostic numbers on devices which `nvidia-smi` identified as
+L20X, so none is accepted as a performance claim. They do identify the next
+falsifiable target: determine whether hop source-shuffle scans the dense record
+table or performs avoidable per-copy lookup work. The next edit is forbidden
+until a clean profiler-free distribution plus Nsys and, if needed, NCU locate
+the exposed time. Return smokes (269.417/416.797 us) are likewise diagnostic.

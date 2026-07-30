@@ -1157,8 +1157,9 @@ Out of scope until evidence expands the project:
   vnode pack/demux specialization, and the existing destination/combine path.
   Adaptive first completes one-hop and then performs bounded, profitable
   third-Rail moves.  No expert endpoint changes.
-- Current local evidence: planner CUDA 9/9; one-hop and adaptive 4x2 round trips
-  pass on eight H200s; API and constructor preflight are 9/9; public ticket and
+- Current local evidence: planner CUDA 10/10; one-hop and adaptive 4x2 round
+  trips pass on all eight visible GPUs; API and constructor preflight are 9/9;
+  public ticket and
   H4b/H4c source contracts pass.  Adaptive's synthetic diagonal proof moves 8
   of 16 copies under a 50% cap and returns exact BF16 values and weights.
 - Current planner selection is deterministic single-lane code.  It is a
@@ -1183,3 +1184,13 @@ Out of scope until evidence expands the project:
   HA060-A tree, one-hop N128/N512 private-API medians improve another
   1.372x/1.254x; Nsys kernel time improves 1.397x and NCU instructions 1.363x.
   Both one-hop and adaptive eight-GPU round trips remain exact.
+- HA060-C extends the existing C100 checked-adapter benchmark instead of
+  adding a second lifecycle. `legacy`, `one_hop`, and `adaptive` now exercise
+  the same prepare/finish/source-or-return transaction. Hop mode uses the
+  endpoint record/plan and hop source-shuffle cubins; return consumes the same
+  ticket. A retained-copy staging overflow found by the first full-size run is
+  now rejected by the planner before shuffle, and the diagnostic explicitly
+  reserves the conservative `N*K` capacity. All four hop source/return smokes,
+  the legacy control, GPU planner 10/10, both vnode round trips, and focused
+  sanitizer gates pass. Hop path-byte counters are not retained yet, so the
+  benchmark refuses to publish a fabricated logical bandwidth numerator.
