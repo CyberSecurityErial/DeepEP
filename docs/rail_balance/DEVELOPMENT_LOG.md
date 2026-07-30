@@ -6607,3 +6607,37 @@ Profiler failures retained:
 
 See `HOP_AWARE_PERFORMANCE_EVIDENCE.md` for commands, numbers, artifact paths,
 limitations and the kernel dossier.
+
+## 2026-07-31 — HA060-B: parallel owner validation
+
+Nsys attributed 2.407 ms of the one-hop G8/N128/K8 diagnostic call to the
+planner kernel. A no-repository scaling probe measured sparse K1/K2/K4/K8 at
+0.653/0.915/1.439/2.472 ms and dense at
+0.651/1.224/2.371/4.608 ms. Both fixed-table scans and active greedy work are
+material.
+
+The first experiment cached pair/source peaks once per record instead of once
+per candidate. One-hop N128/N512 remained 2.476/13.832 ms and adaptive remained
+3.496/18.889 ms, so the compiler or another dependency had already absorbed
+the apparent redundancy. The edit was fully reverted.
+
+The accepted experiment uses the existing 32-thread launch: each active lane
+initializes its slice and validates one owner's fixed record table, then a warp
+reduction returns the exact copy count to lane 0. The deterministic one-hop and
+adaptive assignment order remains single-lane. Matched profiler-free one-hop
+N128/N512 medians fall from 2.477/13.901 ms to 1.806/11.084 ms; adaptive falls
+from 3.503/18.886 ms to 2.817/16.093 ms. Nsys one-hop kernel time falls from
+2.407 to 1.723 ms, and NCU instructions from 529,602 to 388,691.
+
+Final-tree validation:
+
+```text
+GPU one-hop/adaptive random and boundary             9/9 PASS
+eight-GPU one-hop off-diagonal vnode                     PASS
+eight-GPU adaptive diagonal vnode                        PASS
+compute-sanitizer memcheck/synccheck/initcheck        0 errors
+focused Ruff, py_compile and git diff --check             PASS
+```
+
+The output ABI, record table, greedy score, adaptive cap, public capability and
+data plane are unchanged. Real Gin/RDMA remains unmeasured.

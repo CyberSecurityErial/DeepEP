@@ -174,3 +174,41 @@ Artifacts:
 - No real D>1 Gin/RDMA timing, NIC counters or exposed communication exists.
 - No JIT `-lineinfo` source import exists for this report.
 - Power and clocks were sampled before collection, not continuously logged.
+
+## HA060-B: parallelize disjoint owner validation
+
+The HA060-A planner still launched one warp but returned 31 lanes immediately.
+For one-hop G8/N128/K8, Nsys measured a 2.407 ms kernel and NCU measured 529,602
+instructions. The accepted change assigns the fixed validation scan for owner
+`o` to lane `o`; initialization is lane-strided, the exact unit count is
+warp-reduced, and lane 0 retains the complete greedy/adaptive order.
+
+Matched profiler-free raw files use three warmups and 20 retained samples:
+
+```text
+before: /tmp/ha060-planner-final-guarded-matched.json
+after:  /tmp/ha060-owner-parallel-validation-matched.json
+```
+
+| Mode | N | Before median (us) | After median / p95 / p99 (us) | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| one_hop | 128 | 2476.85 | 1805.66 / 1835.95 / 1836.23 | 1.372x |
+| one_hop | 512 | 13900.84 | 11084.43 / 11121.65 / 11180.13 | 1.254x |
+| adaptive | 128 | 3502.81 | 2816.53 / 2844.12 / 2844.38 | 1.244x |
+| adaptive | 512 | 18885.64 | 16092.86 / 16124.97 / 16128.25 | 1.174x |
+
+Matched Nsys reports reduce the one-hop kernel from 2.407 to 1.723 ms
+(1.397x). Matched NCU InstructionStats reduce executed instructions from
+529,602 to 388,691 (1.363x); launch remains grid 1, block 32, 80 registers per
+thread. These reports are diagnostic planner evidence, not network timing:
+
+```text
+.cache/rail_balance/hop-aware/ha060/onehop-n128-baseline.nsys-rep
+.cache/rail_balance/hop-aware/ha060/onehop-n128-owner-parallel.nsys-rep
+.cache/rail_balance/hop-aware/ha060/onehop-n128-baseline-instructions.ncu-rep
+.cache/rail_balance/hop-aware/ha060/onehop-n128-owner-parallel-instructions.ncu-rep
+```
+
+Correctness evidence is GPU planner 9/9 plus exact eight-GPU one-hop and
+adaptive vnode round trips. Compute Sanitizer memcheck, synccheck and initcheck
+all report zero errors on the full focused CUDA suite.

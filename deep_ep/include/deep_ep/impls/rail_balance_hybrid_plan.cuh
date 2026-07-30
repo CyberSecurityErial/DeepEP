@@ -212,8 +212,7 @@ void rail_balance_hop_plan_impl(
         const int two_hop_threshold_percent,
         const int max_two_hop_percent,
         const int hop_penalty_percent) {
-    if (threadIdx.x != 0)
-        return;
+    const int lane = ptx::get_lane_idx();
     if (records == nullptr or resolutions == nullptr or pair_load == nullptr or
         source_load == nullptr or owner_remaining == nullptr or
         retained == nullptr or moved == nullptr or group_prefix == nullptr or
@@ -228,43 +227,49 @@ void rail_balance_hop_plan_impl(
         two_hop_threshold_percent > 10000 or
         max_two_hop_percent < 0 or max_two_hop_percent > 100 or
         hop_penalty_percent < 0 or hop_penalty_percent > 10000) {
-        hybrid_plan_detail::report_error(
-            status, HybridPlanError::InvalidSchedule);
+        if (lane == 0)
+            hybrid_plan_detail::report_error(
+                status, HybridPlanError::InvalidSchedule);
         return;
     }
 
     const int64_t num_records = static_cast<int64_t>(num_rails) *
         num_tokens * num_topk;
     const int num_groups = num_rails * num_channels * num_destinations;
-    for (int rail = 0; rail < num_rails; ++rail) {
+    for (int rail = lane; rail < num_rails; rail += 32) {
         source_load[rail] = 0;
         proxy_required[rail] = 0;
     }
-    for (int i = 0; i < num_rails * num_destinations; ++i) {
+    for (int i = lane; i < num_rails * num_destinations; i += 32) {
         pair_load[i] = 0;
         owner_remaining[i] = 0;
     }
-    for (int i = 0; i < num_groups; ++i) {
+    for (int i = lane; i < num_groups; i += 32) {
         retained[i] = 0;
         moved[i] = 0;
         group_prefix[i] = 0;
     }
-    for (int path = 0; path < 4; ++path)
+    for (int path = lane; path < 4; path += 32)
         path_units[path] = 0;
-    *moved_copies = 0;
+    if (lane == 0)
+        *moved_copies = 0;
+    __syncwarp();
 
     // Validate the fixed table and reserve every owner's still-unscheduled
     // traffic. This prevents inbound moves from consuming an owner's only
     // feasible direct capacity.
-    int total_units = 0;
-    for (int64_t index = 0; index < num_records; ++index) {
+    int lane_units = 0;
+    const int64_t owner_records =
+        static_cast<int64_t>(num_tokens) * num_topk;
+    for (int64_t index = static_cast<int64_t>(lane) * owner_records;
+         lane < num_rails and index < (lane + 1) * owner_records; ++index) {
         resolutions[index] = {-1, -1, -1, -1};
         const auto record = records[index];
         if (record.target_mask == 0) {
             if (record.destination != -1) {
                 hybrid_plan_detail::report_error(
                     status, HybridPlanError::InvalidSchedule);
-                return;
+                continue;
             }
             continue;
         }
@@ -273,13 +278,14 @@ void rail_balance_hop_plan_impl(
                  (record.target_mask >> num_rails) != 0)) {
             hybrid_plan_detail::report_error(
                 status, HybridPlanError::InvalidSchedule);
-            return;
+            continue;
         }
-        const int owner = static_cast<int>(
-            index / (static_cast<int64_t>(num_tokens) * num_topk));
-        ++owner_remaining[owner * num_destinations + record.destination];
-        ++total_units;
+        ++owner_remaining[lane * num_destinations + record.destination];
+        ++lane_units;
     }
+    const int total_units = ptx::reduce_add(lane_units);
+    if (*status != static_cast<int>(HybridPlanError::Success) or lane != 0)
+        return;
 
     for (int64_t index = 0; index < num_records; ++index) {
         const auto record = records[index];

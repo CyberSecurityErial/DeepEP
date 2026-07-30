@@ -1178,3 +1178,8 @@ Out of scope until evidence expands the project:
   single-variable load-gap batch reduces the same kernel to 3.413 ms and the
   private API median 9.658x, without changing one-hop. Full evidence and
   limitations are indexed in `HOP_AWARE_PERFORMANCE_EVIDENCE.md`.
+- HA060-B keeps the greedy assignment on lane 0 but initializes output state
+  cooperatively and validates one owner's records per warp lane. Against the
+  HA060-A tree, one-hop N128/N512 private-API medians improve another
+  1.372x/1.254x; Nsys kernel time improves 1.397x and NCU instructions 1.363x.
+  Both one-hop and adaptive eight-GPU round trips remain exact.

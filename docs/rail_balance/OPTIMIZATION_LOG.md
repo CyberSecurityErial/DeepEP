@@ -2225,3 +2225,25 @@ Result: N128/N512 adaptive private-API medians improve 9.658x/34.013x;
 unchanged one-hop is 1.004x/1.001x. Matched Nsys kernel time improves 9.888x
 and targeted NCU instructions fall 11.419x. Correctness and sanitizer gates
 pass. This is accepted as a planner optimization but not a multinode speedup.
+
+## O092 — reject per-record peak caching
+
+Hypothesis: one-hop repeatedly scans all Rails for each endpoint candidate.
+Hoisting the current pair/source peak outside the candidate loop should reduce
+work without changing the score. Profiler-free N128/N512 one-hop remained
+2.476/13.832 ms and adaptive remained 3.496/18.889 ms, within control noise.
+The source edit was reverted; no complexity was retained.
+
+## O093 — validate fixed records by owner lane
+
+Hypothesis: a material fraction of the serial kernel initializes state and
+scans the fixed `[owner, token, topk]` table before greedy assignment. Owners
+have disjoint output rows, so one warp lane can validate and count each owner
+without atomics or changing assignment order.
+
+Single variable: use the already-launched warp to initialize arrays and scan
+one owner's records per active lane; reduce only the total unit count, then let
+lane 0 execute the unchanged planner. Matched N128/N512 one-hop medians improve
+1.372x/1.254x and adaptive 1.244x/1.174x. Nsys one-hop kernel time improves
+1.397x and NCU instructions 1.363x. Both vnode paths and all three focused
+sanitizers pass. The optimization is accepted for the planner only.
