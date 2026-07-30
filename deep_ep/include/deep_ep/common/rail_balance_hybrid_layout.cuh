@@ -61,6 +61,23 @@ struct HopCopyRecord {
 EP_STATIC_ASSERT(sizeof(HopCopyRecord) == sizeof(int64_t),
                  "HopCopyRecord must occupy one int64 tensor element");
 
+struct HopCopyResolution {
+    int32_t egress;
+    int32_t channel;
+    int32_t remote_slot;
+    int32_t proxy_slot;
+};
+
+EP_STATIC_ASSERT(sizeof(HopCopyResolution) == 4 * sizeof(int32_t),
+                 "HopCopyResolution ABI must stay four int32 values");
+
+enum class HopPathKind : int {
+    Direct = 0,
+    DestinationForward = 1,
+    SourceForward = 2,
+    TwoHop = 3,
+};
+
 struct alignas(ptx::kNumTMAAlignBytes) HybridControl {
     int32_t invocation_id;
     int32_t state;

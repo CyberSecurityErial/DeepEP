@@ -1,5 +1,6 @@
 #pragma once
 
+#include <climits>
 #include <cstdint>
 
 #include <deep_ep/common/compiled.cuh>
@@ -167,6 +168,250 @@ void rail_balance_hop_record_impl(
             records[token_offset + slot] = {target_mask, lane};
         }
         __syncwarp();
+    }
+}
+
+// Correctness-first deterministic one-hop planner. One lane performs the
+// fixed-order assignment; later profiling decides whether this phase warrants
+// a parallel implementation. There are no data-plane atomics or queues.
+template <int kInstantiation = 0>
+__global__ __launch_bounds__(32, 1)
+void rail_balance_hop_one_hop_plan_impl(
+        const HopCopyRecord* records,
+        HopCopyResolution* resolutions,
+        int* pair_load,
+        int* source_load,
+        int* owner_remaining,
+        int* retained,
+        int* moved,
+        int* group_prefix,
+        int* proxy_required,
+        int* path_units,
+        int* moved_copies,
+        int* status,
+        const int num_rails,
+        const int num_tokens,
+        const int num_topk,
+        const int num_channels,
+        const int num_destinations,
+        const int num_max_tokens_per_rank,
+        const int proxy_capacity_per_egress,
+        const int planner_seed) {
+    if (threadIdx.x != 0)
+        return;
+    if (records == nullptr or resolutions == nullptr or pair_load == nullptr or
+        source_load == nullptr or owner_remaining == nullptr or
+        retained == nullptr or moved == nullptr or group_prefix == nullptr or
+        proxy_required == nullptr or path_units == nullptr or
+        moved_copies == nullptr or status == nullptr or num_rails < 1 or
+        num_rails > 32 or num_tokens < 0 or num_topk < 1 or num_topk > 32 or
+        num_channels < 1 or num_channels > kNumHybridMaxChannels or
+        num_destinations < 2 or num_destinations > 32 or
+        num_max_tokens_per_rank < num_tokens or
+        proxy_capacity_per_egress < 0 or planner_seed < 0) {
+        hybrid_plan_detail::report_error(
+            status, HybridPlanError::InvalidSchedule);
+        return;
+    }
+
+    const int64_t num_records = static_cast<int64_t>(num_rails) *
+        num_tokens * num_topk;
+    const int num_groups = num_rails * num_channels * num_destinations;
+    for (int rail = 0; rail < num_rails; ++rail) {
+        source_load[rail] = 0;
+        proxy_required[rail] = 0;
+    }
+    for (int i = 0; i < num_rails * num_destinations; ++i) {
+        pair_load[i] = 0;
+        owner_remaining[i] = 0;
+    }
+    for (int i = 0; i < num_groups; ++i) {
+        retained[i] = 0;
+        moved[i] = 0;
+        group_prefix[i] = 0;
+    }
+    for (int path = 0; path < 4; ++path)
+        path_units[path] = 0;
+    *moved_copies = 0;
+
+    // Validate the fixed table and reserve every owner's still-unscheduled
+    // traffic. This prevents inbound moves from consuming an owner's only
+    // feasible direct capacity.
+    for (int64_t index = 0; index < num_records; ++index) {
+        resolutions[index] = {-1, -1, -1, -1};
+        const auto record = records[index];
+        if (record.target_mask == 0) {
+            if (record.destination != -1) {
+                hybrid_plan_detail::report_error(
+                    status, HybridPlanError::InvalidSchedule);
+                return;
+            }
+            continue;
+        }
+        if (record.destination < 0 or record.destination >= num_destinations or
+                (num_rails < 32 and
+                 (record.target_mask >> num_rails) != 0)) {
+            hybrid_plan_detail::report_error(
+                status, HybridPlanError::InvalidSchedule);
+            return;
+        }
+        const int owner = static_cast<int>(
+            index / (static_cast<int64_t>(num_tokens) * num_topk));
+        ++owner_remaining[owner * num_destinations + record.destination];
+    }
+
+    for (int64_t index = 0; index < num_records; ++index) {
+        const auto record = records[index];
+        if (record.target_mask == 0)
+            continue;
+        const int owner = static_cast<int>(
+            index / (static_cast<int64_t>(num_tokens) * num_topk));
+        const int token = static_cast<int>(
+            (index / num_topk) % num_tokens);
+        const int destination = record.destination;
+        --owner_remaining[owner * num_destinations + destination];
+
+        const uint32_t candidates =
+            record.target_mask | (uint32_t{1} << owner);
+        int best_egress = -1;
+        int best_pair_peak = INT_MAX;
+        int best_source_peak = INT_MAX;
+        int best_local_forwards = INT_MAX;
+        int best_tie = INT_MAX;
+        for (int egress = 0; egress < num_rails; ++egress) {
+            if ((candidates & (uint32_t{1} << egress)) == 0)
+                continue;
+            const int pair_offset = destination * num_rails + egress;
+            if (pair_load[pair_offset] + 1 +
+                    owner_remaining[egress * num_destinations + destination] >
+                    num_max_tokens_per_rank)
+                continue;
+
+            int pair_peak = 0;
+            int source_peak = 0;
+            for (int rail = 0; rail < num_rails; ++rail) {
+                pair_peak = max(
+                    pair_peak,
+                    pair_load[destination * num_rails + rail] +
+                        (rail == egress));
+                source_peak = max(
+                    source_peak, source_load[rail] + (rail == egress));
+            }
+            const int local_forwards = (egress != owner) +
+                __popc(record.target_mask & ~(uint32_t{1} << egress));
+            const int origin = static_cast<int>(
+                (static_cast<int64_t>(planner_seed) + destination + index) %
+                num_rails);
+            const int tie = (egress - origin + num_rails) % num_rails;
+            const bool better =
+                pair_peak < best_pair_peak or
+                (pair_peak == best_pair_peak and
+                 (source_peak < best_source_peak or
+                  (source_peak == best_source_peak and
+                   (local_forwards < best_local_forwards or
+                    (local_forwards == best_local_forwards and
+                     (tie < best_tie or
+                      (tie == best_tie and egress < best_egress)))))));
+            if (better) {
+                best_egress = egress;
+                best_pair_peak = pair_peak;
+                best_source_peak = source_peak;
+                best_local_forwards = local_forwards;
+                best_tie = tie;
+            }
+        }
+        if (best_egress < 0) {
+            hybrid_plan_detail::report_error(
+                status, HybridPlanError::CapacityExceeded);
+            return;
+        }
+
+        int best_channel = -1;
+        int best_group_load = INT_MAX;
+        int best_channel_tie = INT_MAX;
+        const int source_channel = token % num_channels;
+        const int channel_capacity =
+            (num_max_tokens_per_rank + num_channels - 1) / num_channels;
+        for (int channel = 0; channel < num_channels; ++channel) {
+            const int group =
+                (best_egress * num_channels + channel) * num_destinations +
+                destination;
+            const int group_load = retained[group] + moved[group];
+            const int channel_tie =
+                (channel - source_channel + num_channels) % num_channels;
+            if (group_load < channel_capacity and
+                    (group_load < best_group_load or
+                     (group_load == best_group_load and
+                      (channel_tie < best_channel_tie or
+                       (channel_tie == best_channel_tie and
+                        channel < best_channel))))) {
+                best_channel = channel;
+                best_group_load = group_load;
+                best_channel_tie = channel_tie;
+            }
+        }
+        if (best_channel < 0) {
+            hybrid_plan_detail::report_error(
+                status, HybridPlanError::CapacityExceeded);
+            return;
+        }
+
+        const int group =
+            (best_egress * num_channels + best_channel) * num_destinations +
+            destination;
+        const bool is_moved = best_egress != owner;
+        int& group_count = is_moved ? moved[group] : retained[group];
+        const int remote_slot = group_count++;
+        resolutions[index] = {
+            best_egress, best_channel, remote_slot, -1};
+        ++pair_load[destination * num_rails + best_egress];
+        ++source_load[best_egress];
+
+        int path = static_cast<int>(HopPathKind::TwoHop);
+        if (best_egress == owner) {
+            path = record.target_mask == (uint32_t{1} << owner) ?
+                static_cast<int>(HopPathKind::Direct) :
+                static_cast<int>(HopPathKind::DestinationForward);
+        } else if ((record.target_mask &
+                    (uint32_t{1} << best_egress)) != 0) {
+            path = static_cast<int>(HopPathKind::SourceForward);
+        }
+        ++path_units[path];
+        *moved_copies += is_moved;
+    }
+
+    for (int egress = 0; egress < num_rails; ++egress) {
+        int prefix = 0;
+        for (int channel = 0; channel < num_channels; ++channel) {
+            for (int destination = 0;
+                 destination < num_destinations; ++destination) {
+                const int group =
+                    (egress * num_channels + channel) * num_destinations +
+                    destination;
+                group_prefix[group] = prefix;
+                prefix += moved[group];
+            }
+        }
+        proxy_required[egress] = prefix;
+        if (prefix > proxy_capacity_per_egress)
+            hybrid_plan_detail::report_error(
+                status, HybridPlanError::CapacityExceeded);
+    }
+
+    for (int64_t index = 0; index < num_records; ++index) {
+        auto& resolution = resolutions[index];
+        if (resolution.egress < 0)
+            continue;
+        const int owner = static_cast<int>(
+            index / (static_cast<int64_t>(num_tokens) * num_topk));
+        if (resolution.egress == owner)
+            continue;
+        const int destination = records[index].destination;
+        const int group =
+            (resolution.egress * num_channels + resolution.channel) *
+                num_destinations + destination;
+        resolution.proxy_slot =
+            group_prefix[group] + resolution.remote_slot;
     }
 }
 

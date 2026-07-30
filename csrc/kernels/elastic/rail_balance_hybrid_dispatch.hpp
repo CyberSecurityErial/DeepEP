@@ -51,6 +51,18 @@ using RailBalanceHopRecordTensors = std::tuple<
     torch::Tensor,  // records [G, N, K], int64 HopCopyRecord storage
     torch::Tensor>; // status  [1]
 
+using RailBalanceHopPlanTensors = std::tuple<
+    torch::Tensor,  // resolutions [G, N, K, 4]
+    torch::Tensor,  // pair_load [D, G]
+    torch::Tensor,  // source_load [G]
+    torch::Tensor,  // retained [G, C, D]
+    torch::Tensor,  // moved [G, C, D]
+    torch::Tensor,  // group_prefix [G, C, D]
+    torch::Tensor,  // proxy_required [G]
+    torch::Tensor,  // path_units [4]
+    torch::Tensor,  // moved_copies [1]
+    torch::Tensor>; // status [1]
+
 // KernelRuntime owns CUmodule handles for the CUDA context in which the JIT
 // cubin was loaded. DeepEP binds one process to one GPU, so reject accidental
 // same-process cross-device reuse before it can become INVALID_HANDLE.
@@ -139,6 +151,62 @@ static void __instantiate_kernel() {
             args.num_owners, args.num_tokens, args.num_topk,
             args.num_channels, args.num_experts, args.num_destinations,
             args.num_rails, args.local_destination));
+    }
+};
+
+class RailBalanceHopPlanRuntime final:
+    public jit::LaunchRuntime<RailBalanceHopPlanRuntime> {
+public:
+    struct Args {
+        const rail_balance::HopCopyRecord* records;
+        rail_balance::HopCopyResolution* resolutions;
+        int* pair_load;
+        int* source_load;
+        int* owner_remaining;
+        int* retained;
+        int* moved;
+        int* group_prefix;
+        int* proxy_required;
+        int* path_units;
+        int* moved_copies;
+        int* status;
+        int num_rails;
+        int num_tokens;
+        int num_topk;
+        int num_channels;
+        int num_destinations;
+        int num_max_tokens_per_rank;
+        int proxy_capacity_per_egress;
+        int planner_seed;
+        jit::LaunchArgs launch_args;
+    };
+
+    static std::string generate_impl(const Args&) {
+        return R"(
+#include <deep_ep/impls/rail_balance_hybrid_plan.cuh>
+
+using namespace deep_ep::elastic;
+
+static void __instantiate_kernel() {
+    auto ptr = reinterpret_cast<void*>(
+        &rail_balance::rail_balance_hop_one_hop_plan_impl<0>);
+}
+)";
+    }
+
+    static void launch_impl(const jit::KernelHandle& kernel,
+                            const jit::LaunchConfigHandle& config,
+                            Args args) {
+        EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(
+            kernel, config,
+            args.records, args.resolutions,
+            args.pair_load, args.source_load, args.owner_remaining,
+            args.retained, args.moved, args.group_prefix,
+            args.proxy_required, args.path_units, args.moved_copies,
+            args.status, args.num_rails, args.num_tokens, args.num_topk,
+            args.num_channels, args.num_destinations,
+            args.num_max_tokens_per_rank,
+            args.proxy_capacity_per_egress, args.planner_seed));
     }
 };
 
@@ -1353,6 +1421,139 @@ static RailBalanceHopRecordTensors build_rail_balance_hop_records(
     return {records, status};
 }
 
+static RailBalanceHopPlanTensors build_rail_balance_hop_one_hop_plan(
+    const torch::Tensor& records,
+    const int& num_channels,
+    const int& num_destinations,
+    const int& num_max_tokens_per_rank,
+    const int& proxy_capacity_per_egress,
+    const int& planner_seed) {
+    EP_HOST_ASSERT(records.dim() == 3);
+    EP_HOST_ASSERT(records.is_cuda() and records.is_contiguous());
+    EP_HOST_ASSERT(records.scalar_type() == torch::kLong);
+    const auto num_rails_i64 = records.size(0);
+    const auto num_tokens_i64 = records.size(1);
+    const auto num_topk_i64 = records.size(2);
+    EP_HOST_ASSERT(num_rails_i64 >= 1 and num_rails_i64 <= 32);
+    EP_HOST_ASSERT(num_tokens_i64 >= 0 and num_tokens_i64 <= INT_MAX);
+    EP_HOST_ASSERT(num_topk_i64 >= 1 and num_topk_i64 <= 32);
+    const int num_rails = static_cast<int>(num_rails_i64);
+    const int num_tokens = static_cast<int>(num_tokens_i64);
+    const int num_topk = static_cast<int>(num_topk_i64);
+    EP_HOST_ASSERT(num_channels >= 1 and
+                   num_channels <= rail_balance::kNumHybridMaxChannels);
+    EP_HOST_ASSERT(num_destinations >= 2 and num_destinations <= 32);
+    EP_HOST_ASSERT(num_max_tokens_per_rank >= num_tokens);
+    EP_HOST_ASSERT(proxy_capacity_per_egress >= 0);
+    EP_HOST_ASSERT(planner_seed >= 0);
+
+    c10::cuda::CUDAGuard device_guard(records.device());
+    const int device_index = records.get_device();
+    int expected_device = -1;
+    if (not rail_balance_hybrid_plan_process_device.compare_exchange_strong(
+            expected_device, device_index, std::memory_order_relaxed) and
+        expected_device != device_index)
+        EP_HOST_UNREACHABLE(
+            "Hybrid rail-balance planner supports one CUDA device per process");
+    const auto stream = at::cuda::getCurrentCUDAStream(device_index);
+    const auto int_options = records.options().dtype(torch::kInt);
+    auto resolutions = torch::full(
+        {num_rails, num_tokens, num_topk, 4}, -1, int_options);
+    auto pair_load = torch::zeros(
+        {num_destinations, num_rails}, int_options);
+    auto source_load = torch::zeros({num_rails}, int_options);
+    auto owner_remaining = torch::zeros(
+        {num_rails, num_destinations}, int_options);
+    auto retained = torch::zeros(
+        {num_rails, num_channels, num_destinations}, int_options);
+    auto moved = torch::zeros(
+        {num_rails, num_channels, num_destinations}, int_options);
+    auto group_prefix = torch::zeros(
+        {num_rails, num_channels, num_destinations}, int_options);
+    auto proxy_required = torch::zeros({num_rails}, int_options);
+    auto path_units = torch::zeros({4}, int_options);
+    auto moved_copies = torch::zeros({1}, int_options);
+    auto status = torch::zeros({1}, int_options);
+    if (num_tokens == 0) {
+        return {
+            resolutions, pair_load, source_load, retained, moved,
+            group_prefix, proxy_required, path_units, moved_copies, status,
+        };
+    }
+
+    const RailBalanceHopPlanRuntime::Args prototype = {
+        .records = nullptr,
+        .resolutions = nullptr,
+        .pair_load = nullptr,
+        .source_load = nullptr,
+        .owner_remaining = nullptr,
+        .retained = nullptr,
+        .moved = nullptr,
+        .group_prefix = nullptr,
+        .proxy_required = nullptr,
+        .path_units = nullptr,
+        .moved_copies = nullptr,
+        .status = nullptr,
+        .num_rails = 0,
+        .num_tokens = 0,
+        .num_topk = 0,
+        .num_channels = 0,
+        .num_destinations = 0,
+        .num_max_tokens_per_rank = 0,
+        .proxy_capacity_per_egress = 0,
+        .planner_seed = 0,
+        .launch_args = jit::LaunchArgs(1, 32),
+    };
+    const auto runtime = jit::compiler->build(
+        "rail_balance_hop_one_hop_plan_v1",
+        RailBalanceHopPlanRuntime::generate(prototype));
+    RailBalanceHopPlanRuntime::launch(
+        runtime,
+        RailBalanceHopPlanRuntime::Args{
+            .records = reinterpret_cast<const rail_balance::HopCopyRecord*>(
+                records.data_ptr<int64_t>()),
+            .resolutions =
+                reinterpret_cast<rail_balance::HopCopyResolution*>(
+                    resolutions.data_ptr<int>()),
+            .pair_load = pair_load.data_ptr<int>(),
+            .source_load = source_load.data_ptr<int>(),
+            .owner_remaining = owner_remaining.data_ptr<int>(),
+            .retained = retained.data_ptr<int>(),
+            .moved = moved.data_ptr<int>(),
+            .group_prefix = group_prefix.data_ptr<int>(),
+            .proxy_required = proxy_required.data_ptr<int>(),
+            .path_units = path_units.data_ptr<int>(),
+            .moved_copies = moved_copies.data_ptr<int>(),
+            .status = status.data_ptr<int>(),
+            .num_rails = num_rails,
+            .num_tokens = num_tokens,
+            .num_topk = num_topk,
+            .num_channels = num_channels,
+            .num_destinations = num_destinations,
+            .num_max_tokens_per_rank = num_max_tokens_per_rank,
+            .proxy_capacity_per_egress = proxy_capacity_per_egress,
+            .planner_seed = planner_seed,
+            .launch_args = prototype.launch_args,
+        },
+        stream);
+
+    int host_status = 0;
+    CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+        &host_status, status.data_ptr<int>(), sizeof(host_status),
+        cudaMemcpyDeviceToHost, stream));
+    CUDA_RUNTIME_CHECK(cudaStreamSynchronize(stream));
+    EP_HOST_ASSERT(
+        host_status == static_cast<int>(rail_balance::HybridPlanError::Success) or
+        host_status == static_cast<int>(
+            rail_balance::HybridPlanError::CapacityExceeded) or
+        host_status == static_cast<int>(
+            rail_balance::HybridPlanError::InvalidSchedule));
+    return {
+        resolutions, pair_load, source_load, retained, moved,
+        group_prefix, proxy_required, path_units, moved_copies, status,
+    };
+}
+
 static RailBalanceHybridPlanTensors build_rail_balance_hybrid_plan(
     const torch::Tensor& topk_idx,
     const int& num_channels,
@@ -1515,6 +1716,15 @@ static void register_rail_balance_hybrid_plan_apis(pybind11::module_& m) {
         pybind11::arg("num_experts"),
         pybind11::arg("num_destinations"),
         pybind11::arg("local_destination"));
+    m.def(
+        "_build_rail_balance_hop_one_hop_plan",
+        &build_rail_balance_hop_one_hop_plan,
+        pybind11::arg("records"),
+        pybind11::arg("num_channels"),
+        pybind11::arg("num_destinations"),
+        pybind11::arg("num_max_tokens_per_rank"),
+        pybind11::arg("proxy_capacity_per_egress"),
+        pybind11::arg("planner_seed") = 0);
     m.def(
         "_build_rail_balance_hybrid_plan",
         &build_rail_balance_hybrid_plan,

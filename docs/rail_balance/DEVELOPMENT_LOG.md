@@ -6253,3 +6253,46 @@ Accepted evidence after the fix:
 This checkpoint proves endpoint retention only.  It does not yet choose an
 egress, allocate hop-aware static slots, enter Hybrid dispatch, or make a
 performance claim.
+
+### GPU one-hop assignment checkpoint
+
+Added a correctness-first deterministic GPU planner over the endpoint-record
+table.  It chooses only `e in {o} union T`, keeps pair/source Rail load, assigns
+the least-loaded legal target channel, and materializes existing-style static
+`remote_slot`, `group_prefix`, and `proxy_slot` values.  The hot data path has
+not consumed these outputs yet.
+
+The planner reserves every egress owner's unscheduled `(owner,destination)`
+traffic before admitting inbound assignments.  This preserves the current
+per-Rail/destination receive capacity and prevents an early greedy move from
+blocking the owner's only feasible direct path.  Once `e` is fixed, channel
+placement enforces the existing `ceil(max_tokens/channels)` capacity.
+
+One capacity test initially expected a complete diagnostic plan but found
+`proxy_slot=-1`: the kernel set `CapacityExceeded` after group prefixing and
+returned before the final slot pass.  The accepted behavior matches the legacy
+planner: status remains failed and therefore cannot commit, while all candidate
+slots are still materialized for auditing.  No fallback or partial successful
+plan is exposed.
+
+Accepted evidence:
+
+- fixed off-diagonal and diagonal semantics plus 128 random plans: 5/5;
+- every random plan is bitwise deterministic across two launches;
+- the CPU test replays every greedy candidate score and target-channel score,
+  then checks the GPU's selected `e` and channel exactly;
+- endpoint restriction, conservation, path counters, pair/source loads,
+  receive capacity, contiguous remote slots, contiguous proxy slots, corrupt
+  record status, proxy capacity status, and zero-token output all pass;
+- Compute Sanitizer memcheck and synccheck: 0 errors;
+- ptxas: 60 registers, zero stack, zero spill;
+- existing legacy Hybrid planner: 33 functional GPU cases pass.
+
+The legacy golden runner still fails before its functional tests on stale
+baseline hashes for `ptx.cuh` and the recursive legacy include closure.  Those
+files have no diff from frozen base `5199a04`; the failure predates this branch
+and was not hidden by refreshing goldens.
+
+This planner intentionally uses one deterministic device lane.  Its latency is
+not yet accepted and will be measured only after vnode/Hybrid correctness makes
+the work end-to-end representative.
