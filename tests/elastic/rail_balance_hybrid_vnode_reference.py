@@ -29,6 +29,12 @@ from rail_balance_hybrid_reference import (
     enumerate_resolved_copies,
     map_topk_experts_to_destinations,
 )
+from rail_balance_hop_reference import (
+    HopPlan,
+    HopPlannerConfig,
+    HopFlow,
+    build_hop_plan,
+)
 
 
 Scalar = Fraction
@@ -139,6 +145,35 @@ class VnodeRoundTripResult:
     # Diagnostic flat lane reduction.  This is deliberately not the
     # authoritative legacy answer: destination reduction followed by the
     # combine epilogue has an extra BF16 rounding boundary.
+    direct: tuple[tuple[Vector, ...], ...]
+
+
+@dataclass(frozen=True, order=True)
+class HopVnodeCopyRoute:
+    """One payload's concrete dispatch route and its combine inverse."""
+
+    owner: int
+    token: int
+    destination: int
+    targets: tuple[int, ...]
+    egress: int
+    path_kind: str
+    source_owner_physical: int
+    source_egress_physical: int
+    destination_ingress_physical: int
+    destination_target_physicals: tuple[int, ...]
+    source_forward: tuple[int, int] | None
+    destination_forwards: tuple[tuple[int, int], ...]
+    combine_destination_forwards: tuple[tuple[int, int], ...]
+    combine_source_forward: tuple[int, int] | None
+
+
+@dataclass(frozen=True)
+class HopVnodeRoundTripResult:
+    case: VnodeRoundTripCase
+    plan: HopPlan
+    routes: tuple[HopVnodeCopyRoute, ...]
+    combined: tuple[tuple[Vector, ...], ...]
     direct: tuple[tuple[Vector, ...], ...]
 
 
@@ -511,6 +546,143 @@ def run_vnode_roundtrip(case: VnodeRoundTripCase) -> VnodeRoundTripResult:
             tuple(tuple(rows) for rows in owner) for owner in reduce_rows),
         combined=tuple(tuple(owner) for owner in combined),
         direct=tuple(tuple(owner) for owner in direct),
+    )
+
+
+def run_hop_vnode_roundtrip(
+    case: VnodeRoundTripCase,
+    config: HopPlannerConfig,
+) -> HopVnodeRoundTripResult:
+    """Replay endpoint-aware routes around the existing numeric oracle.
+
+    The numeric result is intentionally computed by ``run_vnode_roundtrip``:
+    RailBalance may change transport, but it must not change expert placement,
+    per-destination reduction, or the combine epilogue.  This function maps
+    every shared token/destination payload onto the hop plan and verifies that
+    combine traverses the exact local-forward edges in reverse.
+    """
+
+    baseline = run_vnode_roundtrip(case)
+    topology = case.topology
+    g, d = topology.rails_per_node, topology.num_nodes
+    if config.num_rails != g or config.num_destinations != d:
+        raise ValueError("hop planner topology differs from the vnode case")
+    if config.mode not in ("one_hop", "adaptive"):
+        raise ValueError("hop vnode supports one_hop or adaptive mode")
+
+    members_by_flow: dict[
+        tuple[int, int, tuple[int, ...]], list[tuple[int, int, int]]
+    ] = {}
+    for owner, tokens in enumerate(case.topk_idx):
+        for token, experts in enumerate(tokens):
+            targets_by_destination: dict[int, set[int]] = {}
+            for expert in experts:
+                physical_rank = expert // case.experts_per_physical_rank
+                destination, target = topology.coordinates(physical_rank)
+                if destination == topology.source_node:
+                    raise ValueError("hop vnode currently accepts remote experts only")
+                targets_by_destination.setdefault(destination, set()).add(target)
+            for destination, targets in targets_by_destination.items():
+                key = (owner, destination, tuple(sorted(targets)))
+                members_by_flow.setdefault(key, []).append(
+                    (owner, token, destination)
+                )
+
+    ordered_groups = sorted(members_by_flow.items())
+    flows = tuple(
+        HopFlow(owner, destination, targets, len(members))
+        for (owner, destination, targets), members in ordered_groups
+    )
+    members = tuple(tuple(group) for _key, group in ordered_groups)
+    plan = build_hop_plan(flows, config)
+
+    routes = []
+    seen: set[tuple[int, int, int]] = set()
+    for assignment in plan.assignments:
+        flow_members = members[assignment.flow_index]
+        end = assignment.begin + assignment.count
+        if end > len(flow_members):
+            raise AssertionError("hop assignment exceeds its vnode flow")
+        for owner, token, destination in flow_members[assignment.begin:end]:
+            identity = (owner, token, destination)
+            if identity in seen:
+                raise AssertionError("hop vnode payload was assigned twice")
+            seen.add(identity)
+
+            source_owner = topology.physical(topology.source_node, owner)
+            source_egress = topology.physical(
+                topology.source_node, assignment.egress
+            )
+            destination_ingress = topology.physical(
+                destination, assignment.egress
+            )
+            destination_targets = tuple(
+                topology.physical(destination, target)
+                for target in assignment.targets
+            )
+            source_forward = (
+                (source_owner, source_egress)
+                if assignment.egress != owner
+                else None
+            )
+            destination_forwards = tuple(
+                (destination_ingress, target)
+                for target in destination_targets
+                if target != destination_ingress
+            )
+            combine_destination_forwards = tuple(
+                (target, destination_ingress)
+                for _ingress, target in destination_forwards
+            )
+            combine_source_forward = (
+                (source_egress, source_owner)
+                if source_forward is not None
+                else None
+            )
+            if combine_destination_forwards != tuple(
+                (target, ingress)
+                for ingress, target in destination_forwards
+            ):
+                raise AssertionError("combine destination route is not inverse")
+            if source_forward is not None and combine_source_forward != (
+                source_forward[1], source_forward[0]
+            ):
+                raise AssertionError("combine source route is not inverse")
+            routes.append(HopVnodeCopyRoute(
+                owner=owner,
+                token=token,
+                destination=destination,
+                targets=assignment.targets,
+                egress=assignment.egress,
+                path_kind=assignment.path_kind,
+                source_owner_physical=source_owner,
+                source_egress_physical=source_egress,
+                destination_ingress_physical=destination_ingress,
+                destination_target_physicals=destination_targets,
+                source_forward=source_forward,
+                destination_forwards=destination_forwards,
+                combine_destination_forwards=combine_destination_forwards,
+                combine_source_forward=combine_source_forward,
+            ))
+
+    expected = {
+        (owner, token, destination)
+        for owner, tokens in enumerate(case.topk_idx)
+        for token, experts in enumerate(tokens)
+        for destination in {
+            expert_destination(expert, case.num_experts, d)
+            for expert in experts
+        }
+    }
+    if seen != expected:
+        raise AssertionError("hop vnode did not conserve every shared payload")
+
+    return HopVnodeRoundTripResult(
+        case=case,
+        plan=plan,
+        routes=tuple(sorted(routes)),
+        combined=baseline.combined,
+        direct=baseline.direct,
     )
 
 

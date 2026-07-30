@@ -6296,3 +6296,35 @@ and was not hidden by refreshing goldens.
 This planner intentionally uses one deterministic device lane.  Its latency is
 not yet accepted and will be measured only after vnode/Hybrid correctness makes
 the work end-to-end representative.
+
+### Hop-aware vnode route checkpoint
+
+Added a thin endpoint-aware route replay around the existing vnode numeric
+oracle.  It does not duplicate the synthetic expert or BF16 reduction model:
+the original oracle remains the single source of truth for final values, while
+the new layer replaces only the transport route and checks its inverse combine
+edges.
+
+The replay aggregates each `(owner, destination, target-mask)` stream before
+planning, then maps assignment ranges back to concrete token/destination
+payloads.  This preserves DeepEP's one-payload-per-destination deduplication for
+tokens whose experts live on several destination-local ranks.
+
+Accepted evidence:
+
+- direct `e=o=T` creates no source or destination local forward;
+- an off-diagonal workload selects both destination-forward and source-forward
+  paths within one plan and never selects a third Rail;
+- a diagonal hotspot uses exactly the configured 50% two-hop cap and every
+  such route contains both source and destination local forwarding;
+- a two-target token remains one network payload and reaches both compute
+  ranks;
+- every destination-side and source-side combine edge is the exact reverse of
+  dispatch;
+- 4 vnode route tests plus the existing 12 planner tests pass.
+
+Two command-environment failures are retained.  The non-interactive shell has
+no `python` command, so the pinned interpreter remains
+`/home/chen/.cache/deepep-sjlgpt/bin/python`.  That environment also has no
+`pytest`; the zero-fixture test functions were enumerated and run directly
+without installing packages or changing the machine.
