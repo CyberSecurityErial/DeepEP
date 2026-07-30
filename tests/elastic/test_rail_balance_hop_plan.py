@@ -12,6 +12,7 @@ from rail_balance_hop_reference import (
     build_hop_plan,
     endpoint_rails,
     local_forward_count,
+    materialize_hop_records,
     validate_hop_plan,
 )
 
@@ -210,6 +211,33 @@ def test_multitarget_payload_is_not_duplicated() -> None:
         for item in plan.assignments
     )
     assert plan.local_forward_units == expected_local
+
+
+def test_topk_materializer_retains_target_mask_and_node_dedup() -> None:
+    # D=2, G=4, two experts/rank. Experts 8, 10, and 11 all live on node 1;
+    # the latter two share local rank 1 and must still produce one payload.
+    topk_idx = (
+        ((8, 10, 11, 0),),
+        ((9, 14, 2, 3),),
+        ((4, 5, 12, 15),),
+        ((1, 6, 13, 7),),
+    )
+    records = materialize_hop_records(
+        topk_idx,
+        num_experts=16,
+        num_destinations=2,
+        num_rails=4,
+        local_destination=0,
+    )
+
+    assert records[0][0][0].destination == 1
+    assert records[0][0][0].target_mask == 0b0011
+    assert records[0][0][1].target_mask == 0
+    assert records[1][0][0].target_mask == 0b1001
+    assert records[2][0][0].target_mask == 0b1100
+    assert records[3][0][0].target_mask == 0b0100
+    assert sum(record.target_mask != 0 for owner in records
+               for token in owner for record in token) == 4
 
 
 def test_legacy_exact_can_select_a_nonendpoint_rail() -> None:

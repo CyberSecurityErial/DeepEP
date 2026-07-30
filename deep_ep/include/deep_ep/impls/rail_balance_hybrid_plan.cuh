@@ -74,6 +74,102 @@ __forceinline__ __device__ void report_error(
 
 }  // namespace hybrid_plan_detail
 
+// Materialize the endpoint information omitted by the legacy [G,C,D] count.
+// Output shape is [owner, token, num_topk]. Remote destinations are sorted by
+// destination id; unused slots have target_mask=0 and destination=-1.
+template <int kInstantiation = 0>
+__global__ __launch_bounds__(32, 1)
+void rail_balance_hop_record_impl(
+        const topk_idx_t* topk_idx,
+        HopCopyRecord* records,
+        int* status,
+        const int num_owners,
+        const int num_tokens,
+        const int num_topk,
+        const int num_channels,
+        const int num_experts,
+        const int num_destinations,
+        const int num_rails,
+        const int local_destination) {
+    if (topk_idx == nullptr or records == nullptr or status == nullptr or
+        num_owners < 1 or num_owners > 32 or num_tokens < 0 or
+        num_topk < 1 or num_topk > 32 or num_channels < 1 or
+        num_channels > kNumHybridMaxChannels or num_experts < 1 or
+        num_destinations < 2 or num_destinations > 32 or
+        num_rails < 1 or num_rails > 32 or
+        num_experts % (num_destinations * num_rails) != 0 or
+        local_destination < 0 or local_destination >= num_destinations) {
+        if (threadIdx.x == 0)
+            hybrid_plan_detail::report_error(
+                status, HybridPlanError::InvalidSchedule);
+        return;
+    }
+
+    const int owner_channel = static_cast<int>(blockIdx.x);
+    const int owner = owner_channel / num_channels;
+    const int channel = owner_channel % num_channels;
+    if (owner >= num_owners)
+        return;
+
+    const int lane = ptx::get_lane_idx();
+    const int experts_per_destination = num_experts / num_destinations;
+    const int experts_per_rank = experts_per_destination / num_rails;
+    for (int token = channel; token < num_tokens; token += num_channels) {
+        const auto token_offset =
+            (static_cast<int64_t>(owner) * num_tokens + token) * num_topk;
+        if (lane < num_topk)
+            records[token_offset + lane] = {0u, -1};
+
+        const bool active = lane < num_topk;
+        const topk_idx_t expert = active ?
+            __ldg(topk_idx + token_offset + lane) : topk_idx_t{-1};
+        const bool in_range = not active or
+            (expert >= topk_idx_t{0} and expert < num_experts);
+        if (ptx::gather(not in_range) != 0) {
+            if (lane == 0)
+                hybrid_plan_detail::report_error(
+                    status, HybridPlanError::ExpertOutOfRange);
+            continue;
+        }
+
+        bool duplicate = false;
+        for (int source_lane = 0; source_lane < num_topk; ++source_lane) {
+            const auto other = ptx::exchange(expert, source_lane);
+            duplicate |= active and source_lane < lane and expert == other;
+        }
+        if (ptx::gather(duplicate) != 0) {
+            if (lane == 0)
+                hybrid_plan_detail::report_error(
+                    status, HybridPlanError::DuplicateExpert);
+            continue;
+        }
+
+        const int destination = active ?
+            static_cast<int>(expert) / experts_per_destination : -1;
+        const int target = active ?
+            (static_cast<int>(expert) % experts_per_destination) /
+                experts_per_rank : -1;
+        uint32_t target_mask = 0;
+        for (int source_lane = 0; source_lane < num_topk; ++source_lane) {
+            // Every lane must execute full-mask shuffles. Only the endpoint
+            // lanes consume the exchanged values.
+            const int other_destination =
+                ptx::exchange(destination, source_lane);
+            const int other_target = ptx::exchange(target, source_lane);
+            if (lane < num_destinations and lane != local_destination and
+                    other_destination == lane)
+                target_mask |= uint32_t{1} << other_target;
+        }
+        const bool present = target_mask != 0;
+        const unsigned present_mask = ptx::gather(present);
+        if (present) {
+            const int slot = __popc(present_mask & ((1u << lane) - 1u));
+            records[token_offset + slot] = {target_mask, lane};
+        }
+        __syncwarp();
+    }
+}
+
 // Resolve one deduplicated (owner, source-channel, destination) copy from the
 // compact plan. This is shared by source shuffle and strict device tests. It
 // never consults a per-copy manifest or performs a global atomic.

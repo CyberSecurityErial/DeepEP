@@ -6219,3 +6219,37 @@ Accepted functional evidence:
 Retained environment limitation: the active shell has no `ruff`, `yapf`, or
 `pyrefly` executable.  No package was installed and no claim of those checks is
 made; direct functional tests remain the accepted evidence for this checkpoint.
+
+### GPU endpoint-record checkpoint
+
+Added the first hop-aware GPU-only primitive without changing the existing
+planner or Hybrid data path.  A warp materializes at most `K` fixed records per
+token, each containing a remote destination node and a 32-bit mask of its
+destination-local target ranks.  Multiple experts on one destination node
+still produce one scale-out record.  The private output is an int64 backing
+tensor for the reviewed two-field C++ struct; off and legacy plan tensors,
+buffers, launch arguments, and JIT keys are unchanged.
+
+The first device run failed after successful cubin generation: GPU 0 remained
+at 100% and the test process did not return.  The process was our new isolated
+test and was killed.  Root cause was a full-mask `__shfl_sync` wrapper called
+only by destination lanes inside divergent control flow.  Moving both shuffles
+outside the conditional restored full-warp participation; only the mask update
+remains predicated.  This is retained because the symptom initially resembled
+slow first-time JIT compilation.
+
+Accepted evidence after the fix:
+
+- full extension `build_ext --inplace`: pass;
+- fixed multi-target/padding, 96 random cases, non-default stream, invalid and
+  duplicate experts, and zero tokens: 5/5 GPU tests;
+- every GPU `(destination,target_mask)` equals the CPU materializer;
+- Compute Sanitizer 2025.1 memcheck: 0 errors;
+- Compute Sanitizer 2025.1 synccheck: 0 errors;
+- hop-aware CPU contracts: 12/12;
+- existing Hybrid CPU reference: 15/15;
+- JIT ptxas: 39 registers, zero stack, zero spill.
+
+This checkpoint proves endpoint retention only.  It does not yet choose an
+egress, allocate hop-aware static slots, enter Hybrid dispatch, or make a
+performance claim.

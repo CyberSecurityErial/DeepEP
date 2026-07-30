@@ -51,6 +51,16 @@ enum class HybridPlanError : int {
     InvalidSchedule = 4,
 };
 
+// Hop-aware planning keeps one record per deduplicated token-to-destination
+// payload. A zero target_mask marks an unused top-k-capacity slot.
+struct HopCopyRecord {
+    uint32_t target_mask;
+    int32_t destination;
+};
+
+EP_STATIC_ASSERT(sizeof(HopCopyRecord) == sizeof(int64_t),
+                 "HopCopyRecord must occupy one int64 tensor element");
+
 struct alignas(ptx::kNumTMAAlignBytes) HybridControl {
     int32_t invocation_id;
     int32_t state;

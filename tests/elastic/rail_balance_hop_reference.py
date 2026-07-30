@@ -60,6 +60,12 @@ class HopFlow:
             raise ValueError("targets must be sorted and unique")
 
 
+@dataclass(frozen=True, order=True)
+class HopCopyRecord:
+    target_mask: int
+    destination: int
+
+
 @dataclass(frozen=True)
 class HopPlannerConfig:
     num_rails: int
@@ -112,6 +118,72 @@ class _Chunk:
     begin: int
     count: int
     flow: HopFlow
+
+
+def materialize_hop_records(
+    topk_idx: Sequence[Sequence[Sequence[int]]],
+    *,
+    num_experts: int,
+    num_destinations: int,
+    num_rails: int,
+    local_destination: int,
+) -> tuple[tuple[tuple[HopCopyRecord, ...], ...], ...]:
+    """Build the fixed token-major endpoint table consumed by the GPU plan."""
+
+    _require_int("num_experts", num_experts, 1)
+    _require_int("num_destinations", num_destinations, 2)
+    _require_int("num_rails", num_rails, 1)
+    _require_int("local_destination", local_destination, 0)
+    if num_rails > 32 or local_destination >= num_destinations:
+        raise ValueError("record topology is outside its supported range")
+    if num_experts % (num_destinations * num_rails):
+        raise ValueError("num_experts must be divisible by destinations * rails")
+    if isinstance(topk_idx, (str, bytes)) or not isinstance(topk_idx, Sequence):
+        raise ValueError("topk_idx must be a sequence")
+    owners = tuple(topk_idx)
+    if len(owners) != num_rails:
+        raise ValueError("topk_idx owner dimension must equal num_rails")
+    num_topk = None
+    experts_per_destination = num_experts // num_destinations
+    experts_per_rank = experts_per_destination // num_rails
+    result = []
+    for tokens in owners:
+        if isinstance(tokens, (str, bytes)) or not isinstance(tokens, Sequence):
+            raise ValueError("every owner route must be a sequence")
+        owner_records = []
+        for lanes in tokens:
+            if isinstance(lanes, (str, bytes)) or not isinstance(lanes, Sequence):
+                raise ValueError("every token route must be a sequence")
+            lanes = tuple(lanes)
+            if num_topk is None:
+                num_topk = len(lanes)
+                if not 1 <= num_topk <= 32:
+                    raise ValueError("num_topk must be in [1, 32]")
+            elif len(lanes) != num_topk:
+                raise ValueError("all token routes must have the same num_topk")
+            if any(type(expert) is not int or not 0 <= expert < num_experts
+                   for expert in lanes):
+                raise ValueError("expert index is outside [0, num_experts)")
+            if len(set(lanes)) != len(lanes):
+                raise ValueError("a token route contains duplicate expert ids")
+
+            masks: dict[int, int] = {}
+            for expert in lanes:
+                destination = expert // experts_per_destination
+                if destination == local_destination:
+                    continue
+                target = (expert % experts_per_destination) // experts_per_rank
+                masks[destination] = masks.get(destination, 0) | (1 << target)
+            records = [
+                HopCopyRecord(mask, destination)
+                for destination, mask in sorted(masks.items())
+            ]
+            records.extend(
+                HopCopyRecord(0, -1) for _ in range(len(lanes) - len(records))
+            )
+            owner_records.append(tuple(records))
+        result.append(tuple(owner_records))
+    return tuple(result)
 
 
 def _validate_config(config: HopPlannerConfig) -> tuple[Fraction, Fraction, Fraction]:

@@ -47,6 +47,10 @@ using RailBalanceHybridPlanTensors = std::tuple<
     torch::Tensor,  // moved_copies           [1]
     torch::Tensor>; // status                 [1]
 
+using RailBalanceHopRecordTensors = std::tuple<
+    torch::Tensor,  // records [G, N, K], int64 HopCopyRecord storage
+    torch::Tensor>; // status  [1]
+
 // KernelRuntime owns CUmodule handles for the CUDA context in which the JIT
 // cubin was loaded. DeepEP binds one process to one GPU, so reject accidental
 // same-process cross-device reuse before it can become INVALID_HANDLE.
@@ -92,6 +96,49 @@ static void __instantiate_kernel() {
             args.num_topk, args.num_channels,
             args.num_experts, args.num_destinations,
             args.local_destination));
+    }
+};
+
+class RailBalanceHopRecordRuntime final:
+    public jit::LaunchRuntime<RailBalanceHopRecordRuntime> {
+public:
+    struct Args {
+        const topk_idx_t* topk_idx;
+        rail_balance::HopCopyRecord* records;
+        int* status;
+        int num_owners;
+        int num_tokens;
+        int num_topk;
+        int num_channels;
+        int num_experts;
+        int num_destinations;
+        int num_rails;
+        int local_destination;
+        jit::LaunchArgs launch_args;
+    };
+
+    static std::string generate_impl(const Args&) {
+        return R"(
+#include <deep_ep/impls/rail_balance_hybrid_plan.cuh>
+
+using namespace deep_ep::elastic;
+
+static void __instantiate_kernel() {
+    auto ptr = reinterpret_cast<void*>(
+        &rail_balance::rail_balance_hop_record_impl<0>);
+}
+)";
+    }
+
+    static void launch_impl(const jit::KernelHandle& kernel,
+                            const jit::LaunchConfigHandle& config,
+                            Args args) {
+        EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(
+            kernel, config,
+            args.topk_idx, args.records, args.status,
+            args.num_owners, args.num_tokens, args.num_topk,
+            args.num_channels, args.num_experts, args.num_destinations,
+            args.num_rails, args.local_destination));
     }
 };
 
@@ -1204,6 +1251,108 @@ static int parse_rail_balance_hybrid_threshold_percent(
     return static_cast<int>(parsed);
 }
 
+static RailBalanceHopRecordTensors build_rail_balance_hop_records(
+    const torch::Tensor& topk_idx,
+    const int& num_channels,
+    const int& num_experts,
+    const int& num_destinations,
+    const int& local_destination) {
+    EP_HOST_ASSERT(topk_idx.dim() == 3);
+    EP_HOST_ASSERT(topk_idx.is_cuda() and topk_idx.is_contiguous());
+    EP_HOST_ASSERT(
+        topk_idx.scalar_type() ==
+        c10::CppTypeToScalarType<topk_idx_t>::value);
+
+    const auto num_rails_i64 = topk_idx.size(0);
+    const auto num_tokens_i64 = topk_idx.size(1);
+    const auto num_topk_i64 = topk_idx.size(2);
+    EP_HOST_ASSERT(num_rails_i64 >= 1 and num_rails_i64 <= 32);
+    EP_HOST_ASSERT(num_tokens_i64 >= 0 and num_tokens_i64 <= INT_MAX);
+    EP_HOST_ASSERT(num_topk_i64 >= 1 and num_topk_i64 <= 32);
+    const int num_rails = static_cast<int>(num_rails_i64);
+    const int num_tokens = static_cast<int>(num_tokens_i64);
+    const int num_topk = static_cast<int>(num_topk_i64);
+    EP_HOST_ASSERT(num_channels >= 1 and
+                   num_channels <= rail_balance::kNumHybridMaxChannels);
+    EP_HOST_ASSERT(num_experts > 0);
+    EP_HOST_ASSERT(num_destinations >= 2 and num_destinations <= 32);
+    EP_HOST_ASSERT(local_destination >= 0 and
+                   local_destination < num_destinations);
+    EP_HOST_ASSERT(num_experts % (num_destinations * num_rails) == 0);
+
+    c10::cuda::CUDAGuard device_guard(topk_idx.device());
+    const int device_index = topk_idx.get_device();
+    int expected_device = -1;
+    if (not rail_balance_hybrid_plan_process_device.compare_exchange_strong(
+            expected_device, device_index, std::memory_order_relaxed) and
+        expected_device != device_index)
+        EP_HOST_UNREACHABLE(
+            "Hybrid rail-balance planner supports one CUDA device per process");
+    const auto stream = at::cuda::getCurrentCUDAStream(device_index);
+    auto records = torch::empty(
+        {num_rails, num_tokens, num_topk},
+        topk_idx.options().dtype(torch::kLong));
+    auto status = torch::zeros(
+        {1}, topk_idx.options().dtype(torch::kInt));
+    if (num_tokens == 0)
+        return {records, status};
+
+    const RailBalanceHopRecordRuntime::Args prototype = {
+        .topk_idx = nullptr,
+        .records = nullptr,
+        .status = nullptr,
+        .num_owners = 0,
+        .num_tokens = 0,
+        .num_topk = 0,
+        .num_channels = 0,
+        .num_experts = 0,
+        .num_destinations = 0,
+        .num_rails = 0,
+        .local_destination = 0,
+        .launch_args = jit::LaunchArgs(
+            num_rails * num_channels, 32),
+    };
+    const auto runtime = jit::compiler->build(
+        "rail_balance_hop_record_v1",
+        RailBalanceHopRecordRuntime::generate(prototype));
+    RailBalanceHopRecordRuntime::launch(
+        runtime,
+        RailBalanceHopRecordRuntime::Args{
+            .topk_idx = topk_idx.data_ptr<topk_idx_t>(),
+            .records = reinterpret_cast<rail_balance::HopCopyRecord*>(
+                records.data_ptr<int64_t>()),
+            .status = status.data_ptr<int>(),
+            .num_owners = num_rails,
+            .num_tokens = num_tokens,
+            .num_topk = num_topk,
+            .num_channels = num_channels,
+            .num_experts = num_experts,
+            .num_destinations = num_destinations,
+            .num_rails = num_rails,
+            .local_destination = local_destination,
+            .launch_args = prototype.launch_args,
+        },
+        stream);
+
+    int host_status = 0;
+    CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
+        &host_status, status.data_ptr<int>(), sizeof(host_status),
+        cudaMemcpyDeviceToHost, stream));
+    CUDA_RUNTIME_CHECK(cudaStreamSynchronize(stream));
+    if (host_status == static_cast<int>(
+            rail_balance::HybridPlanError::ExpertOutOfRange))
+        throw EPExceptionWithLineInfo(
+            "Rail balance hop record",
+            "topk_idx contains a masked or out-of-range expert id");
+    if (host_status == static_cast<int>(
+            rail_balance::HybridPlanError::DuplicateExpert))
+        throw EPExceptionWithLineInfo(
+            "Rail balance hop record",
+            "topk_idx contains duplicate expert ids within one token");
+    EP_HOST_ASSERT(host_status == 0);
+    return {records, status};
+}
+
 static RailBalanceHybridPlanTensors build_rail_balance_hybrid_plan(
     const torch::Tensor& topk_idx,
     const int& num_channels,
@@ -1358,6 +1507,14 @@ static RailBalanceHybridPlanTensors build_rail_balance_hybrid_plan(
 }
 
 static void register_rail_balance_hybrid_plan_apis(pybind11::module_& m) {
+    m.def(
+        "_build_rail_balance_hop_records",
+        &build_rail_balance_hop_records,
+        pybind11::arg("topk_idx"),
+        pybind11::arg("num_channels"),
+        pybind11::arg("num_experts"),
+        pybind11::arg("num_destinations"),
+        pybind11::arg("local_destination"));
     m.def(
         "_build_rail_balance_hybrid_plan",
         &build_rail_balance_hybrid_plan,
