@@ -6375,3 +6375,47 @@ Accepted evidence:
 This proves source-side endpoint selection and direct-to-final proxy staging.
 It does not yet prove real GIN/RDMA, destination direct-delivery bypass, the
 full persistent dispatch/combine round trip, or performance.
+
+### Production-shaped one-hop dispatch transaction checkpoint
+
+The production `_rail_balance_hybrid_dispatch_prepare` now selects either the
+legacy count/segment planner or the endpoint one-hop record planner.  Both
+plans still feed the original persistent Hybrid dispatch ABI:
+`retained/moved/group_prefix/proxy_required`.  No second public operator and no
+second persistent dispatch kernel were added.
+
+Commit freezes hop record/resolution pointers before changing the transaction
+to `Invalid`, then submits the hop source-shuffle, the existing node-local
+publication barrier, and the existing Hybrid dispatch consecutively.  The hop
+submit adapter is raw-pointer-only, matching the pre-existing rule that the
+committed region may not allocate, inspect Tensor objects, JIT, or synchronize
+the host.
+
+Python now names the experimental identities explicitly:
+
+- `force` and `legacy_exact` select the old all-Rail planner;
+- `one_hop` selects the endpoint planner;
+- `adaptive` reserves a distinct cross-rank mode id but remains unusable while
+  the common capability gate is false and the GPU two-hop stage is absent;
+- `off` remains byte-for-byte the native DeepEP path.
+
+The constructor manifest encodes the mode id in the old enabled-mode field, so
+ranks cannot silently mix legacy and one-hop while keeping the same manifest
+width.  The prior note that legacy prepared-plan ownership became optional was
+an intermediate build attempt; the final simpler structure always owns the
+legacy prepared plan and conditionally owns only the hop state.
+
+Accepted evidence:
+
+- extension build passes for SM90;
+- Hybrid API 9/9, constructor preflight 9/9, public lifecycle, and validation
+  contract 23/23 pass;
+- the lifecycle fake runtime proves `force` submits `hop_aware=false` and
+  `one_hop` submits `hop_aware=true`;
+- endpoint records 5/5 and GPU one-hop plan 5/5 pass;
+- true 8-GPU hop LSA payload validation passes;
+- legacy true 8-GPU `balanced_zero_move` passes after the shared submit change.
+
+GPU co-tenants were `mmunlearner`, not Megatron.  They were left running.  No
+latency or bandwidth number from this checkpoint is accepted as performance
+evidence.

@@ -156,16 +156,28 @@ def test_config_parser_is_strict_and_deterministic():
     assert parse('force', 1, 'active', 20) == ('force', 1, 1, 20)
     assert parse('force', 1, 'adaptive', 3100) == \
         ('force', 1, 2, 3100)
+    assert parse('legacy_exact', 1) == ('legacy_exact', 1, 0, 0)
+    assert parse('one_hop', 1) == ('one_hop', 1, 0, 0)
+    assert parse('adaptive', 1) == ('adaptive', 1, 0, 0)
     assert parse('force', (1 << 31) - 1) == \
         ('force', (1 << 31) - 1, 0, 0)
+    make_manifest = elastic_module._make_rail_balance_constructor_manifest
+    layout = (0,) * elastic_module._RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS
+    assert make_manifest('force', 8, arena_layout=layout)[5] == 1
+    assert make_manifest('legacy_exact', 8, arena_layout=layout)[5] == 1
+    assert make_manifest('one_hop', 8, arena_layout=layout)[5] == 2
+    assert make_manifest('adaptive', 8, arena_layout=layout)[5] == 3
 
     invalid = (
         (None, 0,
-         "rail_balance must be exactly one of ('off', 'force'), got None"),
+         "rail_balance must be exactly one of ('off', 'force', "
+         "'legacy_exact', 'one_hop', 'adaptive'), got None"),
         ('auto', 0,
-         "rail_balance must be exactly one of ('off', 'force'), got 'auto'"),
+         "rail_balance must be exactly one of ('off', 'force', "
+         "'legacy_exact', 'one_hop', 'adaptive'), got 'auto'"),
         ('OFF', 0,
-         "rail_balance must be exactly one of ('off', 'force'), got 'OFF'"),
+         "rail_balance must be exactly one of ('off', 'force', "
+         "'legacy_exact', 'one_hop', 'adaptive'), got 'OFF'"),
         ('off', True,
          'rail_balance_proxy_slots_per_rank must be an integer in '
          '[0, 2147483647]'),
@@ -178,7 +190,7 @@ def test_config_parser_is_strict_and_deterministic():
         ('off', 1,
          "rail_balance_proxy_slots_per_rank must be 0 when rail_balance='off'"),
         ('force', 0,
-         "rail_balance_proxy_slots_per_rank must be positive when rail_balance='force'"),
+         'rail_balance_proxy_slots_per_rank must be positive when rail balancing is enabled'),
     )
     for mode, capacity, detail in invalid:
         _expect_error(
@@ -499,6 +511,8 @@ def test_force_path_owns_checked_tail_arena_and_runtime_total():
         '_rail_balance_next_invocation_id',
         '_rail_balance_live_ticket',
         '_rail_balance_terminal',
+        '_rail_balance_zero_move_bypass_budget',
+        '_rail_balance_zero_move_common_fields',
     }
     assert buffer._rail_balance_mode == 'force'
     assert buffer._rail_balance_proxy_slots_per_rank == 32

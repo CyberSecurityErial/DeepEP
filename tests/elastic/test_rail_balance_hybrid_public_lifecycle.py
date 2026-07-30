@@ -260,6 +260,7 @@ class _FakeRuntime:
         self._combine_x: torch.Tensor | None = None
         self._combine_weights: torch.Tensor | None = None
         self._prepared_ticket: object | None = None
+        self.hop_aware: bool | None = None
 
     def _rail_balance_hybrid_dispatch_prepare(self, *args: object) -> tuple[int, ...]:
         self.trace.append("dispatch_prepare")
@@ -268,7 +269,9 @@ class _FakeRuntime:
         self._x = args[0]  # type: ignore[assignment]
         self._topk_idx = args[1]  # type: ignore[assignment]
         self._topk_weights = args[2]  # type: ignore[assignment]
-        assert args[-2:] == (0, 0)
+        assert args[-3:-1] == (0, 0)
+        assert type(args[-1]) is bool
+        self.hop_aware = args[-1]
         # Exact H4b manifest width: status then immutable public geometry/ABI.
         return 0, *_DISPATCH_COMMON_FIELDS
 
@@ -344,7 +347,9 @@ class _FakeRuntime:
         return x.clone(), topk_weights.clone(), None
 
 
-def _make_buffer(*, force: bool) -> tuple[ElasticBuffer, _FakeRuntime, _GateController]:
+def _make_buffer(
+    *, force: bool, mode: str = "force"
+) -> tuple[ElasticBuffer, _FakeRuntime, _GateController]:
     buffer = object.__new__(ElasticBuffer)
     runtime = _FakeRuntime()
     runtime.buffer = buffer
@@ -367,7 +372,7 @@ def _make_buffer(*, force: bool) -> tuple[ElasticBuffer, _FakeRuntime, _GateCont
 
     gate = _GateController(runtime.trace)
     if force:
-        buffer._rail_balance_mode = "force"
+        buffer._rail_balance_mode = mode
         buffer._rail_balance_proxy_slots_per_rank = 8
         buffer._rail_balance_policy = 0
         buffer._rail_balance_threshold_percent = 0
@@ -427,6 +432,7 @@ def _assert_successful_round_trip() -> None:
     recv_x, recv_idx, recv_weights, handle, event = _force_dispatch(buffer)
     assert isinstance(handle, EPHandle)
     assert isinstance(event, EventOverlap)
+    assert runtime.hop_aware is False
     ticket = handle._rail_balance_ticket  # type: ignore[attr-defined]
     assert ticket.owner_token is buffer._rail_balance_owner_token  # type: ignore[attr-defined]
     assert ticket.invocation_id == 1
@@ -481,6 +487,19 @@ def _assert_successful_round_trip() -> None:
             4, 1,
         ),
     ]
+
+
+def _assert_one_hop_selects_endpoint_planner() -> None:
+    buffer, runtime, _ = _make_buffer(force=True, mode="one_hop")
+    _force_dispatch(buffer)
+    assert runtime.hop_aware is True
+
+
+def _assert_adaptive_does_not_fall_back() -> None:
+    buffer, runtime, _ = _make_buffer(force=True, mode="adaptive")
+    _expect_raises(lambda: _force_dispatch(buffer))
+    assert runtime.hop_aware is None
+    assert runtime.trace == ["gate"]
 
 
 def _assert_zero_move_plan_bypasses_force() -> None:
@@ -735,6 +754,8 @@ def main() -> None:
     try:
         _assert_source_contract()
         _assert_successful_round_trip()
+        _assert_one_hop_selects_endpoint_planner()
+        _assert_adaptive_does_not_fall_back()
         _assert_zero_move_plan_bypasses_force()
         _assert_gate_rejection_is_retryable()
         _assert_dispatch_entry_failures_are_retryable()

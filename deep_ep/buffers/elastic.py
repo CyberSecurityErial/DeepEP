@@ -22,7 +22,15 @@ from ..utils.envs import (
 from ..utils.comm import get_nccl_comm_handle
 
 
-_RAIL_BALANCE_MODES = ('off', 'force')
+_RAIL_BALANCE_MODES = (
+    'off', 'force', 'legacy_exact', 'one_hop', 'adaptive')
+_RAIL_BALANCE_MODE_IDS = {
+    'off': 0,
+    'force': 1,
+    'legacy_exact': 1,
+    'one_hop': 2,
+    'adaptive': 3,
+}
 _RAIL_BALANCE_POLICIES = ('all', 'active', 'adaptive')
 _RAIL_BALANCE_POLICY_IDS = {
     policy: index for index, policy in enumerate(_RAIL_BALANCE_POLICIES)
@@ -114,10 +122,10 @@ def _parse_rail_balance_config(
         raise ValueError(_rail_balance_error(
             'InvalidConfiguration',
             "rail_balance_proxy_slots_per_rank must be 0 when rail_balance='off'"))
-    if mode == 'force' and proxy_slots_per_rank == 0:
+    if mode != 'off' and proxy_slots_per_rank == 0:
         raise ValueError(_rail_balance_error(
             'InvalidConfiguration',
-            "rail_balance_proxy_slots_per_rank must be positive when rail_balance='force'"))
+            'rail_balance_proxy_slots_per_rank must be positive when rail balancing is enabled'))
     if mode == 'off' and policy != 'all':
         raise ValueError(_rail_balance_error(
             'InvalidConfiguration',
@@ -348,8 +356,8 @@ def _make_rail_balance_constructor_manifest(
     if type(threshold_percent) is not int or not (
             0 <= threshold_percent <= _RAIL_BALANCE_MAX_THRESHOLD_PERCENT):
         raise ValueError('rail-balance constructor threshold is invalid')
-    is_force = mode == 'force'
-    if is_force:
+    mode_id = _RAIL_BALANCE_MODE_IDS[mode]
+    if mode_id:
         if len(arena_layout) != _RAIL_BALANCE_CONSTRUCTOR_LAYOUT_FIELDS or not all(
                 type(value) is int and value >= 0 for value in arena_layout):
             raise ValueError('rail-balance constructor arena layout ABI is invalid')
@@ -377,7 +385,7 @@ def _make_rail_balance_constructor_manifest(
         _RAIL_BALANCE_OPERATION_CONSTRUCTOR,
         _RAIL_BALANCE_PHASE_PREPARE,
         _RAIL_BALANCE_CONSTRUCTOR_MANIFEST_WIDTH,
-        int(is_force),
+        mode_id,
         world_size,
         *force_fields,
         *layout_fields,
@@ -757,12 +765,15 @@ class ElasticBuffer:
             num_gpu_timeout_secs: GPU-side timeout in seconds for GPU operations.
             explicitly_destroy: If this flag is set to True, you need to explicitly call `destroy()` to release resources;
                 otherwise, the resources will be released by the destructor.
-            rail_balance: experimental source-side rail-balancing mode, either ``'off'`` or ``'force'``.
+            rail_balance: experimental source-side rail-balancing mode. ``'off'``
+                preserves DeepEP; ``'force'``/``'legacy_exact'`` use the original
+                all-Rail prototype; ``'one_hop'`` restricts egress to endpoint
+                Rails; ``'adaptive'`` is reserved for bounded selective 2-hop.
                 The default ``'off'`` path preserves the legacy buffer sizing, runtime arguments,
                 JIT specialization, handles, and results; only local configuration parsing and
                 mode guards are added.
             rail_balance_proxy_slots_per_rank: moved-copy capacity reserved on each egress rank.
-                Must be zero for ``'off'`` and positive for ``'force'``.
+                Must be zero for ``'off'`` and positive otherwise.
             rail_balance_policy: planner policy: ``'all'`` balances across every
                 local rail, ``'active'`` keeps the original nonempty rail set,
                 and ``'adaptive'`` expands that set only when each added rail
@@ -787,7 +798,7 @@ class ElasticBuffer:
                     rail_balance, rail_balance_proxy_slots_per_rank,
                     rail_balance_policy,
                     rail_balance_threshold_percent)
-            if rail_balance == 'force':
+            if rail_balance != 'off':
                 _validate_rail_balance_force_constructor(
                     num_bytes, num_cpu_bytes,
                     num_max_tokens_per_rank, hidden, num_topk,
@@ -821,7 +832,7 @@ class ElasticBuffer:
                 constructor_error_priority = \
                     _RAIL_BALANCE_CONSTRUCTOR_PARSE_ERROR
 
-            if constructor_error_priority == 0 and rail_balance == 'force':
+            if constructor_error_priority == 0 and rail_balance != 'off':
                 try:
                     _validate_rail_balance_force_constructor(
                         num_bytes, num_cpu_bytes,
@@ -832,12 +843,12 @@ class ElasticBuffer:
                     constructor_error_priority = \
                         _RAIL_BALANCE_CONSTRUCTOR_VALIDATION_ERROR
 
-            if constructor_error_priority == 0 and rail_balance == 'force' and \
+            if constructor_error_priority == 0 and rail_balance != 'off' and \
                     not _rail_balance_force_available():
                 constructor_error_priority = \
                     _RAIL_BALANCE_CONSTRUCTOR_CAPABILITY_ERROR
 
-            if constructor_error_priority == 0 and rail_balance == 'force':
+            if constructor_error_priority == 0 and rail_balance != 'off':
                 try:
                     rail_balance_arena_layout = tuple(
                         _C._get_rail_balance_hybrid_layout(
@@ -938,7 +949,7 @@ class ElasticBuffer:
         legacy_num_bytes = 0
         rail_balance_arena_bytes = 0
         force_runtime = None
-        if rail_balance == 'force' and _RAIL_BALANCE_FORCE_HOST_AVAILABLE:
+        if rail_balance != 'off' and _RAIL_BALANCE_FORCE_HOST_AVAILABLE:
             # Gate 0 made mode and geometry unanimous.  Resolve the remaining
             # rank-local sizing/runtime facts before any symmetric window is
             # registered, then reuse the same fixed storage for one force-only
@@ -1085,7 +1096,7 @@ class ElasticBuffer:
                   f'(cpu: {num_cpu_bytes}) at rank EP {group.rank()}/{group.size()}')
         self.num_bytes = num_bytes
 
-        if rail_balance == 'force':
+        if rail_balance != 'off':
             self._rail_balance_mode = rail_balance
             self._rail_balance_proxy_slots_per_rank = rail_balance_proxy_slots_per_rank
             self._rail_balance_policy = rail_balance_policy_id
@@ -1107,7 +1118,7 @@ class ElasticBuffer:
         # Store default values
         self.num_max_tokens_per_rank = num_max_tokens_per_rank
 
-        if rail_balance != 'force':
+        if rail_balance == 'off':
             # Preserve the exact legacy path when rail balancing is disabled.
             check_nvlink_connections(group)
 
@@ -1127,7 +1138,7 @@ class ElasticBuffer:
         self.num_allocated_qps = num_allocated_qps
 
         self.explicitly_destroy = explicitly_destroy
-        if rail_balance == 'force':
+        if rail_balance != 'off':
             # The force runtime/window was created immediately after Gate 1.
             self.runtime = force_runtime
         else:
@@ -1701,6 +1712,9 @@ class ElasticBuffer:
                     raise RuntimeError('rail-balance buffer is terminal')
                 if self._rail_balance_live_ticket is not None:
                     raise RuntimeError('rail-balance dispatch is already live')
+                if self._rail_balance_mode == 'adaptive':
+                    raise RuntimeError(
+                        'adaptive RailBalance requires the selective 2-hop GPU planner')
                 if handle is not None:
                     raise ValueError('cached force dispatch is unsupported')
                 if isinstance(x, tuple):
@@ -1825,7 +1839,8 @@ class ElasticBuffer:
                             self._rail_balance_arena_offset,
                             invocation_id, 0,
                             self._rail_balance_policy,
-                            self._rail_balance_threshold_percent)
+                            self._rail_balance_threshold_percent,
+                            self._rail_balance_mode == 'one_hop')
                     if type(prepare_result) is not tuple or \
                             len(prepare_result) != 1 + \
                             _RAIL_BALANCE_DISPATCH_COMMON_FIELDS or \
@@ -2130,7 +2145,7 @@ class ElasticBuffer:
             handle: the returned communication handle.
             event: the event after executing the kernel (valid only if `async_with_compute_stream` is set).
         """
-        if getattr(self, '_rail_balance_mode', 'off') == 'force':
+        if getattr(self, '_rail_balance_mode', 'off') != 'off':
             return self._dispatch_rail_balance_force(
                 x, topk_idx, topk_weights,
                 cumulative_local_expert_recv_stats,
@@ -2451,7 +2466,7 @@ class ElasticBuffer:
             combined_topk_weights: the reduced top-k weights, with shape `[num_combined_tokens, num_topk]` and type `torch.float`.
             event: the event after executing the kernel (valid only if `async_with_compute_stream` is set).
         """
-        if getattr(self, '_rail_balance_mode', 'off') == 'force' and \
+        if getattr(self, '_rail_balance_mode', 'off') != 'off' and \
                 type(getattr(handle, '_rail_balance_ticket', None)) is \
                 _RailBalanceForceTicket:
             return self._combine_rail_balance_force(

@@ -289,6 +289,49 @@ public:
         return rail_balance::checked_add_i64(legacy_bytes, layout.arena_bytes);
     }
 
+    RailBalanceHopPlanState make_rail_balance_hop_plan_state(
+        const torch::Tensor& topk_idx,
+        const rail_balance::HybridArenaLayout& arena_layout,
+        const int& num_rails,
+        const int& num_max_tokens_per_rank,
+        const int& num_topk,
+        const int& num_destinations,
+        const int& num_channels) {
+        const int64_t record_count =
+            static_cast<int64_t>(num_max_tokens_per_rank) * num_topk;
+        const int64_t record_bytes = rail_balance::checked_mul_i64(
+            record_count,
+            static_cast<int64_t>(sizeof(rail_balance::HopCopyRecord)));
+        EP_HOST_ASSERT(
+            record_bytes <= arena_layout.get_hop_plan_record_capacity_bytes());
+        const auto int_options = topk_idx.options().dtype(torch::kInt);
+        std::array<const rail_balance::HopCopyRecord*, 32> peer_records{};
+        auto* local_records = arena_layout.get_hop_plan_record_ptr();
+        for (int peer = 0; peer < num_rails; ++peer) {
+            peer_records[peer] = static_cast<
+                const rail_balance::HopCopyRecord*>(
+                    nccl_context->get_sym_ptr(local_records, peer));
+        }
+        return {
+            .records = torch::empty(
+                {num_rails, num_max_tokens_per_rank, num_topk},
+                topk_idx.options().dtype(torch::kLong)),
+            .resolutions = torch::full(
+                {num_rails, num_max_tokens_per_rank, num_topk, 4},
+                -1, int_options),
+            .pair_load = torch::zeros(
+                {num_destinations, num_rails}, int_options),
+            .source_load = torch::zeros({num_rails}, int_options),
+            .owner_remaining = torch::zeros(
+                {num_rails, num_destinations}, int_options),
+            .path_units = torch::zeros({4}, int_options),
+            .local_records = local_records,
+            .peer_records = peer_records,
+            .record_bytes = static_cast<size_t>(record_bytes),
+            .prepared = prepare_rail_balance_hop_plan(num_channels),
+        };
+    }
+
     int rail_balance_hybrid_plan_prepare(
         const torch::Tensor& topk_idx,
         const int& hidden,
@@ -452,47 +495,11 @@ public:
                 nccl_context->get_sym_ptr(local_channel_count, peer));
         }
         std::optional<RailBalanceHopPlanState> hop;
-        if (hop_aware) {
-            const int64_t record_count =
-                static_cast<int64_t>(num_max_tokens_per_rank) * num_topk;
-            const int64_t record_bytes_i64 = rail_balance::checked_mul_i64(
-                record_count,
-                static_cast<int64_t>(sizeof(rail_balance::HopCopyRecord)));
-            EP_HOST_ASSERT(record_bytes_i64 <=
-                           arena_layout.get_hop_plan_record_capacity_bytes());
-            const auto long_options = topk_idx.options().dtype(torch::kLong);
-            auto records = torch::empty(
-                {num_rails, num_max_tokens_per_rank, num_topk}, long_options);
-            auto resolutions = torch::full(
-                {num_rails, num_max_tokens_per_rank, num_topk, 4},
-                -1, int_options);
-            auto pair_load = torch::zeros(
-                {num_scaleout_ranks, num_rails}, int_options);
-            auto source_load = torch::zeros({num_rails}, int_options);
-            auto owner_remaining = torch::zeros(
-                {num_rails, num_scaleout_ranks}, int_options);
-            auto path_units = torch::zeros({4}, int_options);
-            auto* local_records = arena_layout.get_hop_plan_record_ptr();
-            std::array<const rail_balance::HopCopyRecord*, 32>
-                peer_records{};
-            for (int peer = 0; peer < num_rails; ++peer) {
-                peer_records[peer] = static_cast<
-                    const rail_balance::HopCopyRecord*>(
-                        nccl_context->get_sym_ptr(local_records, peer));
-            }
-            hop.emplace(RailBalanceHopPlanState{
-                .records = std::move(records),
-                .resolutions = std::move(resolutions),
-                .pair_load = std::move(pair_load),
-                .source_load = std::move(source_load),
-                .owner_remaining = std::move(owner_remaining),
-                .path_units = std::move(path_units),
-                .local_records = local_records,
-                .peer_records = peer_records,
-                .record_bytes = static_cast<size_t>(record_bytes_i64),
-                .prepared = prepare_rail_balance_hop_plan(num_channels),
-            });
-        }
+        if (hop_aware)
+            hop.emplace(make_rail_balance_hop_plan_state(
+                topk_idx, arena_layout, num_rails,
+                num_max_tokens_per_rank, num_topk,
+                num_scaleout_ranks, num_channels));
         const int64_t active_count_values =
             static_cast<int64_t>(num_channels) * num_scaleout_ranks;
         EP_HOST_ASSERT(active_count_values > 0 and
@@ -584,7 +591,8 @@ public:
         const int& invocation_id,
         const pybind11::object& remainder_seed,
         const pybind11::object& policy,
-        const pybind11::object& threshold_percent) {
+        const pybind11::object& threshold_percent,
+        const bool& hop_aware) {
         // This is the production-shaped, noncollective half of force dispatch.
         // It deliberately accepts no topology, local-rank, hidden, top-k, or
         // channel argument: all of those values are derived and frozen here.
@@ -810,7 +818,8 @@ public:
         auto source_shuffle =
             std::make_shared<PreparedRailBalanceHybridSourceShuffle>(
                 prepare_rail_balance_hybrid_source_shuffle(
-                    hidden, num_topk, num_channels, num_tokens));
+                    hidden, num_topk, num_channels, num_tokens,
+                    hop_aware));
         const RailBalanceHybridDispatchSpec dispatch_spec = {
             .num_sms = num_sms,
             .num_notify_warps = kNumNotifyWarps,
@@ -890,6 +899,12 @@ public:
             plan_raw.peer_channel_count[peer] = static_cast<const int*>(
                 nccl_context->get_sym_ptr(local_channel_count, peer));
         }
+        std::optional<RailBalanceHopPlanState> hop;
+        if (hop_aware)
+            hop.emplace(make_rail_balance_hop_plan_state(
+                topk_idx, arena_layout, num_rails,
+                num_max_tokens_per_rank, num_topk,
+                num_destinations, num_channels));
 
         auto host_workspace_layout = layout::WorkspaceLayout(
             host_workspace, num_destinations, num_rails, num_experts);
@@ -1054,14 +1069,25 @@ public:
                 .combine_epilogue = std::move(combine_epilogue),
                 .dispatch_bundle = std::move(dispatch_bundle),
                 .outputs = std::move(outputs),
-                .hop = std::nullopt,
+                .hop = std::move(hop),
             });
         auto& pending = rail_balance_hybrid_plan_pending.value();
-        launch_prepared_rail_balance_hybrid_count(
-            pending.prepared, pending.dispatch_bundle->raw.topk_idx,
-            pending.raw.local_channel_count, pending.raw.status,
-            1, num_tokens, num_topk, num_channels,
-            num_experts, num_destinations, scaleout_rank_idx, comm_stream);
+        if (hop_aware) {
+            launch_prepared_rail_balance_hop_record(
+                pending.hop->prepared,
+                pending.dispatch_bundle->raw.topk_idx,
+                pending.hop->local_records, pending.raw.status,
+                num_tokens, num_max_tokens_per_rank, num_topk, num_channels,
+                num_experts, num_destinations, num_rails,
+                scaleout_rank_idx, comm_stream);
+        } else {
+            launch_prepared_rail_balance_hybrid_count(
+                pending.prepared, pending.dispatch_bundle->raw.topk_idx,
+                pending.raw.local_channel_count, pending.raw.status,
+                1, num_tokens, num_topk, num_channels,
+                num_experts, num_destinations,
+                scaleout_rank_idx, comm_stream);
+        }
 
         int host_status = 0;
         CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
@@ -1266,21 +1292,45 @@ public:
             bundle.proxy_capacity_per_egress;
         const int num_tokens = bundle.num_tokens;
         const int64_t timeout_cycles = num_gpu_timeout_cycles;
+        const bool hop_aware = pending.hop.has_value();
+        const rail_balance::HopCopyRecord* hop_records = nullptr;
+        const rail_balance::HopCopyResolution* hop_resolutions = nullptr;
+        if (hop_aware) {
+            hop_records = reinterpret_cast<const rail_balance::HopCopyRecord*>(
+                pending.hop->records.data_ptr<int64_t>());
+            hop_resolutions = reinterpret_cast<
+                const rail_balance::HopCopyResolution*>(
+                    pending.hop->resolutions.data_ptr<int>());
+        }
 
         pending.state = RailBalanceHybridPlanState::Invalid;
-        submit_prepared_rail_balance_hybrid_source_shuffle(
-            prepared_source,
-            nccl_dev_comm, nccl_window,
-            raw.x, raw.topk_idx, raw.topk_weights,
-            raw.arena,
-            raw.owner_channel_prefix, raw.keep_count,
-            raw.segments, raw.num_segments,
-            raw.retained, raw.moved_channel_prefix,
-            raw.group_prefix, raw.proxy_required, raw.status,
-            num_experts, num_destinations, scaleout_rank_idx,
-            num_rails, scaleup_rank_idx,
-            num_max_tokens_per_rank, rank_idx,
-            proxy_capacity_per_egress, comm_stream);
+        if (hop_aware) {
+            submit_prepared_rail_balance_hop_source_shuffle(
+                prepared_source,
+                nccl_dev_comm, nccl_window,
+                raw.x, raw.topk_idx, raw.topk_weights,
+                raw.arena, hop_records, hop_resolutions,
+                raw.retained, raw.group_prefix,
+                raw.proxy_required, raw.status,
+                num_experts, num_destinations, scaleout_rank_idx,
+                num_rails, scaleup_rank_idx,
+                num_max_tokens_per_rank, rank_idx,
+                proxy_capacity_per_egress, comm_stream);
+        } else {
+            submit_prepared_rail_balance_hybrid_source_shuffle(
+                prepared_source,
+                nccl_dev_comm, nccl_window,
+                raw.x, raw.topk_idx, raw.topk_weights,
+                raw.arena,
+                raw.owner_channel_prefix, raw.keep_count,
+                raw.segments, raw.num_segments,
+                raw.retained, raw.moved_channel_prefix,
+                raw.group_prefix, raw.proxy_required, raw.status,
+                num_experts, num_destinations, scaleout_rank_idx,
+                num_rails, scaleup_rank_idx,
+                num_max_tokens_per_rank, rank_idx,
+                proxy_capacity_per_egress, comm_stream);
+        }
         submit_prepared_rail_balance_hybrid_local_barrier(
             prepared_local_barrier, local_barrier_launch_args,
             nccl_dev_comm, nccl_window, raw.workspace,
@@ -5477,7 +5527,8 @@ static void register_apis(pybind11::module_& m) {
             pybind11::arg("remainder_seed") = pybind11::int_(0),
             pybind11::arg("policy") =
                 static_cast<int>(rail_balance::HybridPolicy::All),
-            pybind11::arg("threshold_percent") = 0)
+            pybind11::arg("threshold_percent") = 0,
+            pybind11::arg("hop_aware") = false)
         .def(
             "_rail_balance_hybrid_plan_prepare",
             &ElasticBuffer::rail_balance_hybrid_plan_prepare,

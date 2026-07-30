@@ -2148,3 +2148,16 @@ explain a result later, but cannot replace this profiler-free A/B truth.
 
 No kernel optimization or speedup claim was made in O086.  Real numbers remain
 blocked on C080-H/C110 hardware.
+
+## Scope decision O087 — production wiring is not a tuning result
+
+Endpoint one-hop now reaches the production-shaped prepare/finish/commit
+transaction, but this checkpoint changes selection and ownership only.  The
+persistent Hybrid dispatch kernel, warp split, TMA tile, QP count, and receiver
+forwarder are unchanged.  Eight-GPU LSA correctness was rerun while unrelated
+`mmunlearner` processes occupied the GPUs, so no timing sample was retained.
+
+The next accepted optimization experiment starts only after a full hop-aware
+dispatch/combine vnode round trip.  It will compare profiler-free native
+`off`, `legacy_exact`, and `one_hop` first; Nsys/NCU will then target exposed
+source-shuffle or receiver-forward time rather than this control-plane wiring.

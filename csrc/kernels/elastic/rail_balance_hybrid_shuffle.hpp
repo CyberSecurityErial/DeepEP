@@ -305,7 +305,7 @@ static void launch_prepared_rail_balance_hybrid_source_shuffle(
         rank_idx, proxy_capacity, stream);
 }
 
-static void launch_prepared_rail_balance_hop_source_shuffle(
+static void submit_prepared_rail_balance_hop_source_shuffle(
     const PreparedRailBalanceHybridSourceShuffle& prepared,
     const jit::NoRefPtr& nccl_dev_comm,
     const ncclWindow_t& nccl_window,
@@ -328,7 +328,6 @@ static void launch_prepared_rail_balance_hop_source_shuffle(
     const int& rank_idx,
     const int& proxy_capacity,
     const at::cuda::CUDAStream& stream) {
-    EP_HOST_ASSERT(prepared.spec.hop_aware);
     RailBalanceHopSourceShuffleRuntime::launch(
         prepared.runtime,
         RailBalanceHopSourceShuffleRuntime::Args{
@@ -365,6 +364,39 @@ static void launch_prepared_rail_balance_hop_source_shuffle(
             .launch_args = prepared.launch_args,
         },
         stream);
+}
+
+static void launch_prepared_rail_balance_hop_source_shuffle(
+    const PreparedRailBalanceHybridSourceShuffle& prepared,
+    const jit::NoRefPtr& nccl_dev_comm,
+    const ncclWindow_t& nccl_window,
+    const void* x,
+    const topk_idx_t* topk_idx,
+    const float* topk_weights,
+    void* arena,
+    const rail_balance::HopCopyRecord* records,
+    const rail_balance::HopCopyResolution* resolutions,
+    const int* retained,
+    const int* group_prefix,
+    const int* proxy_required,
+    int* status,
+    const int& num_experts,
+    const int& num_destinations,
+    const int& local_destination,
+    const int& num_rails,
+    const int& owner,
+    const int& num_max_tokens_per_rank,
+    const int& rank_idx,
+    const int& proxy_capacity,
+    const at::cuda::CUDAStream& stream) {
+    EP_HOST_ASSERT(prepared.spec.hop_aware);
+    submit_prepared_rail_balance_hop_source_shuffle(
+        prepared, nccl_dev_comm, nccl_window,
+        x, topk_idx, topk_weights, arena, records, resolutions,
+        retained, group_prefix, proxy_required, status,
+        num_experts, num_destinations, local_destination,
+        num_rails, owner, num_max_tokens_per_rank,
+        rank_idx, proxy_capacity, stream);
 }
 
 }  // namespace deep_ep::elastic
