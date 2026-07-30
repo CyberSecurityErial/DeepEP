@@ -120,6 +120,7 @@ public:
         int* status;
         int num_owners;
         int num_tokens;
+        int record_token_capacity;
         int num_topk;
         int num_channels;
         int num_experts;
@@ -148,7 +149,8 @@ static void __instantiate_kernel() {
         EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(
             kernel, config,
             args.topk_idx, args.records, args.status,
-            args.num_owners, args.num_tokens, args.num_topk,
+            args.num_owners, args.num_tokens, args.record_token_capacity,
+            args.num_topk,
             args.num_channels, args.num_experts, args.num_destinations,
             args.num_rails, args.local_destination));
     }
@@ -209,6 +211,152 @@ static void __instantiate_kernel() {
             args.proxy_capacity_per_egress, args.planner_seed));
     }
 };
+
+struct PreparedRailBalanceHopPlan {
+    std::shared_ptr<jit::KernelRuntime> record;
+    std::shared_ptr<jit::KernelRuntime> plan;
+    jit::LaunchArgs record_launch_args;
+    jit::LaunchArgs plan_launch_args;
+};
+
+static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
+    const int& num_channels) {
+    EP_HOST_ASSERT(num_channels >= 1 and
+                   num_channels <= rail_balance::kNumHybridMaxChannels);
+    const RailBalanceHopRecordRuntime::Args record_args = {
+        .topk_idx = nullptr,
+        .records = nullptr,
+        .status = nullptr,
+        .num_owners = 0,
+        .num_tokens = 0,
+        .record_token_capacity = 0,
+        .num_topk = 0,
+        .num_channels = 0,
+        .num_experts = 0,
+        .num_destinations = 0,
+        .num_rails = 0,
+        .local_destination = 0,
+        .launch_args = jit::LaunchArgs(num_channels, 32),
+    };
+    const RailBalanceHopPlanRuntime::Args plan_args = {
+        .records = nullptr,
+        .resolutions = nullptr,
+        .pair_load = nullptr,
+        .source_load = nullptr,
+        .owner_remaining = nullptr,
+        .retained = nullptr,
+        .moved = nullptr,
+        .group_prefix = nullptr,
+        .proxy_required = nullptr,
+        .path_units = nullptr,
+        .moved_copies = nullptr,
+        .status = nullptr,
+        .num_rails = 0,
+        .num_tokens = 0,
+        .num_topk = 0,
+        .num_channels = 0,
+        .num_destinations = 0,
+        .num_max_tokens_per_rank = 0,
+        .proxy_capacity_per_egress = 0,
+        .planner_seed = 0,
+        .launch_args = jit::LaunchArgs(1, 32),
+    };
+    return {
+        .record = jit::compiler->build(
+            "rail_balance_hop_record_v1",
+            RailBalanceHopRecordRuntime::generate(record_args)),
+        .plan = jit::compiler->build(
+            "rail_balance_hop_one_hop_plan_v1",
+            RailBalanceHopPlanRuntime::generate(plan_args)),
+        .record_launch_args = record_args.launch_args,
+        .plan_launch_args = plan_args.launch_args,
+    };
+}
+
+static void launch_prepared_rail_balance_hop_record(
+    const PreparedRailBalanceHopPlan& prepared,
+    const topk_idx_t* topk_idx,
+    rail_balance::HopCopyRecord* records,
+    int* status,
+    const int& num_tokens,
+    const int& record_token_capacity,
+    const int& num_topk,
+    const int& num_channels,
+    const int& num_experts,
+    const int& num_destinations,
+    const int& num_rails,
+    const int& local_destination,
+    const at::cuda::CUDAStream& stream) {
+    RailBalanceHopRecordRuntime::launch(
+        prepared.record,
+        RailBalanceHopRecordRuntime::Args{
+            .topk_idx = topk_idx,
+            .records = records,
+            .status = status,
+            .num_owners = 1,
+            .num_tokens = num_tokens,
+            .record_token_capacity = record_token_capacity,
+            .num_topk = num_topk,
+            .num_channels = num_channels,
+            .num_experts = num_experts,
+            .num_destinations = num_destinations,
+            .num_rails = num_rails,
+            .local_destination = local_destination,
+            .launch_args = prepared.record_launch_args,
+        },
+        stream);
+}
+
+static void launch_prepared_rail_balance_hop_one_hop_plan(
+    const PreparedRailBalanceHopPlan& prepared,
+    const rail_balance::HopCopyRecord* records,
+    rail_balance::HopCopyResolution* resolutions,
+    int* pair_load,
+    int* source_load,
+    int* owner_remaining,
+    int* retained,
+    int* moved,
+    int* group_prefix,
+    int* proxy_required,
+    int* path_units,
+    int* moved_copies,
+    int* status,
+    const int& num_rails,
+    const int& record_token_capacity,
+    const int& num_topk,
+    const int& num_channels,
+    const int& num_destinations,
+    const int& num_max_tokens_per_rank,
+    const int& proxy_capacity_per_egress,
+    const int& planner_seed,
+    const at::cuda::CUDAStream& stream) {
+    RailBalanceHopPlanRuntime::launch(
+        prepared.plan,
+        RailBalanceHopPlanRuntime::Args{
+            .records = records,
+            .resolutions = resolutions,
+            .pair_load = pair_load,
+            .source_load = source_load,
+            .owner_remaining = owner_remaining,
+            .retained = retained,
+            .moved = moved,
+            .group_prefix = group_prefix,
+            .proxy_required = proxy_required,
+            .path_units = path_units,
+            .moved_copies = moved_copies,
+            .status = status,
+            .num_rails = num_rails,
+            .num_tokens = record_token_capacity,
+            .num_topk = num_topk,
+            .num_channels = num_channels,
+            .num_destinations = num_destinations,
+            .num_max_tokens_per_rank = num_max_tokens_per_rank,
+            .proxy_capacity_per_egress = proxy_capacity_per_egress,
+            .planner_seed = planner_seed,
+            .launch_args = prepared.plan_launch_args,
+        },
+        stream);
+}
 
 class RailBalanceHybridPlanRuntime final:
     public jit::LaunchRuntime<RailBalanceHybridPlanRuntime> {
@@ -912,6 +1060,19 @@ static RailBalanceHybridPlanOutputs allocate_rail_balance_hybrid_plan_outputs(
     };
 }
 
+struct RailBalanceHopPlanState {
+    torch::Tensor records;
+    torch::Tensor resolutions;
+    torch::Tensor pair_load;
+    torch::Tensor source_load;
+    torch::Tensor owner_remaining;
+    torch::Tensor path_units;
+    rail_balance::HopCopyRecord* local_records;
+    std::array<const rail_balance::HopCopyRecord*, 32> peer_records;
+    size_t record_bytes;
+    PreparedRailBalanceHopPlan prepared;
+};
+
 enum class RailBalanceHybridPlanState : uint8_t {
     Preparing,
     PlanReady,
@@ -1118,6 +1279,7 @@ struct RailBalanceHybridPlanPending {
         combine_epilogue;
     std::shared_ptr<RailBalanceHybridDispatchBundle> dispatch_bundle;
     RailBalanceHybridPlanOutputs outputs;
+    std::optional<RailBalanceHopPlanState> hop;
 };
 
 static PreparedRailBalanceHybridPlan prepare_rail_balance_hybrid_plan(
@@ -1392,6 +1554,7 @@ static RailBalanceHopRecordTensors build_rail_balance_hop_records(
             .status = status.data_ptr<int>(),
             .num_owners = num_rails,
             .num_tokens = num_tokens,
+            .record_token_capacity = num_tokens,
             .num_topk = num_topk,
             .num_channels = num_channels,
             .num_experts = num_experts,

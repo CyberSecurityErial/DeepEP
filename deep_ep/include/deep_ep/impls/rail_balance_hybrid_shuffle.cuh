@@ -12,7 +12,7 @@ namespace deep_ep::elastic {
 // One warp owns one source channel. Destinations are lane-owned, so the
 // channel-local ordinal consumed by the compact resolver needs no atomic or
 // per-copy manifest. Only moved copies are staged into peer proxy arenas.
-template <int kHidden, int kNumTopk>
+template <int kHidden, int kNumTopk, bool kHopAware = false>
 __global__ __launch_bounds__(32, 1)
 void rail_balance_hybrid_source_shuffle_impl(
         const ncclDevComm_t nccl_dev_comm,
@@ -29,6 +29,8 @@ void rail_balance_hybrid_source_shuffle_impl(
         const int* moved_channel_prefix,
         const int* group_prefix,
         const int* proxy_required,
+        const rail_balance::HopCopyRecord* hop_records,
+        const rail_balance::HopCopyResolution* hop_resolutions,
         int* status,
         const int num_tokens,
         const int num_experts,
@@ -38,6 +40,7 @@ void rail_balance_hybrid_source_shuffle_impl(
         const int owner,
         const int num_channels,
         const int num_max_tokens_per_rank,
+        const int hop_record_token_capacity,
         const int rank_idx,
         const int proxy_capacity) {
     static_assert(kHidden > 0 and kHidden % 256 == 0);
@@ -47,11 +50,15 @@ void rail_balance_hybrid_source_shuffle_impl(
     if (source_channel >= num_channels or threadIdx.x >= 32 or
         (num_tokens > 0 and
          (x == nullptr or topk_idx == nullptr or topk_weights == nullptr)) or
-        arena == nullptr or owner_channel_prefix == nullptr or
-        keep_count == nullptr or segments == nullptr or
-        num_segments == nullptr or retained == nullptr or
-        moved_channel_prefix == nullptr or group_prefix == nullptr or
+        arena == nullptr or retained == nullptr or group_prefix == nullptr or
         proxy_required == nullptr or status == nullptr or
+        (kHopAware and
+         (hop_records == nullptr or hop_resolutions == nullptr or
+          hop_record_token_capacity < num_tokens)) or
+        (not kHopAware and
+         (owner_channel_prefix == nullptr or keep_count == nullptr or
+          segments == nullptr or num_segments == nullptr or
+          moved_channel_prefix == nullptr)) or
         num_tokens < 0 or num_experts < 1 or
         num_destinations < 2 or num_destinations > 32 or
         local_destination < 0 or local_destination >= num_destinations or
@@ -60,6 +67,7 @@ void rail_balance_hybrid_source_shuffle_impl(
         num_channels < 1 or
         num_channels > rail_balance::kNumHybridMaxChannels or
         num_max_tokens_per_rank < 1 or num_tokens > num_max_tokens_per_rank or
+        (kHopAware and num_experts % (num_destinations * num_rails) != 0) or
         rank_idx < 0 or proxy_capacity < 1 or
         num_experts % num_destinations != 0) {
         return;
@@ -150,6 +158,13 @@ void rail_balance_hybrid_source_shuffle_impl(
 
         const int destination = active ?
             static_cast<int>(expert) / experts_per_destination : -1;
+        int target = -1;
+        if constexpr (kHopAware) {
+            if (active) {
+                target = (static_cast<int>(expert) % experts_per_destination) /
+                    (experts_per_destination / num_rails);
+            }
+        }
         const unsigned destination_bit =
             destination >= 0 and destination != local_destination ?
                 (1u << destination) : 0u;
@@ -159,21 +174,74 @@ void rail_balance_hybrid_source_shuffle_impl(
         const int local_ordinal = destination_ordinal;
         destination_ordinal += present;
 
+        uint32_t hop_target_mask = 0;
+        if constexpr (kHopAware) {
+            #pragma unroll
+            for (int source_lane = 0;
+                 source_lane < kNumTopk; ++source_lane) {
+                // Full-mask shuffles must execute on every warp lane. Only
+                // the destination lanes consume the exchanged endpoints.
+                const int other_destination =
+                    ptx::exchange(destination, source_lane);
+                const int other_target = ptx::exchange(target, source_lane);
+                if (lane < num_destinations and
+                        other_destination == lane) {
+                    hop_target_mask |= uint32_t{1} << other_target;
+                }
+            }
+        }
+
         rail_balance::HybridCopyResolution resolution = {};
         bool resolved = true;
         bool schedule_valid = true;
         if (present) {
-            const int destination_num_segments = __ldg(num_segments + lane);
-            schedule_valid = destination_num_segments >= 0 and
-                destination_num_segments <= num_rails - 1;
+            if constexpr (kHopAware) {
+                const int record_slot = __popc(
+                    destination_mask & ((uint32_t{1} << lane) - 1));
+                const int64_t record_index =
+                    (static_cast<int64_t>(owner) *
+                         hop_record_token_capacity + token) * kNumTopk +
+                    record_slot;
+                const int2 record_words = __ldg(
+                    reinterpret_cast<const int2*>(hop_records) + record_index);
+                const int4 resolution_words = __ldg(
+                    reinterpret_cast<const int4*>(hop_resolutions) +
+                    record_index);
+                const rail_balance::HopCopyRecord record = {
+                    static_cast<uint32_t>(record_words.x), record_words.y};
+                const rail_balance::HopCopyResolution planned = {
+                    resolution_words.x, resolution_words.y,
+                    resolution_words.z, resolution_words.w};
+                schedule_valid = record_slot < kNumTopk and
+                    record.destination == lane and
+                    record.target_mask == hop_target_mask;
+                if (schedule_valid) {
+                    resolution = {
+                        planned.egress != owner,
+                        planned.egress,
+                        planned.channel,
+                        planned.remote_slot,
+                        planned.proxy_slot,
+                        -1,
+                    };
+                }
+            } else {
+                const int destination_num_segments =
+                    __ldg(num_segments + lane);
+                schedule_valid = destination_num_segments >= 0 and
+                    destination_num_segments <= num_rails - 1;
+                if (schedule_valid) {
+                    resolved = rail_balance::resolve_hybrid_copy(
+                        owner_channel_prefix, keep_count, segments,
+                        num_segments, retained, moved_channel_prefix,
+                        group_prefix, num_rails, num_channels,
+                        num_destinations, owner, source_channel, lane,
+                        local_ordinal, &resolution);
+                    schedule_valid = resolved;
+                }
+            }
             if (schedule_valid) {
-                resolved = rail_balance::resolve_hybrid_copy(
-                    owner_channel_prefix, keep_count, segments,
-                    num_segments, retained, moved_channel_prefix,
-                    group_prefix, num_rails, num_channels,
-                    num_destinations, owner, source_channel, lane,
-                    local_ordinal, &resolution);
-                schedule_valid = resolved and
+                schedule_valid =
                     (resolution.moved == 0 or resolution.moved == 1) and
                     resolution.channel >= 0 and
                     resolution.channel < num_channels and
@@ -181,7 +249,8 @@ void rail_balance_hybrid_source_shuffle_impl(
                     resolution.remote_slot < channel_capacity;
                 if (schedule_valid and resolution.moved == 0) {
                     schedule_valid = resolution.egress == owner and
-                        resolution.channel == source_channel and
+                        (kHopAware or
+                         resolution.channel == source_channel) and
                         resolution.proxy_slot == -1;
                 }
                 if (schedule_valid and resolution.moved == 1) {
@@ -236,9 +305,11 @@ void rail_balance_hybrid_source_shuffle_impl(
             const int destination = source_lane;
             const int remote_slot =
                 ptx::exchange(resolution.remote_slot, source_lane);
+            const int target_channel =
+                ptx::exchange(resolution.channel, source_lane);
             int retained_prefix = 0;
-            for (int channel = 0; channel <= source_channel; ++channel) {
-                const int destination_end = channel < source_channel ?
+            for (int channel = 0; channel <= target_channel; ++channel) {
+                const int destination_end = channel < target_channel ?
                     num_destinations : destination;
                 for (int previous_destination = 0;
                      previous_destination < destination_end;

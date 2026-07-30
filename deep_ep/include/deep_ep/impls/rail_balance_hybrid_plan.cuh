@@ -86,14 +86,17 @@ void rail_balance_hop_record_impl(
         int* status,
         const int num_owners,
         const int num_tokens,
+        const int record_token_capacity,
         const int num_topk,
         const int num_channels,
         const int num_experts,
         const int num_destinations,
         const int num_rails,
         const int local_destination) {
-    if (topk_idx == nullptr or records == nullptr or status == nullptr or
+    if ((num_tokens > 0 and topk_idx == nullptr) or
+        records == nullptr or status == nullptr or
         num_owners < 1 or num_owners > 32 or num_tokens < 0 or
+        record_token_capacity < num_tokens or
         num_topk < 1 or num_topk > 32 or num_channels < 1 or
         num_channels > kNumHybridMaxChannels or num_experts < 1 or
         num_destinations < 2 or num_destinations > 32 or
@@ -115,11 +118,19 @@ void rail_balance_hop_record_impl(
     const int lane = ptx::get_lane_idx();
     const int experts_per_destination = num_experts / num_destinations;
     const int experts_per_rank = experts_per_destination / num_rails;
-    for (int token = channel; token < num_tokens; token += num_channels) {
+    for (int token = channel;
+         token < record_token_capacity;
+         token += num_channels) {
+        const auto record_offset =
+            (static_cast<int64_t>(owner) * record_token_capacity + token) *
+            num_topk;
+        if (lane < num_topk)
+            records[record_offset + lane] = {0u, -1};
+        if (token >= num_tokens)
+            continue;
+
         const auto token_offset =
             (static_cast<int64_t>(owner) * num_tokens + token) * num_topk;
-        if (lane < num_topk)
-            records[token_offset + lane] = {0u, -1};
 
         const bool active = lane < num_topk;
         const topk_idx_t expert = active ?
@@ -165,7 +176,7 @@ void rail_balance_hop_record_impl(
         const unsigned present_mask = ptx::gather(present);
         if (present) {
             const int slot = __popc(present_mask & ((1u << lane) - 1u));
-            records[token_offset + slot] = {target_mask, lane};
+            records[record_offset + slot] = {target_mask, lane};
         }
         __syncwarp();
     }

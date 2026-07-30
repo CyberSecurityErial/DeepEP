@@ -6328,3 +6328,50 @@ no `python` command, so the pinned interpreter remains
 `/home/chen/.cache/deepep-sjlgpt/bin/python`.  That environment also has no
 `pytest`; the zero-fixture test functions were enumerated and run directly
 without installing packages or changing the machine.
+
+### Endpoint one-hop source-shuffle checkpoint
+
+The private two-gate `ElasticBuffer` transaction can now select the hop-aware
+planner without adding a second arena.  Each rank writes a fixed
+`[max_tokens, topk]` endpoint table into the dispatch staging span while that
+span is idle.  After the existing LSA barrier, every rank snapshots its peers'
+tables, builds one deterministic one-hop plan, and reuses the same span for
+the committed proxy payloads.
+
+The legacy and hop-aware JIT instances share one source-shuffle body.  Only
+schedule resolution differs: legacy resolves compact segments, while hop-aware
+loads `(egress, channel, remote_slot, proxy_slot)` from the endpoint plan.
+TMA staging, peer final-slot writes, ready publication, retained staging, and
+the grouped Rail consumer remain one implementation.
+
+Failures retained during this checkpoint:
+
+- The first host build placed `record_token_capacity` in the adjacent legacy
+  count argument struct and attempted to default-construct a prepared plan
+  containing non-default `LaunchArgs`.  The field was moved and legacy plan
+  ownership became an optional present only in legacy mode.
+- The first 8-GPU run rejected empty ranks because an empty CUDA tensor may
+  have a null data pointer.  Endpoint materialization now requires `topk_idx`
+  only when `num_tokens > 0`; fixed-capacity padding needs no input read.
+- The next run returned `InvalidSchedule` on owner zero.  Temporary failure
+  logging showed record mask `30` but a recomputed mask of `4`.  The cause was
+  a full-mask shuffle inside the destination-lane branch, the same CUDA warp
+  participation error previously found in endpoint materialization.  All
+  endpoint exchanges now execute before the branch; temporary prints were
+  removed.
+
+Accepted evidence:
+
+- full extension build passes;
+- endpoint-record CUDA tests 5/5 and one-hop planner CUDA tests 5/5 pass;
+- legacy `balanced_zero_move` source-shuffle passes on eight GPUs after the
+  shared-kernel refactor;
+- hop-aware owner-zero hotspot passes on eight GPUs with true LSA writes;
+- the hop plan contains both retained and six moved source-forward copies;
+- every active static proxy slot matches hidden BF16 bytes, full top-k ids,
+  weights, source token id, and proxy ticket exactly;
+- inactive proxy bytes remain identical to their pre-shuffle snapshot.
+
+This proves source-side endpoint selection and direct-to-final proxy staging.
+It does not yet prove real GIN/RDMA, destination direct-delivery bypass, the
+full persistent dispatch/combine round trip, or performance.

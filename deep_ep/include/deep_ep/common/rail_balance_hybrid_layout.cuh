@@ -224,6 +224,20 @@ struct HybridArenaLayout {
             proxy_slot;
     }
 
+    // Before Gate #2 the three dispatch staging regions are idle and form one
+    // contiguous scratch span. Hop-aware planning stores this rank's fixed
+    // endpoint table there; committed dispatch then overwrites the span with
+    // payloads. No new persistent arena is required.
+    __forceinline__ __device__ __host__ HopCopyRecord*
+    get_hop_plan_record_ptr() const {
+        return math::advance_ptr<HopCopyRecord>(base, proxy_dispatch_offset);
+    }
+
+    __forceinline__ __device__ __host__ int64_t
+    get_hop_plan_record_capacity_bytes() const {
+        return proxy_return_offset - proxy_dispatch_offset;
+    }
+
     __forceinline__ __device__ __host__ layout::TokenLayout
     get_proxy_dispatch_layout(const int proxy_slot) const {
         EP_UNIFIED_ASSERT(proxy_slot >= 0 and proxy_slot < proxy_capacity);

@@ -19,6 +19,7 @@ struct RailBalanceHybridSourceShuffleSpec {
     int num_topk;
     int num_channels;
     int num_tokens;
+    bool hop_aware;
 };
 
 // Everything which depends on the immutable token/channel geometry is frozen
@@ -50,6 +51,8 @@ public:
         const int* moved_channel_prefix;
         const int* group_prefix;
         const int* proxy_required;
+        const rail_balance::HopCopyRecord* hop_records;
+        const rail_balance::HopCopyResolution* hop_resolutions;
         int* status;
         int num_tokens;
         int num_experts;
@@ -59,6 +62,7 @@ public:
         int owner;
         int num_channels;
         int num_max_tokens_per_rank;
+        int hop_record_token_capacity;
         int rank_idx;
         int proxy_capacity;
         jit::LaunchArgs launch_args;
@@ -73,7 +77,7 @@ using namespace deep_ep::elastic;
 
 static void __instantiate_kernel() {{
     auto ptr = reinterpret_cast<void*>(
-        &rail_balance_hybrid_source_shuffle_impl<{}, {}>);
+        &rail_balance_hybrid_source_shuffle_impl<{}, {}, false>);
 }}
 )", spec.hidden, spec.num_topk);
     }
@@ -88,12 +92,53 @@ static void __instantiate_kernel() {{
             args.arena, args.owner_channel_prefix,
             args.keep_count, args.segments, args.num_segments,
             args.retained, args.moved_channel_prefix,
-            args.group_prefix, args.proxy_required, args.status,
+            args.group_prefix, args.proxy_required,
+            args.hop_records, args.hop_resolutions, args.status,
             args.num_tokens, args.num_experts,
             args.num_destinations, args.local_destination,
             args.num_rails, args.owner, args.num_channels,
-            args.num_max_tokens_per_rank, args.rank_idx,
+            args.num_max_tokens_per_rank, args.hop_record_token_capacity,
+            args.rank_idx,
             args.proxy_capacity));
+    }
+};
+
+class RailBalanceHopSourceShuffleRuntime final:
+    public jit::LaunchRuntime<RailBalanceHopSourceShuffleRuntime> {
+public:
+    using Args = RailBalanceHybridSourceShuffleRuntime::Args;
+
+    template <typename Spec>
+    static std::string generate_impl(const Spec& spec) {
+        return fmt::format(R"(
+#include <deep_ep/impls/rail_balance_hybrid_shuffle.cuh>
+
+using namespace deep_ep::elastic;
+
+static void __instantiate_kernel() {{
+    auto ptr = reinterpret_cast<void*>(
+        &rail_balance_hybrid_source_shuffle_impl<{}, {}, true>);
+}}
+)", spec.hidden, spec.num_topk);
+    }
+
+    static void launch_impl(const jit::KernelHandle& kernel,
+                            const jit::LaunchConfigHandle& config,
+                            Args args) {
+        EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(
+            kernel, config,
+            args.nccl_dev_comm, args.nccl_window,
+            args.x, args.topk_idx, args.topk_weights,
+            args.arena, args.owner_channel_prefix,
+            args.keep_count, args.segments, args.num_segments,
+            args.retained, args.moved_channel_prefix,
+            args.group_prefix, args.proxy_required,
+            args.hop_records, args.hop_resolutions, args.status,
+            args.num_tokens, args.num_experts,
+            args.num_destinations, args.local_destination,
+            args.num_rails, args.owner, args.num_channels,
+            args.num_max_tokens_per_rank, args.hop_record_token_capacity,
+            args.rank_idx, args.proxy_capacity));
     }
 };
 
@@ -102,7 +147,8 @@ prepare_rail_balance_hybrid_source_shuffle(
     const int& hidden,
     const int& num_topk,
     const int& num_channels,
-    const int& num_tokens) {
+    const int& num_tokens,
+    const bool& hop_aware = false) {
     EP_HOST_ASSERT(hidden > 0 and hidden % 256 == 0 and
                    hidden <= INT_MAX /
                        static_cast<int>(sizeof(__nv_bfloat16)));
@@ -115,6 +161,7 @@ prepare_rail_balance_hybrid_source_shuffle(
         .num_topk = num_topk,
         .num_channels = num_channels,
         .num_tokens = num_tokens,
+        .hop_aware = hop_aware,
     };
     const auto token_layout = layout::TokenLayout(
         hidden * sizeof(__nv_bfloat16), 0, num_topk, true);
@@ -132,8 +179,10 @@ prepare_rail_balance_hybrid_source_shuffle(
         (num_tokens < num_channels ? num_tokens : num_channels);
     return {
         .runtime = jit::compiler->build(
-            "rail_balance_hybrid_source_shuffle",
-            RailBalanceHybridSourceShuffleRuntime::generate(spec)),
+            hop_aware ? "rail_balance_hop_source_shuffle" :
+                        "rail_balance_hybrid_source_shuffle",
+            hop_aware ? RailBalanceHopSourceShuffleRuntime::generate(spec) :
+                        RailBalanceHybridSourceShuffleRuntime::generate(spec)),
         .spec = spec,
         .launch_args = jit::LaunchArgs(
             num_active_channels, 32, num_smem_bytes),
@@ -187,6 +236,8 @@ static void submit_prepared_rail_balance_hybrid_source_shuffle(
         .moved_channel_prefix = moved_channel_prefix,
         .group_prefix = group_prefix,
         .proxy_required = proxy_required,
+        .hop_records = nullptr,
+        .hop_resolutions = nullptr,
         .status = status,
         .num_tokens = prepared.spec.num_tokens,
         .num_experts = num_experts,
@@ -196,6 +247,7 @@ static void submit_prepared_rail_balance_hybrid_source_shuffle(
         .owner = owner,
         .num_channels = prepared.spec.num_channels,
         .num_max_tokens_per_rank = num_max_tokens_per_rank,
+        .hop_record_token_capacity = 0,
         .rank_idx = rank_idx,
         .proxy_capacity = proxy_capacity,
         .launch_args = prepared.launch_args,
@@ -234,6 +286,7 @@ static void launch_prepared_rail_balance_hybrid_source_shuffle(
     EP_HOST_ASSERT(prepared.spec.num_topk == num_topk);
     EP_HOST_ASSERT(prepared.spec.num_channels == num_channels);
     EP_HOST_ASSERT(prepared.spec.num_tokens == num_tokens);
+    EP_HOST_ASSERT(not prepared.spec.hop_aware);
     submit_prepared_rail_balance_hybrid_source_shuffle(
         prepared, nccl_dev_comm, nccl_window,
         x, topk_idx, topk_weights, arena,
@@ -250,6 +303,68 @@ static void launch_prepared_rail_balance_hybrid_source_shuffle(
         num_destinations, local_destination,
         num_rails, owner, num_max_tokens_per_rank,
         rank_idx, proxy_capacity, stream);
+}
+
+static void launch_prepared_rail_balance_hop_source_shuffle(
+    const PreparedRailBalanceHybridSourceShuffle& prepared,
+    const jit::NoRefPtr& nccl_dev_comm,
+    const ncclWindow_t& nccl_window,
+    const void* x,
+    const topk_idx_t* topk_idx,
+    const float* topk_weights,
+    void* arena,
+    const rail_balance::HopCopyRecord* records,
+    const rail_balance::HopCopyResolution* resolutions,
+    const int* retained,
+    const int* group_prefix,
+    const int* proxy_required,
+    int* status,
+    const int& num_experts,
+    const int& num_destinations,
+    const int& local_destination,
+    const int& num_rails,
+    const int& owner,
+    const int& num_max_tokens_per_rank,
+    const int& rank_idx,
+    const int& proxy_capacity,
+    const at::cuda::CUDAStream& stream) {
+    EP_HOST_ASSERT(prepared.spec.hop_aware);
+    RailBalanceHopSourceShuffleRuntime::launch(
+        prepared.runtime,
+        RailBalanceHopSourceShuffleRuntime::Args{
+            .hidden = prepared.spec.hidden,
+            .num_topk = prepared.spec.num_topk,
+            .nccl_dev_comm = nccl_dev_comm,
+            .nccl_window = nccl_window,
+            .x = x,
+            .topk_idx = topk_idx,
+            .topk_weights = topk_weights,
+            .arena = arena,
+            .owner_channel_prefix = nullptr,
+            .keep_count = nullptr,
+            .segments = nullptr,
+            .num_segments = nullptr,
+            .retained = retained,
+            .moved_channel_prefix = nullptr,
+            .group_prefix = group_prefix,
+            .proxy_required = proxy_required,
+            .hop_records = records,
+            .hop_resolutions = resolutions,
+            .status = status,
+            .num_tokens = prepared.spec.num_tokens,
+            .num_experts = num_experts,
+            .num_destinations = num_destinations,
+            .local_destination = local_destination,
+            .num_rails = num_rails,
+            .owner = owner,
+            .num_channels = prepared.spec.num_channels,
+            .num_max_tokens_per_rank = num_max_tokens_per_rank,
+            .hop_record_token_capacity = num_max_tokens_per_rank,
+            .rank_idx = rank_idx,
+            .proxy_capacity = proxy_capacity,
+            .launch_args = prepared.launch_args,
+        },
+        stream);
 }
 
 }  // namespace deep_ep::elastic
