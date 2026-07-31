@@ -252,3 +252,40 @@ The result marks `planner_only`, `single_node_diagnostic`, or
 `real_multinode`. Reference and vnode output are never network-speed claims.
 Endpoint-count traces use the JSON files under
 `tests/elastic/workloads/rail_balance/` with `--case trace --workload-json`.
+
+## 11. Keep planning off the exposed data path
+
+The current exact GPU oracle makes one ordered endpoint decision per payload.
+Nsight Systems shows that decision loop, not source shuffle, dominates the
+measured path.  The production split is therefore:
+
+```text
+low-frequency control plane (CPU/background)
+    threshold, hop penalty, chunk policy, measured cost update
+
+per-routing GPU data plane
+    top-k -> small endpoint histogram -> chunk quotas -> parallel slots
+```
+
+The CPU must not receive the per-token table: D2H, host planning, H2D and the
+required synchronization would replace one exposed cost with three.  A cached
+routing handle may reuse its completed plan.  For fresh routing, microbatch
+`n+1` may plan on a separate stream after its router output exists while
+microbatch `n` runs experts; the dispatch consuming `n+1` still has a true
+dependency on that plan.
+
+Reference measurements on the C100 rot1 endpoint matrix establish the first
+chunk bound before changing CUDA:
+
+| chunk | Python planner | pair peak | source peak |
+|------:|---------------:|----------:|------------:|
+| 1 | 608.358 ms | 1792 | 11193 |
+| 8 | 74.607 ms | 1792 | 11192 |
+| 32 | 17.038 ms | 1792 | 11168 |
+
+Across 128 small random matrices, chunk 8 changed the worst pair/source peak
+by 4.37%/3.46%; chunk 32 reached 12.66%/13.88%.  Consequently a large fixed
+chunk is not a safe default.  The GPU fast path will aggregate by endpoint
+group, use a conservative configurable minimum chunk, and enlarge it only for
+large groups under a bounded decision budget.  `chunk_size=1` remains the
+exact oracle and comparison path.

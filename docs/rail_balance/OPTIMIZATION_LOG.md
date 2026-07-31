@@ -2530,3 +2530,22 @@ Clean commit `6a6cb2c` closes O103 at 173.023 ms median / 173.222 ms p95 on
 rot1 C100 10+100. Population CV is 0.068% and eligibility passes. The source
 stage is 284.318 us median, so further serial-score tuning is explicitly
 stopped in favor of group/chunk planning.
+
+## O104 — measured chunk/group planner direction
+
+This checkpoint changes no CUDA. It tests whether endpoint decisions can be
+coarsened before replacing the serial exact loop. On the C100 rot1 endpoint
+matrix, Python `chunk_size=1/8/32` takes 608.358/74.607/17.038 ms. All three
+produce pair peak 1792; source peaks are 11193/11192/11168 and local-forward
+units stay 50176.
+
+A separate 128-seed small random sweep prevents accepting only the favorable
+large case. Relative to chunk 1, chunk 8 has worst pair/source peak changes of
+4.37%/3.46%; chunk 32 reaches 12.66%/13.88%. The accepted design therefore
+keeps exact chunk 1 as oracle, uses a conservative minimum chunk, and bounds
+decisions per large endpoint group instead of applying chunk 32 globally.
+
+Full CPU offload is rejected: every fresh route would require D2H, host work,
+H2D, and a synchronization before dispatch. CPU/background work is limited to
+low-frequency policy updates; per-route histograms, quotas, and slot
+materialization remain GPU-resident and may overlap the previous microbatch.

@@ -7003,6 +7003,20 @@ planner memcheck/initcheck/synccheck                  0 errors
 The edit adds no state or output. Capability remains false pending clean and
 real multi-node evidence.
 
+## 2026-07-31 — HA060-M: planner critical-path redesign checkpoint
+
+O103 closes local score tuning: the exact one-hop loop remains 173.023 ms on
+rot1 while source shuffle is 0.284 ms. A Python reference sweep confirms that
+endpoint-group chunking preserves the large C100 pair peak while reducing
+decision count, but also exposes the quality risk of a global large chunk on
+small random matrices.
+
+The next implementation keeps token/slot work on GPU, aggregates endpoint
+groups, computes bounded chunk quotas, and materializes records in parallel.
+CPU offload is restricted to low-frequency policy parameters. Exact
+`chunk_size=1`, off/legacy behavior, ticket lifetime, and capability gates are
+unchanged.
+
 ### Clean HA060-K closeout
 
 Commit `7b0466f` passes clean-tree 10+100 collection. One-hop `finish` is
