@@ -1220,3 +1220,7 @@ Out of scope until evidence expands the project:
   reduction improves the private microbenchmark only 5.8% and regresses C100
   finish 9.9%. The production edit was removed; low occupancy alone is not a
   reason to keep extra hot-path code.
+- HA060-G rejects a 4.125 KiB shared cache for pair/source counters. Targeted
+  NCU shows serialization and long-scoreboard stalls but already high L1/L2
+  hit rates; exact tests pass while median/p95 slightly regress. The production
+  edit was removed rather than adding duplicate state with no measured value.

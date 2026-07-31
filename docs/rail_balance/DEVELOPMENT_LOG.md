@@ -6855,3 +6855,18 @@ naive interpretation of NCU's low-occupancy advice: the state is sequential,
 the candidate set is only eight Rails, and warp reduction overhead worsens the
 actual transaction boundary. The NCU report and both raw JSON files remain
 under `.cache/rail_balance/hop-aware/ha060/`.
+
+## 2026-07-31 — HA060-G: reject shared pair/source state
+
+Targeted NCU sections (`SchedulerStats`, `WarpStateStats`,
+`InstructionStats`, `MemoryWorkloadAnalysis`, `SourceCounters`) completed in
+15 kernel-replay passes. They prove latency/serialization rather than memory
+bandwidth or divergent control: memory throughput is 39.32 MB/s, branch
+efficiency 99.76%, L1/L2 hit 85.88%/87.98%, and long scoreboard accounts for
+7.3 of 14.35 cycles between issued instructions.
+
+A 4.125 KiB shared cache for pair/source load state preserved all 11 exact GPU
+tests but changed the private median from 22.167 to 22.257 ms and worsened p95
+from 22.199 to 22.935 ms. The extra shared address operations and output
+double-writes cancel the latency reduction. The entire production edit was
+reverted; no C100 run was needed to reject a microbenchmark regression.

@@ -2376,3 +2376,19 @@ boundary regressed from 44.445 to 48.860 ms (9.9%). Twenty-five shuffle/reduce
 operations per record cost more than evaluating at most eight Rails serially.
 The production edit was fully reverted; only the reusable benchmark channel
 parameter and these negative results remain.
+
+## O098 — rejected shared load-state cache
+
+Targeted NCU on the same stable invocation reports 2.91M executed
+instructions, 93.03% scheduler cycles with no eligible warp, 14.35 cycles per
+issued instruction, and 7.3 cycles (51.08%) in long-scoreboard stalls. L1/TEX
+and L2 hit rates are already 85.88% and 87.98%; branch efficiency is 99.76%.
+The report hash is
+`fe619582250b25cf23f660aeb8e927a4001afdfd1b23f89ce44a32595b3ca1e4`.
+
+The tested edit cached the at-most 1,056 pair/source counters in 4.125 KiB of
+shared memory while continuing to update the original outputs. Exact tests
+passed 11/11, but the N=1024/C=256 private median changed from 22.167 to
+22.257 ms and p95 regressed from 22.199 to 22.935 ms. Existing cache locality
+is sufficient; shared addressing plus duplicate stores add more work than
+they hide. The production edit was fully reverted.
