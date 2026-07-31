@@ -1267,3 +1267,7 @@ Out of scope until evidence expands the project:
   173.004 ms (3.5%); exact 11/11, off-diagonal vnode, and focused sanitizer
   checks pass. This closes micro-optimization of the serial greedy prototype;
   the next planner step is group/chunk materialization off the hot path.
+- Clean `6a6cb2c` rot1 10+100 confirms 173.023 ms median / 173.222 ms p95
+  with 0.068% CV and a passing eligibility gate. O103 is accepted as a small
+  exact simplification; the serial planner is not accepted as a final hot-path
+  design.

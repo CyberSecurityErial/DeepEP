@@ -2525,3 +2525,8 @@ Exact, vnode, and focused sanitizer gates pass. The modest result is retained
 because the code is smaller and exact. It also closes this line of tuning: the
 remaining rot1 cost is sequential per-copy assignment and requires chunk/group
 planning, not another local score cache.
+
+Clean commit `6a6cb2c` closes O103 at 173.023 ms median / 173.222 ms p95 on
+rot1 C100 10+100. Population CV is 0.068% and eligibility passes. The source
+stage is 284.318 us median, so further serial-score tuning is explicitly
+stopped in favor of group/chunk planning.

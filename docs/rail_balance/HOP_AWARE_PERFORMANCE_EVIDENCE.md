@@ -533,3 +533,13 @@ da65b053744e5129dfb6a52fbd1eb60a20f846209119e6194be93996cd55ab0f  c100-rot1-oneh
 
 This is a 3.5% diagnostic improvement with exact/vnode/sanitizer evidence.
 Clean evidence remains pending; no claim scope changes.
+
+Clean commit `6a6cb2c` records rot1 one-hop `finish` at 173.023 ms median /
+173.222 ms p95 and source stage at 284.318 us median. The report passes
+eligibility and hashes to:
+
+```text
+6a43a1ab01623a469ad59bc26414b71e01f223db61d26c5854f860bd7a34bbfb  c100-rot1-onehop-initial-peaks-formal.json
+```
+
+This accepts O103 but falsifies the serial planner as a viable final hot path.

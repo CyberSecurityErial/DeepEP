@@ -7024,3 +7024,12 @@ focused memcheck/initcheck report zero errors. The edit is retained as a small
 exact simplification, not a solution to the serial planner. Following review,
 the next design target is a parallel count/group/chunk plan with low-frequency
 CPU policy updates rather than further per-copy greedy complexity.
+
+### Clean HA060-L closeout
+
+Commit `6a6cb2c` passes the rot1 clean-tree 10+100 distribution at 173.023 ms
+median / 173.222 ms p95 with 0.068% population CV. Source-stage median is
+284.318 us and baseline eligibility is true. O103 is accepted, but the result
+also makes the architectural boundary explicit: exact serial per-copy planning
+remains over 600x slower than the measured source stage and must leave the
+final critical path.
