@@ -1243,3 +1243,10 @@ Out of scope until evidence expands the project:
   The checked source stage remains separate at 666.255 us median; the report
   passes baseline eligibility. O100 is accepted for the experimental planner,
   while real multi-node capability remains closed.
+- HA060-J parallelizes only adaptive residual candidate discovery across the
+  existing warp; endpoint assignment, migration order, and final
+  materialization remain lane-0 deterministic. The C100 diagnostic finish is
+  59.515 ms versus the clean 308.736 ms predecessor (5.19x provisional), while
+  the one-hop microbenchmark is unchanged. GPU 11/11, both vnode round trips,
+  and focused memcheck/initcheck/synccheck pass. Clean committed-tree evidence
+  is still required.

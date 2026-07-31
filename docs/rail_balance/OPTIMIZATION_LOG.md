@@ -2455,3 +2455,27 @@ baseline collection eligible                                  true
 The source stage is reported but not attributed to this planner-only edit.
 Report SHA-256 is
 `68d3968621157d97d01fd6deca9d43f64d2fdea80a8591dea0f45faf839f7266`.
+
+## O101 — warp-parallel adaptive record discovery
+
+Post-O100 Nsys leaves one planner invocation at 237.244 ms and 99.6% of the
+selected rank-0 GPU time. The C100 cap case runs roughly eight residual
+iterations; each iteration searched all packed records on lane 0 and then
+searched them again to migrate a prefix.
+
+Only read-only candidate discovery is now distributed: each warp lane scans
+packed token rows, then one exact lexicographic reduction chooses the same
+global candidate. Lane 0 retains endpoint assignment, load mutation, batch
+migration, channel assignment, and output writes. No allocation, metadata,
+public API, score, cap, threshold, or tie rule changes.
+
+```text
+private adaptive median                 17.199 -> 11.791 ms
+C100 adaptive finish diagnostic        308.736 -> 59.515 ms
+diagnostic speedup                                  5.19x
+one-hop microbenchmark                           unchanged
+GPU/vnode/sanitizer gates                              PASS
+```
+
+This is preliminary dirty-tree evidence. A clean 10+100 run after the code
+checkpoint decides acceptance.

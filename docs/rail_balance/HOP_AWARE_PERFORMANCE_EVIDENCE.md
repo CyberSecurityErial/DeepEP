@@ -426,3 +426,32 @@ The result passes baseline eligibility and hashes to:
 
 This accepts the exact adaptive peak cache for the experimental planner. It
 does not establish real Gin/RDMA or multi-node Rail performance.
+
+### HA060-J adaptive record-parallel diagnostic
+
+The post-O100 report confirms the residual planner remains the target:
+
+```text
+selected rank-0 planner kernel       237.244 ms (99.6% of GPU kernel time)
+selected source-shuffle kernel         0.608 ms
+all-call planner maximum             308.796 ms
+```
+
+Artifacts hash to:
+
+```text
+46e4e468c725f403d8383dbd2d9ee636ca6aaaf67adeaeb85ad88281a508a0e0  c100-adaptive-peaks-nsys.nsys-rep
+aaa4c744433594fb0d72a37266b58839ac65d86ae16d4de7e09732445b9acb92  c100-adaptive-peaks-nsys.sqlite
+60020663c44cb0bc2baf5163b3be5d3225dad6344781898eb9cc52b1b49e3111  c100-adaptive-peaks-nsys.json
+```
+
+Warp-parallel packed-row discovery reduces the N1024/C256 adaptive private
+median from 17.199 to 11.791 ms. A C100 3+20 diagnostic reduces `finish` from
+308.736 to 59.515 ms; its JSON hash is:
+
+```text
+9d70c18e9143a796de4d1edbded98a525c58e4c5d8bc789c17a6012ce715052f  c100-adaptive-warp-records-diag.json
+```
+
+Correctness and sanitizer gates pass. These are diagnostic results pending a
+clean distribution and do not expand claim scope.

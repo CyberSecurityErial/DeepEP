@@ -6930,3 +6930,32 @@ versus 399.294 / 399.510 ms before O100. The 1.293x reduction confirms the
 peak-cache edit outside profiler runs. Source-stage median is 666.255 us and
 is not folded into the planner claim. Baseline eligibility is true; public
 capability remains false.
+
+## 2026-07-31 — HA060-J: parallel adaptive record discovery
+
+Post-O100 Nsys isolates one rank-0 steady planner invocation at 237.244 ms,
+99.6% of projected kernel time. Across the captured cold/steady calls the
+planner reaches 308.796 ms, consistent with the 308.736 ms profiler-free
+boundary. Source shuffle is only 0.608 ms in the selected range. The report
+and SQLite hashes are retained in the performance evidence index.
+
+The residual loop searches the complete endpoint-record table about eight
+times for the C100 fanout/cap case. A rejected earlier experiment assigned
+the eight Rail candidates of every record to a warp and paid a reduction per
+record. This experiment instead assigns packed token rows to lanes and performs
+one exact tuple reduction per residual iteration. Lane 0 still builds the
+one-hop plan and migrates the deterministic record prefix.
+
+```text
+private adaptive N1024/C256 median       17.199 -> 11.791 ms
+private one-hop median                              12.143 ms
+C100 adaptive finish diagnostic        308.736 -> 59.515 ms
+GPU exact planner                                      11/11 PASS
+one-hop/adaptive vnode round trips                         PASS
+planner memcheck/initcheck/synccheck                  0 errors
+```
+
+The first vnode command incorrectly supplied an unsupported `--master-port`
+and stopped in argparse before GPU execution. It is retained as a command-line
+failure, not a kernel failure; the corrected commands passed. Capability
+remains false, and the C100 speedup is provisional until a clean 10+100 run.

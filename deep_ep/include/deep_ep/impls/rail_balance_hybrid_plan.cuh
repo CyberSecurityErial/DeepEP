@@ -79,6 +79,36 @@ struct LoadPeaks {
     int first_count;
 };
 
+struct AdaptiveCandidate {
+    int64_t index;
+    int64_t net_gain;
+    int egress;
+    int pair_after;
+    int source_after;
+    int added_hops;
+    int tie;
+};
+
+__forceinline__ __device__ bool better_candidate(
+        const AdaptiveCandidate& candidate,
+        const AdaptiveCandidate& current) {
+    if (candidate.index < 0)
+        return false;
+    if (current.index < 0 or candidate.net_gain != current.net_gain)
+        return current.index < 0 or candidate.net_gain > current.net_gain;
+    if (candidate.pair_after != current.pair_after)
+        return candidate.pair_after < current.pair_after;
+    if (candidate.source_after != current.source_after)
+        return candidate.source_after < current.source_after;
+    if (candidate.added_hops != current.added_hops)
+        return candidate.added_hops < current.added_hops;
+    if (candidate.tie != current.tie)
+        return candidate.tie < current.tie;
+    if (candidate.egress != current.egress)
+        return candidate.egress < current.egress;
+    return candidate.index < current.index;
+}
+
 __forceinline__ __device__ LoadPeaks find_load_peaks(
         const int* loads, const int count) {
     LoadPeaks peaks = {-1, 0, 0};
@@ -330,14 +360,15 @@ void rail_balance_hop_plan_impl(
         ++lane_units;
     }
     const int total_units = ptx::reduce_add(lane_units);
-    if (*status != static_cast<int>(HybridPlanError::Success) or lane != 0)
+    if (*status != static_cast<int>(HybridPlanError::Success))
         return;
 
-    for (int64_t index = 0; index < num_records; ++index) {
+    if (lane == 0) {
+      for (int64_t index = 0; index < num_records; ++index) {
         const auto record = records[index];
         if (record.target_mask == 0) {
-            index += num_topk - 1 - index % num_topk;
-            continue;
+          index += num_topk - 1 - index % num_topk;
+          continue;
         }
         const int owner = static_cast<int>(
             index / (static_cast<int64_t>(num_tokens) * num_topk));
@@ -396,130 +427,131 @@ void rail_balance_hop_plan_impl(
             }
         }
         if (best_egress < 0) {
-            hybrid_plan_detail::report_error(
-                status, HybridPlanError::CapacityExceeded);
-            return;
+          hybrid_plan_detail::report_error(
+              status, HybridPlanError::CapacityExceeded);
+          break;
         }
 
         resolutions[index] = {best_egress, -1, -1, -1};
         ++pair_load[destination * num_rails + best_egress];
         ++source_load[best_egress];
         if (best_egress != owner)
-            ++proxy_required[best_egress];
+          ++proxy_required[best_egress];
+      }
     }
+    __syncwarp();
+    if (*status != static_cast<int>(HybridPlanError::Success))
+        return;
 
     const int two_hop_cap = num_rails < 3 ? 0 : static_cast<int>(
         static_cast<int64_t>(total_units) * max_two_hop_percent / 100);
     int selected_two_hop = 0;
     while (selected_two_hop < two_hop_cap) {
-        for (int destination = 0;
-             destination < num_destinations; ++destination) {
-            const auto peaks = hybrid_plan_detail::find_load_peaks(
-                pair_load + destination * num_rails, num_rails);
-            owner_remaining[destination] = peaks.first;
-            owner_remaining[num_destinations + destination] = peaks.second;
-            owner_remaining[2 * num_destinations + destination] =
-                peaks.first_count;
-        }
+        if (lane == 0)
+            for (int destination = 0;
+                 destination < num_destinations; ++destination) {
+                const auto peaks = hybrid_plan_detail::find_load_peaks(
+                    pair_load + destination * num_rails, num_rails);
+                owner_remaining[destination] = peaks.first;
+                owner_remaining[num_destinations + destination] = peaks.second;
+                owner_remaining[2 * num_destinations + destination] =
+                    peaks.first_count;
+            }
+        __syncwarp();
         const auto source_peaks =
             hybrid_plan_detail::find_load_peaks(source_load, num_rails);
 
-        int best_index = -1;
-        int best_egress = -1;
-        int64_t best_net_gain = INT64_MIN;
-        int best_pair_after = INT_MAX;
-        int best_source_after = INT_MAX;
-        int best_added_hops = INT_MAX;
-        int best_tie = INT_MAX;
-
-        for (int64_t index = 0; index < num_records; ++index) {
-            const auto record = records[index];
-            if (record.target_mask == 0) {
-                index += num_topk - 1 - index % num_topk;
-                continue;
-            }
-            const int owner = static_cast<int>(
-                index / (static_cast<int64_t>(num_tokens) * num_topk));
-            const int old_egress = resolutions[index].egress;
-            const uint32_t endpoints =
-                record.target_mask | (uint32_t{1} << owner);
-            if ((endpoints & (uint32_t{1} << old_egress)) == 0)
-                continue;
-
-            const hybrid_plan_detail::LoadPeaks pair_peaks = {
-                owner_remaining[record.destination],
-                owner_remaining[num_destinations + record.destination],
-                owner_remaining[2 * num_destinations + record.destination],
-            };
-            const int pair_before = pair_peaks.first;
-            const int source_before = source_peaks.first;
-            const int old_pair = pair_load[
-                record.destination * num_rails + old_egress];
-            const int old_source = source_load[old_egress];
-            if (old_pair < pair_before and old_source < source_before)
-                continue;
-
-            const int old_forwards = (old_egress != owner) +
-                __popc(record.target_mask &
-                       ~(uint32_t{1} << old_egress));
-            for (int egress = 0; egress < num_rails; ++egress) {
-                if ((endpoints & (uint32_t{1} << egress)) != 0 or
-                    pair_load[record.destination * num_rails + egress] >=
-                        num_max_tokens_per_rank or
-                    proxy_required[egress] >= proxy_capacity_per_egress)
+        hybrid_plan_detail::AdaptiveCandidate best = {
+            -1, INT64_MIN, -1, INT_MAX, INT_MAX, INT_MAX, INT_MAX};
+        const int64_t num_owner_tokens =
+            static_cast<int64_t>(num_rails) * num_tokens;
+        for (int64_t owner_token = lane;
+             owner_token < num_owner_tokens; owner_token += 32) {
+            const int owner = static_cast<int>(owner_token / num_tokens);
+            const int64_t first_index = owner_token * num_topk;
+            for (int slot = 0; slot < num_topk; ++slot) {
+                const int64_t index = first_index + slot;
+                const auto record = records[index];
+                if (record.target_mask == 0)
+                    break;
+                const int old_egress = resolutions[index].egress;
+                const uint32_t endpoints =
+                    record.target_mask | (uint32_t{1} << owner);
+                if ((endpoints & (uint32_t{1} << old_egress)) == 0)
                     continue;
 
-                const int new_pair = pair_load[
-                    record.destination * num_rails + egress];
-                const int new_source = source_load[egress];
-                const int pair_after = hybrid_plan_detail::peak_after_move(
-                    pair_peaks, old_pair, new_pair);
-                const int source_after = hybrid_plan_detail::peak_after_move(
-                    source_peaks, old_source, new_source);
-                const int pair_relief = min(1, max(0, old_pair - new_pair));
-                const int source_relief =
-                    min(1, max(0, old_source - new_source));
-                const int new_forwards = 1 + __popc(record.target_mask);
-                const int added_hops = new_forwards - old_forwards;
-                const int64_t net_gain =
-                    static_cast<int64_t>(pair_relief + source_relief) * 100 -
-                    static_cast<int64_t>(hop_penalty_percent) * added_hops;
-                const int64_t threshold =
-                    static_cast<int64_t>(two_hop_threshold_percent) *
-                    (pair_before + source_before);
-                if (net_gain <= 0 or net_gain <= threshold)
+                const hybrid_plan_detail::LoadPeaks pair_peaks = {
+                    owner_remaining[record.destination],
+                    owner_remaining[num_destinations + record.destination],
+                    owner_remaining[2 * num_destinations + record.destination],
+                };
+                const int pair_before = pair_peaks.first;
+                const int source_before = source_peaks.first;
+                const int old_pair = pair_load[
+                    record.destination * num_rails + old_egress];
+                const int old_source = source_load[old_egress];
+                if (old_pair < pair_before and old_source < source_before)
                     continue;
 
-                const int origin = static_cast<int>(
-                    (static_cast<int64_t>(planner_seed) +
-                     record.destination + index) % num_rails);
-                const int tie = (egress - origin + num_rails) % num_rails;
-                bool better = net_gain > best_net_gain;
-                if (net_gain == best_net_gain) {
-                    if (pair_after != best_pair_after)
-                        better = pair_after < best_pair_after;
-                    else if (source_after != best_source_after)
-                        better = source_after < best_source_after;
-                    else if (added_hops != best_added_hops)
-                        better = added_hops < best_added_hops;
-                    else if (tie != best_tie)
-                        better = tie < best_tie;
-                    else if (egress != best_egress)
-                        better = egress < best_egress;
-                    else
-                        better = index < best_index;
-                }
-                if (better) {
-                    best_index = static_cast<int>(index);
-                    best_egress = egress;
-                    best_net_gain = net_gain;
-                    best_pair_after = pair_after;
-                    best_source_after = source_after;
-                    best_added_hops = added_hops;
-                    best_tie = tie;
+                const int old_forwards = (old_egress != owner) +
+                    __popc(record.target_mask &
+                           ~(uint32_t{1} << old_egress));
+                for (int egress = 0; egress < num_rails; ++egress) {
+                    if ((endpoints & (uint32_t{1} << egress)) != 0 or
+                        pair_load[record.destination * num_rails + egress] >=
+                            num_max_tokens_per_rank or
+                        proxy_required[egress] >= proxy_capacity_per_egress)
+                        continue;
+
+                    const int new_pair = pair_load[
+                        record.destination * num_rails + egress];
+                    const int new_source = source_load[egress];
+                    const int pair_after =
+                        hybrid_plan_detail::peak_after_move(
+                            pair_peaks, old_pair, new_pair);
+                    const int source_after =
+                        hybrid_plan_detail::peak_after_move(
+                            source_peaks, old_source, new_source);
+                    const int pair_relief =
+                        min(1, max(0, old_pair - new_pair));
+                    const int source_relief =
+                        min(1, max(0, old_source - new_source));
+                    const int added_hops = 1 + __popc(record.target_mask) -
+                        old_forwards;
+                    const int64_t net_gain = static_cast<int64_t>(
+                        pair_relief + source_relief) * 100 -
+                        static_cast<int64_t>(hop_penalty_percent) * added_hops;
+                    const int64_t threshold =
+                        static_cast<int64_t>(two_hop_threshold_percent) *
+                        (pair_before + source_before);
+                    if (net_gain <= 0 or net_gain <= threshold)
+                        continue;
+
+                    const int origin = static_cast<int>(
+                        (static_cast<int64_t>(planner_seed) +
+                         record.destination + index) % num_rails);
+                    const hybrid_plan_detail::AdaptiveCandidate candidate = {
+                        index,
+                        net_gain,
+                        egress,
+                        pair_after,
+                        source_after,
+                        added_hops,
+                        (egress - origin + num_rails) % num_rails,
+                    };
+                    if (hybrid_plan_detail::better_candidate(candidate, best))
+                        best = candidate;
                 }
             }
         }
+        for (int source_lane = 0; source_lane < 32; ++source_lane) {
+            const auto candidate = ptx::exchange(best, source_lane);
+            if (hybrid_plan_detail::better_candidate(candidate, best))
+                best = candidate;
+        }
+        const int64_t best_index = best.index;
+        const int best_egress = best.egress;
+        const int best_added_hops = best.added_hops;
         if (best_index < 0)
             break;
 
@@ -572,48 +604,54 @@ void rail_balance_hop_plan_impl(
         // Relief and hop cost stay admissible until a gap closes or the old
         // Rail stops being critical. Move that deterministic prefix at once.
         int migrated = 0;
-        for (int64_t index = 0; index < num_records and migrated < batch;
-             ++index) {
-            const auto record = records[index];
-            if (record.target_mask == 0) {
-                index += num_topk - 1 - index % num_topk;
-                continue;
-            }
-            if (record.destination != best_record.destination or
-                resolutions[index].egress != old_egress)
-                continue;
-            const int owner = static_cast<int>(
-                index / (static_cast<int64_t>(num_tokens) * num_topk));
-            const uint32_t endpoints =
-                record.target_mask | (uint32_t{1} << owner);
-            if ((endpoints & (uint32_t{1} << old_egress)) == 0 or
-                (endpoints & (uint32_t{1} << best_egress)) != 0)
-                continue;
-            const int old_forwards = (old_egress != owner) +
-                __popc(record.target_mask &
-                       ~(uint32_t{1} << old_egress));
-            const int added_hops = 1 + __popc(record.target_mask) -
-                old_forwards;
-            if (added_hops != best_added_hops)
-                continue;
+        if (lane == 0)
+            for (int64_t index = 0;
+                 index < num_records and migrated < batch; ++index) {
+                const auto record = records[index];
+                if (record.target_mask == 0) {
+                    index += num_topk - 1 - index % num_topk;
+                    continue;
+                }
+                if (record.destination != best_record.destination or
+                    resolutions[index].egress != old_egress)
+                    continue;
+                const int owner = static_cast<int>(
+                    index / (static_cast<int64_t>(num_tokens) * num_topk));
+                const uint32_t endpoints =
+                    record.target_mask | (uint32_t{1} << owner);
+                if ((endpoints & (uint32_t{1} << old_egress)) == 0 or
+                    (endpoints & (uint32_t{1} << best_egress)) != 0)
+                    continue;
+                const int old_forwards = (old_egress != owner) +
+                    __popc(record.target_mask &
+                           ~(uint32_t{1} << old_egress));
+                const int added_hops = 1 + __popc(record.target_mask) -
+                    old_forwards;
+                if (added_hops != best_added_hops)
+                    continue;
 
-            --pair_load[record.destination * num_rails + old_egress];
-            ++pair_load[record.destination * num_rails + best_egress];
-            --source_load[old_egress];
-            ++source_load[best_egress];
-            if (old_egress != owner)
-                --proxy_required[old_egress];
-            ++proxy_required[best_egress];
-            resolutions[index].egress = best_egress;
-            ++migrated;
-        }
+                --pair_load[record.destination * num_rails + old_egress];
+                ++pair_load[record.destination * num_rails + best_egress];
+                --source_load[old_egress];
+                ++source_load[best_egress];
+                if (old_egress != owner)
+                    --proxy_required[old_egress];
+                ++proxy_required[best_egress];
+                resolutions[index].egress = best_egress;
+                ++migrated;
+            }
+        migrated = __shfl_sync(0xffffffff, migrated, 0);
         if (migrated == 0) {
-            hybrid_plan_detail::report_error(
-                status, HybridPlanError::InvalidSchedule);
-            return;
+            if (lane == 0)
+                hybrid_plan_detail::report_error(
+                    status, HybridPlanError::InvalidSchedule);
+            break;
         }
         selected_two_hop += migrated;
+        __syncwarp();
     }
+    if (*status != static_cast<int>(HybridPlanError::Success) or lane != 0)
+        return;
 
     // Materialize dense channel-local slots only after two-hop selection has
     // finalized every egress. A bit set denotes a channel at the current
