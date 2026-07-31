@@ -2418,3 +2418,26 @@ Commit `eedcdad` passed clean 10+100 eligibility. One-hop `finish` is
 Adaptive is 399.294 ms (p95 399.510 ms), 4.4% below 416.741 ms. Source-stage
 code did not change; its observed 134.296/671.194 us medians are recorded as
 run-to-run context rather than attributed to the planner edit.
+
+## O100 — cache exact adaptive load peaks per iteration
+
+Post-O099 Nsys still measures the adaptive planner at 306.323 ms median and
+98.1% of captured kernel duration. Its report hash is
+`da2ee7d0e79b1eaa0f622ed56f5bd5ebcc8779de0dcf7a81456092bad1d28adc`.
+Source inspection shows each candidate copy and each possible third Rail
+rescanning all Rails to reconstruct pair/source peaks before and after one
+move.
+
+Each adaptive iteration now computes `(maximum, second maximum, maximum
+count)` once for source load and each destination. The maximum after an exact
+old→new unit move is then O(1), including tied maxima. Dead
+`owner_remaining` workspace holds destination peak triples until channel
+materialization reuses it. Candidate order, net gain, threshold, cap, batch
+selection, and tie-breaking are unchanged; G<3 skips an impossible third-Rail
+search.
+
+Private N=1024/C=256 adaptive median improves from 18.540 to 17.199 ms; one-hop
+stays at 12.13 ms. C100 adaptive 3+20 `finish` improves from the clean
+399.294 ms predecessor to 308.661 ms (1.29x). GPU exact tests pass 11/11, the
+adaptive vnode round trip passes, and focused memcheck/initcheck report zero
+errors. Clean 10+100 evidence follows the code commit.

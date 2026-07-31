@@ -6898,3 +6898,26 @@ Commit `eedcdad` passes clean-tree 10+100 eligibility. One-hop finish is
 41.372 ms median / 41.523 ms p95; adaptive is 399.294 / 399.510 ms. These are
 7.4% and 4.4% below the clean pre-edit boundaries. Source-stage code did not
 change and no source timing movement is assigned to this planner optimization.
+
+## 2026-07-31 — HA060-I: exact O(1) adaptive peak updates
+
+Nsys confirms adaptive planning remains the critical kernel at 306.323 ms
+median. The residual search repeatedly rebuilt the same Rail maxima inside
+every record/third-Rail candidate.
+
+The planner now builds maximum, second maximum, and maximum multiplicity once
+per adaptive iteration. Those three values reproduce the exact maximum after
+moving one unit from old Rail to new Rail. Existing dead planner workspace is
+reused and no output, allocation, or approximation is added.
+
+```text
+private adaptive N1024/C256 median       18.540 -> 17.199 ms
+C100 adaptive finish diagnostic        399.294 -> 308.661 ms
+private one-hop median                              12.128 ms
+GPU exact planner                                      11/11 PASS
+adaptive full vnode round trip                              PASS
+planner memcheck/initcheck                              0 errors
+```
+
+The code remains experimental until a clean 10+100 report is collected from
+the committed tree. Capability remains false.

@@ -1233,3 +1233,8 @@ Out of scope until evidence expands the project:
 - Clean `eedcdad` 10+100 confirms packed-record skipping at 41.372 ms one-hop
   finish (7.4% below O096) and 399.294 ms adaptive finish (4.4% below O096).
   Both eligibility gates pass; source data-plane code is unchanged.
+- HA060-I replaces repeated adaptive Rail rescans with exact per-iteration
+  max/second/count summaries in dead workspace. C100 adaptive finish drops
+  from 399.294 to 308.661 ms in the diagnostic (1.29x); one-hop is unchanged.
+  Exact 11/11, adaptive vnode, and focused sanitizer gates pass. Capability
+  remains false pending clean and real multi-node evidence.

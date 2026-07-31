@@ -391,3 +391,20 @@ claimed as a planner effect. Report hashes are:
 1ddce1bff73604a740749b8d053c52c5d2fb3dede555ec82cb14dab604da0588  c100-onehop-packed-formal.json
 bcf6cc5c30df701a731e948338dc88d985c7fc01d8957be30a23e2de027a2ae6  c100-adaptive-packed-formal.json
 ```
+
+### HA060-I adaptive peak diagnostic
+
+Nsys after packed skipping still attributes 306.323 ms median and 98.1% of
+captured kernel time to adaptive planning. Computing exact max/second/count
+state once per iteration instead of rescanning Rails per candidate reduces a
+3+20 C100 `finish` median from 399.294 to 308.661 ms. Exact planner 11/11,
+adaptive vnode, memcheck, and initcheck pass. Diagnostic hashes are:
+
+```text
+da2ee7d0e79b1eaa0f622ed56f5bd5ebcc8779de0dcf7a81456092bad1d28adc  c100-adaptive-packed-nsys.nsys-rep
+b9191ef8b03a5e11a349c4fdedf42c495537838a657fb5b1fb08c0db73625232  hop-plan-both-n1024-c256-peaks.json
+eba083d97f7e9fc53082197d9648a549caa9945ada81140a266c0a980a09c5a6  c100-adaptive-peaks-diag.json
+```
+
+The after timing is dirty-tree diagnostic evidence; a clean distribution is
+required before acceptance. Scope remains single-node checked adapter.

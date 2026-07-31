@@ -73,6 +73,41 @@ __forceinline__ __device__ void report_error(
                   static_cast<int>(error));
 }
 
+struct LoadPeaks {
+    int first;
+    int second;
+    int first_count;
+};
+
+__forceinline__ __device__ LoadPeaks find_load_peaks(
+        const int* loads, const int count) {
+    LoadPeaks peaks = {-1, 0, 0};
+    for (int index = 0; index < count; ++index) {
+        const int value = loads[index];
+        if (value > peaks.first) {
+            peaks.second = max(peaks.first, 0);
+            peaks.first = value;
+            peaks.first_count = 1;
+        } else if (value == peaks.first) {
+            ++peaks.first_count;
+        } else {
+            peaks.second = max(peaks.second, value);
+        }
+    }
+    return peaks;
+}
+
+__forceinline__ __device__ int peak_after_move(
+        const LoadPeaks& peaks,
+        const int old_load,
+        const int new_load) {
+    const int removed_first =
+        (old_load == peaks.first) + (new_load == peaks.first);
+    const int unchanged_peak = peaks.first_count > removed_first ?
+        peaks.first : peaks.second;
+    return max(unchanged_peak, max(old_load - 1, new_load + 1));
+}
+
 }  // namespace hybrid_plan_detail
 
 // Materialize the endpoint information omitted by the legacy [G,C,D] count.
@@ -373,10 +408,22 @@ void rail_balance_hop_plan_impl(
             ++proxy_required[best_egress];
     }
 
-    const int two_hop_cap = static_cast<int>(
+    const int two_hop_cap = num_rails < 3 ? 0 : static_cast<int>(
         static_cast<int64_t>(total_units) * max_two_hop_percent / 100);
     int selected_two_hop = 0;
     while (selected_two_hop < two_hop_cap) {
+        for (int destination = 0;
+             destination < num_destinations; ++destination) {
+            const auto peaks = hybrid_plan_detail::find_load_peaks(
+                pair_load + destination * num_rails, num_rails);
+            owner_remaining[destination] = peaks.first;
+            owner_remaining[num_destinations + destination] = peaks.second;
+            owner_remaining[2 * num_destinations + destination] =
+                peaks.first_count;
+        }
+        const auto source_peaks =
+            hybrid_plan_detail::find_load_peaks(source_load, num_rails);
+
         int best_index = -1;
         int best_egress = -1;
         int64_t best_net_gain = INT64_MIN;
@@ -399,14 +446,13 @@ void rail_balance_hop_plan_impl(
             if ((endpoints & (uint32_t{1} << old_egress)) == 0)
                 continue;
 
-            int pair_before = 0;
-            int source_before = 0;
-            for (int rail = 0; rail < num_rails; ++rail) {
-                pair_before = max(
-                    pair_before,
-                    pair_load[record.destination * num_rails + rail]);
-                source_before = max(source_before, source_load[rail]);
-            }
+            const hybrid_plan_detail::LoadPeaks pair_peaks = {
+                owner_remaining[record.destination],
+                owner_remaining[num_destinations + record.destination],
+                owner_remaining[2 * num_destinations + record.destination],
+            };
+            const int pair_before = pair_peaks.first;
+            const int source_before = source_peaks.first;
             const int old_pair = pair_load[
                 record.destination * num_rails + old_egress];
             const int old_source = source_load[old_egress];
@@ -423,20 +469,13 @@ void rail_balance_hop_plan_impl(
                     proxy_required[egress] >= proxy_capacity_per_egress)
                     continue;
 
-                int pair_after = 0;
-                int source_after = 0;
-                for (int rail = 0; rail < num_rails; ++rail) {
-                    const int pair_value =
-                        pair_load[record.destination * num_rails + rail] -
-                        (rail == old_egress) + (rail == egress);
-                    const int source_value = source_load[rail] -
-                        (rail == old_egress) + (rail == egress);
-                    pair_after = max(pair_after, pair_value);
-                    source_after = max(source_after, source_value);
-                }
                 const int new_pair = pair_load[
                     record.destination * num_rails + egress];
                 const int new_source = source_load[egress];
+                const int pair_after = hybrid_plan_detail::peak_after_move(
+                    pair_peaks, old_pair, new_pair);
+                const int source_after = hybrid_plan_detail::peak_after_move(
+                    source_peaks, old_source, new_source);
                 const int pair_relief = min(1, max(0, old_pair - new_pair));
                 const int source_relief =
                     min(1, max(0, old_source - new_source));
@@ -502,24 +541,27 @@ void rail_balance_hop_plan_impl(
             batch = min(batch, pair_gap / 2 + pair_gap % 2);
             batch = min(batch, source_gap / 2 + source_gap % 2);
         }
-        int pair_other = 0;
-        int source_other = 0;
-        for (int rail = 0; rail < num_rails; ++rail) {
-            if (rail != old_egress) {
-                pair_other = max(
-                    pair_other,
-                    pair_load[best_record.destination * num_rails + rail]);
-                source_other = max(source_other, source_load[rail]);
-            }
-        }
-        int critical_batch = 0;
+        const hybrid_plan_detail::LoadPeaks pair_peaks = {
+            owner_remaining[best_record.destination],
+            owner_remaining[num_destinations + best_record.destination],
+            owner_remaining[2 * num_destinations + best_record.destination],
+        };
         const int old_pair = pair_load[
             best_record.destination * num_rails + old_egress];
+        const int pair_other =
+            (pair_peaks.first_count >
+             static_cast<int>(old_pair == pair_peaks.first)) ?
+                pair_peaks.first : pair_peaks.second;
+        const int old_source = source_load[old_egress];
+        const int source_other =
+            (source_peaks.first_count >
+             static_cast<int>(old_source == source_peaks.first)) ?
+                source_peaks.first : source_peaks.second;
+        int critical_batch = 0;
         if (old_pair >= pair_other) {
             const int difference = old_pair - pair_other;
             critical_batch = difference >= batch ? batch : difference + 1;
         }
-        const int old_source = source_load[old_egress];
         if (old_source >= source_other) {
             const int difference = old_source - source_other;
             critical_batch = max(
