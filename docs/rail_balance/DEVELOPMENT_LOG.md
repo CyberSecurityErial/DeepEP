@@ -7618,3 +7618,67 @@ to `be4a69b`, passed 6/6 CPU gates and started zero GPU processes.  GPU 0--1
 remained occupied by the user's Qwen training, so no 4x2 vnode, formal source
 round, benchmark, profiler or competitor result was collected.  The
 performance Leader remains unchanged.
+
+## 2026-08-01 — HA070-L: fail-closed competitor preflight and paper-evidence tightening
+
+Added a stdlib-only, check-only preflight for the pinned UCCL-EP
+`61ee42402819cabba3ac2a56dd4addec3363976c` and NCCL EP
+`63cf786b015b2b6bff6cf263461621acf584bd18` checkouts.  It does not implement
+or execute a build.  The production entrypoint is bound to root-owned system
+Python under `-I -S -B`, an exact five-key empty environment, `/proc/self/exe`,
+the kernel-reported argv/environment, and a hashed runtime file closure.  Every
+probe tool has a pinned path, realpath, SHA256 and owner; every subprocess,
+including Git, has a fail-closed 180-second timeout.
+
+The preflight never runs `git status` or a conversion filter.  It verifies
+pinned HEAD/tree/blob identities and hashes the complete declared build-input
+closure directly from the tracked paths.  Lazy fetch, replace objects, hooks,
+interactive prompting and optional locks are disabled.  Future builds are
+specified but remain `NOT_IMPLEMENTED`: pinned Git objects must be materialized
+into a fresh, empty, owner-only `0700` stage, frozen checkouts are read-only
+inputs, and ignored/untracked worktree files are never build inputs.  The UCCL
+GNU Make eager `nvidia-smi` expansion is intercepted by a frozen deny shim.
+The output path is restricted to a fresh run directory, published no-clobber
+at mode `0444`, and consumers must bind the exact path and hash rather than
+glob for a newest file.
+
+The exact current static record is:
+
+```text
+artifact: .cache/rail_balance/competitors/preflight-20260801-08/result.json
+artifact mode/sha256: 0444 / 8e46f41c081e7838aecfaf7a50c6a64ef4d3b73e23f9d872afb454f2d3e907d5
+program sha256: 3ed5e4630d967c737438b5da239d9059577ad2167564f6c649621c077ff529e8
+test sha256: c17e5d3bd5ed250a91f864711dbe39a2c5eda53de4f17da3ee7a0c6855495cd3
+manifest sha256: 8bea6de8b0fdb33ae3b1e6792b86d585ac4cbea70b4579c3d274988d5f9f5792
+runtime closure: 112 root-owned files + pinned program (113 total)
+runtime closure sha256: 1de0e6b561fdf2524cec6ee5c2fc4a70edd01b140000eee285c640afc82e3287
+status: BLOCKED_DEPENDENCY_NANOBIND
+observations: BLOCKED_DEPENDENCY_NANOBIND, WAITING_GPU
+Qwen PIDs: 3047501,3047502
+/home used/projected: 272008781824 / 281008781824 bytes
+build/correctness/benchmark/profile/GPU: NOT_RUN
+performance claim allowed: false
+future build executor: NOT_IMPLEMENTED
+```
+
+The 26 CPU attack/contract tests, Ruff and `git diff --check` pass.  Independent
+red-team review found no remaining S0--S2 issue affecting the check-only
+evidence after the Git timeout and runtime-closure wording fixes.  The artifact
+only establishes static source/tool/dependency/GPU/NIC/topology/disk facts.
+It does not establish a verbs context, RDMA runtime, build, correctness or
+performance result; its process evidence uses the cooperative root-owned OS
+trust base and is not remote attestation against a hostile parent, ptrace peer,
+kernel or same-UID active attacker.  Runs `-01` through `-07` are explicitly
+superseded and non-authoritative.
+
+The competitor evidence ledger and paper matrix were also tightened against
+primary paper/code artifacts.  UltraEP's public eight-GPU demo is now separated
+from its EP64 microbenchmark and its public HybridEP/DeepEP-v1 integration is
+not assumed to compose with RailBalance v2.  MoonEP communication-only timing
+is separated from grouped GEMM, prefetch, backward, gradient reduction and
+memory claims.  UCCL's author-oracle timing is excluded from `COMMON_FAIR`, and
+NCCL EP's rank-mean/reversed-throughput-label lineage is disclosed.  The main
+transport comparison requires same-tree DeepEP off, clean DeepEP v2,
+RailBalance, UCCL EP and NCCL EP on frozen common API/rank-max contracts, or an
+audited terminal failure row.  No competitor GPU program was built or run, no
+formal source round was launched, and the performance Leader did not change.

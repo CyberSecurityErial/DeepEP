@@ -49,7 +49,7 @@ RailBalance 的核心假设是：在不改变 token 的最终专家语义、payl
 | P1 | UniEP `1512a81...` | 冻结`ep_overlap`的单机前向通信+GEMM融合段 | integrated，single-node | `EP=2/4/8`公开前向测试已有Torch/CUDA reference；完整训练FWD/BWD单独记`API_GAP` | `NOT_RUN` |
 | P1 | FEPLB（无代码） | Copy Engine动态专家/计算负载平衡 | placement-enabled，端到端 | 代码发布前只保留证据；不得与dispatch-only相除 | `NO_PUBLIC_ARTIFACT` |
 | P1 | UltraEP `94cab099...` | 精确负载驱动副本与重路由；作用层不同，组合/交互待验证 | placement-enabled，多节点为主；8 Hopper 可先做功能/脚手架 | 形成 placement-only / Rail-only / both 的 2×2 因子实验 | `NOT_RUN` |
-| P1 | MoonEP `0f385f03...` | 单机动态冗余专家、VMM/zero-copy | placement-enabled，single-node only | 同一 8×H20/NVSwitch 节点；同时报告作者 rank-mean 与共同 rank-max | `NOT_RUN` |
+| P1 | MoonEP `0f385f03...` | 单机动态冗余专家、VMM/zero-copy | placement-enabled，single-node only | 同一 8×H20 节点；作者未冻结精确互联拓扑，同时报告作者 rank-mean 与共同 rank-max | `NOT_RUN` |
 | P1 | EPLB `d52c72d5...` | 慢时标、历史负载驱动专家放置 | placement-enabled，单机 planner / 多节点 full-step | 先补公开代码 adapter、迁移成本和端到端边界 | `NOT_RUN` |
 | P1 | LPLB `0490f794...` | 批次级 LP token 重定向 | placement-enabled，planner 与 full-step | 同 replica 预算，不能只比较 solver 的 max/mean | `NOT_RUN` |
 | P1 | ECHO draft `a2b16b87...` | Megatron-Core 热专家弹性克隆 | placement-enabled，端到端 | 冻结 draft checkout，建立独立 on/off benchmark；不能借用完整优化栈表 | `NOT_RUN` |
@@ -63,6 +63,14 @@ RailBalance 的核心假设是：在不改变 token 的最终专家语义、payl
 本文中“RailBalance best”特指只用预先分离的 tuning 数据选定、然后在
 confirmatory 数据解封前冻结的单一版本；不得用 confirmatory 结果反向选“best”。
 
+本机 UCCL/NCCL 的 check-only 基础设施快照固定为
+`.cache/rail_balance/competitors/preflight-20260801-08/result.json`（SHA256
+`8e46f41c081e7838aecfaf7a50c6a64ef4d3b73e23f9d872afb454f2d3e907d5`）。它只证明冻结
+source/tool/dependency/GPU/NIC/topology/disk合同的静态检查可复现；当前状态是
+`BLOCKED_DEPENDENCY_NANOBIND`并观察到`WAITING_GPU`，future build executor仍为
+`NOT_IMPLEMENTED`。build、correctness、benchmark、profile和GPU kernel均为`NOT_RUN`，
+所以该快照不改变上表任何实验状态，也不能作为竞品结果或RDMA runtime证据。
+
 ## 4. 四条赛道的主矩阵
 
 ### 4.1 transport-only × single-node
@@ -73,7 +81,7 @@ confirmatory 数据解封前冻结的单一版本；不得用 confirmatory 结�
 |---|---|---|---|---|---|
 | `TS-01` | same-tree DeepEP `off` / `legacy_exact` / `one_hop` / `adaptive` | 同一物理目标 trace，EP8；覆盖均衡、热点、多 target mask | rank-max dispatch/combine/roundtrip latency；额外本地 bytes；正确性 | 开销/边界消融 | `NOT_RUN` |
 | `TS-02` | clean DeepEP v2 vs same-tree `off` | 同 shape/dtype/layout | rank-max latency与逻辑带宽；代码身份 | 可复现性附表 | `NOT_RUN` |
-| `TS-03` | UCCL-EP intranode vs DeepEP v2 vs RailBalance | 官方 anchor 4096 token、H7168、K8、E256；另做共同 trace | rank-max public-API latency；SM/CPU资源 | 补充材料 | `NOT_RUN` |
+| `TS-03` | UCCL-EP intranode vs DeepEP v2 vs RailBalance | 官方 anchor 4096 token/rank、H7168、K8、E256；另做共同 trace | rank-max public-API latency；SM/CPU资源 | 补充材料 | `NOT_RUN` |
 
 若本地使用 vnode、reference 或 C100 adapter，只能标成 `SCAFFOLD_DIAGNOSTIC`；它们不进入真实 Rail 图，也不与作者 GPU 数字相除。
 
@@ -85,25 +93,28 @@ confirmatory 数据解封前冻结的单一版本；不得用 confirmatory 结�
 |---|---|---|---|---|---|
 | `TM-01` | same-tree `off` vs `one_hop` vs `adaptive` | 合成 2×2 trace：专家均衡/偏斜 × Rail均衡/热点 | 完全相同物理目标、payload、二进制/JIT、timed window；ABBA/BAAB | 主图：核心因果结果 | `NOT_RUN` |
 | `TM-02` | same-tree `off` vs `legacy_exact` | 同 `TM-01` | 冻结 legacy 语义和新模式语义，不把兼容路径当优化 Leader | 补充：回归与兼容性 | `NOT_RUN` |
-| `TM-03` | clean DeepEP v2 vs tuning-frozen RailBalance best | UCCL HT anchor：4096 token、H7168、K8、E288，FP8 dispatch/BF16 combine | 相同 GPU/NIC、route、SM/QP、API 与 rank-max | 主表：上游对比 | `NOT_RUN` |
-| `TM-04` | UCCL-EP vs clean DeepEP v2 vs tuning-frozen RailBalance best | 与 `TM-03`相同；若支持再加 128-token LL anchor | 同硬件、同 NIC 集合、同 trace；UCCL 4 proxy threads/GPU 或共同调参预算并单独披露 | 主图：直接竞品 | `NOT_RUN` |
+| `TM-03` | same-tree `off` / clean DeepEP v2 / tuning-frozen RailBalance best | UCCL官方HT anchor：4096 token/rank、H7168、K8、E288，FP8 dispatch/BF16 combine | 相同 GPU/NIC、route、SM/QP、API 与 rank-max | `AUTHOR_ARTIFACT_COMPAT`背景panel | `NOT_RUN` |
+| `TM-04` | UCCL-EP vs `TM-03`三系统 | 与 `TM-03`相同；若支持再加 128-token LL anchor | 同硬件/NIC/trace；UCCL 4 proxy threads/GPU或共同调参预算并单独披露 | UCCL官方shape兼容图，不与NCCL横算 | `NOT_RUN` |
 | `TM-05` | UCCL-EP / clean DeepEP v2 / tuning-frozen RailBalance best 三系统 scaling | nodes/EP、tokens、H、K、E、dtype 分轴变化 | 每次只改变一个轴；route seed/hash固定 | scaling 图 | `NOT_RUN` |
 | `TM-06` | UCCL-EP / clean DeepEP v2 / tuning-frozen RailBalance best 真实 trace replay | 脱敏且版本化的 logical/physical trace | 同时间片、相同 endpoint，报告 trace覆盖度 | 主图或外部有效性图 | `NOT_RUN` |
-| `TM-07` | NCCL EP LL vs DeepEP v2 vs RailBalance | E256、H7168、K8、128 token/rank、BF16 | 统一 public API rank-max；作者 mixed timing 只进独立背景 panel | LL直接竞品图 | `NOT_RUN` |
-| `TM-08` | NCCL EP HT vs DeepEP v2 vs RailBalance | 4096 token/rank prefill anchor；三方共同非量化dtype | 论文无HT性能；later v0.1已有HT优化/`>8` nodes修复，但公开表≤8 nodes，故仍是本地共同口径而非作者复现 | HT直接竞品图 | `NOT_RUN` |
+| `TM-07` | same-tree `off` / clean DeepEP v2 / RailBalance best / UCCL-EP / NCCL EP LL | E256、H7168、K8、128 token/rank、全BF16；至少2/4 nodes | 统一逐iteration rank-max；route/layout/handle update、Dispatch(+Complete)、Combine(+Complete)分层；作者 mixed timing只进背景 | LL五系统主图 | `NOT_RUN` |
+| `TM-08` | 与`TM-07`相同五系统的HT | E256、H7168、K8、4096 token/rank、全BF16；至少2/4 nodes | 与`TM-07`同一分层边界；论文无HT性能，later v0.1的HT优化/`>8` nodes修复不等于作者复现 | HT五系统主图 | `NOT_RUN` |
 | `TM-09` | SABRE vs NCCL/PyTorch AllToAllv AUTHOR_REPRO；Rail adapter COMMON_FAIR | 完整 skew matrix 与相同最终 endpoint | packing/reorder/API 无法统一时记 `NO_COMMON_API` | 算法边界/补充图 | `NOT_RUN` |
 | `TM-10` | fabric-lib vs DeepEP v2 vs RailBalance | decode 128 与 prefill 4096 分开 | 固定 proxy CPU/NUMA、NIC集合；逐 iteration rank-max | 多NIC直接竞品图 | `NOT_RUN` |
 | `TM-11` | SwiftEP off/on × Rail off/on | 2K/4K/8K prefill与同一token trace | 必须合并到同一冻结源码基座、共享`off/off`并可独立开关；固定fused buffer/SM/QP/NIC | 共同基座成立才做2×2；否则只做两个独立对比 | `NOT_RUN` |
+| `EV-01` | NCCL论文vLLM panel兼容复现；Rail接入仅在同一serving基座成立后加入 | Qwen3-30B-A3B、1/2/4 nodes、1000 requests、max concurrency 32 | 每backend 4 runs与IQR字段兼容；另保存逐请求raw/CI；不得代替transport主矩阵 | 外部有效性补充 | `NOT_RUN` |
 
-UCCL 官方六类 testbed 的作者数据只做背景。只有本集群与其中某一硬件完全匹配时才称“官方硬件复现”；否则 `TM-04` 是共同口径的本地对比，不是 UCCL 论文曲线复现。
+UCCL 官方六类 testbed 的作者数据只做背景。只有本集群与其中某一硬件完全匹配时才称“官方硬件复现”；否则 `TM-04` 是共同口径的本地对比，不是 UCCL 论文曲线复现。论文 Fig. 8 每个点取 HT/LL 的最小值；这个 oracle 只允许在 `AUTHOR_REPRO` 兼容图中出现。`COMMON_FAIR` 必须把两种 mode 分开，或在 tuning 分区一次选定后冻结到 confirmatory。
 
 ### 4.3 placement-enabled × single-node
 
 | ID | 系统/模式 | 冻结条件 | 主指标 | 限制 | 状态 |
 |---|---|---|---|---|---|
-| `PS-01` | MoonEP vs DeepEP v2（作者口径） | 仅精确 8×H20；S8192/rank、E384、H7168、K8、H'2048、BF16、MaxVio .2/1/10/20 | 作者定义的跨-rank mean，20/50 eager event；另保存 raw | `AUTHOR_REPRO`，排除 grad_reduce | `NOT_RUN` |
+| `PS-01` | MoonEP vs DeepEP v2（作者通信口径） | 仅精确 8×H20；S8192/rank、E384、H7168、K8、H'2048、B48、padding128、BF16、MaxVio .2/1/10/20 | 作者定义的跨-rank mean，20/50 eager event；另保存 raw | `AUTHOR_REPRO`，排除 grad_reduce | `NOT_RUN` |
 | `PS-02` | MoonEP vs DeepEP v2（共同口径） | 与 `PS-01`共享输入，但增加统一 correctness 和 rank-max | dispatch/combine、planner、permute/prefetch 分项；rank-max p50/p95/p99 | API包含项必须逐项列明，不能拿 rank-mean 图直接横比 | `NOT_RUN` |
-| `PS-03` | UltraEP 8-Hopper功能/开销 | E256、K8、8192 token/rank、2 redundant/rank，精确保存 router trace | placement/reroute/weight sync/grad reduce/token A2A 分项 | 非论文 RSN 环境时不称论文复现 | `NOT_RUN` |
+| `PS-02b` | MoonEP full-layer/FWD+BWD | 与`PS-01`相同H20 EP8合同 | grouped GEMM、prefetch、backward、grad_reduce、full-step、allocated/reserved峰值 | 通信图不含这些阶段；OOM/碎片是结果，不能静默改shape | `NOT_RUN` |
+| `PS-03a` | UltraEP 8-Hopper demo功能/开销 | 官方 demo 的E32、K4、20 layers，精确冻结完整argv与router trace | placement/reroute/weight sync/grad reduce/token A2A 分项 | `AUTHOR_DEMO`；不冒充EP64表格或论文RSN | `NOT_RUN` |
+| `PS-03b` | UltraEP EP64公开microbench anchor | E256、K8、8192 token/rank、2 redundant/rank | 同官方计时兼容字段，并另做共同rank-max | 需要EP64；不能缩成8卡后沿用官方ID | `NOT_RUN` |
 | `PS-04` | EPLB vs LPLB planner | 同逻辑 load tensor、replica数、拓扑、seed；含 E256 EP16/32/64 | planner latency、最终 max/mean、迁移/复制量、解合法性 | planner质量不能代替 step time | `NOT_RUN` |
 | `PS-05` | RailBalance 单机组合 sanity | placement off/on × Rail off/on | 语义一致性、额外 local forwarding、控制面开销 | 不做网络性能结论 | `NOT_RUN` |
 | `IS-01a` | UniEP 公开前向融合段 | 单节点`EP=2/4/8`，dispatch+GEMM与GEMM+combine | 分EP的build/API/correctness；保留公开Torch/CUDA reference的严格/bitwise assert | 只是前向融合段，无多节点Rail | `NOT_RUN` |
@@ -115,7 +126,7 @@ UCCL 官方六类 testbed 的作者数据只做背景。只有本集群与其中
 
 | ID | placement层 | transport层 | 设计 | 主指标 | 状态 |
 |---|---|---|---|---|---|
-| `PM-01` | UltraEP off/on | Rail `off`/best | 2×2 因子实验，共享 logical router trace、模型权重、replica预算 | full-step与通信rank-max、expert/Rail负载、权重同步和梯度归并成本 | `NOT_RUN` |
+| `PM-01` | UltraEP off/on | Rail `off`/best | 先把Ultra公开HybridEP/DeepEP-v1集成与RailBalance-v2移到同一冻结transport基座并提供两个独立开关，再做2×2；共享logical router trace、权重、replica预算 | full-step与通信rank-max、expert/Rail负载、权重同步和梯度归并成本；共同基座失败则只报独立结果 | `NOT_RUN` |
 | `PM-02` | EPLB off/on | Rail `off`/best | 固定历史窗口、更新周期、replica预算；摊销与触发时延都报告 | steady step、placement迁移成本、Rail tail | `NOT_RUN` |
 | `PM-03` | LPLB off/on | Rail `off`/best | 固定 batch trace 与副本拓扑；solver时间不从step中隐藏 | full-step、solver、dispatch/combine、grouped GEMM、Rail tail | `NOT_RUN` |
 | `PM-04` | ECHO off/on | Rail `off`/best | 仅在冻结 draft PR 且有独立开关/正确性后运行 | clone、reroute、token A2A、grad reduce、full-step | `NOT_RUN` |
@@ -170,15 +181,15 @@ UCCL 官方六类 testbed 的作者数据只做背景。只有本集群与其中
 | 系统 | 只在对应轨道使用的公开 anchor | 使用规则 |
 |---|---|---|
 | DeepEP v2 | 8K token、H7168、K8、FP8 dispatch/BF16 combine | 显式设置 K8；不能误用测试默认 K6 |
-| UCCL-EP HT | EP32、4096 token、H7168、K8、E288、FP8/BF16 | 作为 `TM-03/04`共同 anchor |
-| UCCL-EP LL | EP32、128 token、H7168、K8、E288、FP8/BF16 | 仅UCCL-EP、clean DeepEP v2、RailBalance三系统都支持相同 LL API 时进入横比 |
-| NCCL EP LL | E256、H7168、K8、128 token/rank、BF16、8–64 GPU | `TM-07`；共同 timing，不复用作者 mixed boundary |
+| UCCL-EP HT | EP32、4096 token/rank、H7168、K8、E288、FP8/BF16 | 作为 `TM-03/04`共同 anchor；固定HT，不使用Fig.8逐点mode oracle |
+| UCCL-EP LL | EP32、128 token/rank、H7168、K8、E288、FP8/BF16 | 仅UCCL-EP、clean DeepEP v2、RailBalance三系统都支持相同 LL API 时进入横比 |
+| NCCL EP LL | E256、H7168、K8、128 token/rank、BF16、8–64 GPU | `TM-07`；共同 timing，不复用作者 mixed boundary或tag `ep_bench`的rank-mean |
 | NCCL EP HT | >=4096 token/rank；三方共同非量化dtype | `TM-08`；论文无HT性能；v0.1已有HT优化/`>8` nodes修复但公开表≤8 nodes，不能称`AUTHOR_REPRO` |
 | SABRE | BF16、64–512 MB/rank、高/低skew、16–256 GPU | `TM-09`；先复现AllToAllv，再决定是否存在共同EP adapter |
 | fabric-lib | H7168、K8、decode<=128/prefill4096、FP8/BF16 | `TM-10`；两种token域分开，rank pooling改为rank-max |
 | SwiftEP | H7168、K8、2K/4K/8K、FP8/BF16 dispatch、BF16 combine | `TM-11`；H20作者轨与本机port分开 |
 | MoonEP | EP8、8192 token/rank、E384、H7168、K8、H'2048、BF16 | 单节点 H20 独立赛道 |
-| UltraEP | E256、K8、8192 token/rank、2 redundant/rank；公开约1.5/2/3 imbalance档 | 保存实际 trace与实现得到的精确ratio，不把“约”当真值 |
+| UltraEP | EP64 microbench：E256、K8、8192 token/rank、2 redundant/rank；另有8卡demo E32/K4/20 layers | 两个artifact分ID；保存实际trace/ratio，缩卡不冒充EP64 |
 | LPLB | E256、EP16、4 redundant/rank；cube/hypercube；另有EP16/32/64算法case | 先复现planner，再接入full-step |
 | EPLB | 2 layers×12 experts、16 replicas、2 nodes×4 GPU示例 | 只做功能anchor，不当性能workload |
 | UniEP | 冻结提交公开的单节点`EP=2/4/8`前向融合段 | `IS-01a`；保留Torch/CUDA reference与严格/bitwise assert；完整FWD/BWD为`IS-01b`/`API_GAP` |
@@ -186,10 +197,13 @@ UCCL 官方六类 testbed 的作者数据只做背景。只有本集群与其中
 
 把官方 shape 缩小到更少 GPU 可以用于脚手架和正确性，但 ID 必须带
 `DERIVED_SCALE_DOWN`，并在表中列出改变的 EP、node、topology 和 payload；它不属于
-作者结果复现。卡数不足时优先为 NCCL EP、SABRE、SwiftEP、fabric-lib 建 2/4-GPU
-compile/API/correctness harness；UniEP 只做公开`EP=2/4/8`前向融合段，完整FWD/BWD
-保留`API_GAP`。少卡时延只证明脚手架与趋势，
-不进入主性能结论。
+作者结果复现。卡数不足时优先为 NCCL EP、UCCL-EP、SABRE、SwiftEP、fabric-lib 建
+2/4-GPU compile/API/correctness harness；UniEP 只做公开`EP=2/4/8`前向融合段，完整
+FWD/BWD保留`API_GAP`。NCCL tag 的 stock `ep_test` 在2/4 ranks把
+`top_k=min(8,nRanks)`降成K2/K4，因此不能验证K8合同；少卡K8正确性应使用
+`ep_bench --top-k 8 --validate`或独立共同adapter，并明确其原生输出统计仍不是共同
+rank-max。UCCL的2卡intranode入口会运行自带调优，只能标功能smoke，不能把其输出当
+稳定benchmark。少卡时延只证明脚手架与趋势，不进入主性能结论。
 
 ### 6.3 真实 trace
 
@@ -313,10 +327,10 @@ chunk、hop penalty、pipeline stage等参数只有在代码确实存在、接�
 
 ### 12.2 竞品/组合
 
-- **UltraEP**：placement off/on × Rail off/best；分别报告placement、reroute、weight sync、grad reduce和token A2A。公开约1.5/2/3负载档以实际trace统计为准。
-- **MoonEP**：在官方允许的真实选项内测zero-copy、planning/permute/prefetch与MaxVio；`grad_reduce`另表，不能暗中加入作者通信图边界。
-- **UCCL-EP**：proxy threads、SM、QP/NIC分配；主表matched-resource，native-best使用equal tune budget。
-- **NCCL EP**：LL/HT严格分开；统一host/public API计时，不能沿用作者NCCL-host/DeepEP-Kineto混合边界。论文LL与later v0.1 release的HT优化/`>8` nodes修复分开归档，release当前不支持quantization。
+- **UltraEP**：placement off/on × Rail off/best；在共同源码基座上消融redundant-slot预算、direct/adaptive relay，并分别报告placement、reroute、weight sync、grad reduce的字节/显存和token A2A。公开约1.5/2/3负载档以实际trace统计为准。
+- **MoonEP**：在官方允许的真实选项内测zero-copy、B预算、planning/permute/prefetch与MaxVio；`grad_reduce`、full backward、静态内存/碎片收益另表，不能暗中加入作者通信图边界。
+- **UCCL-EP**：native 4 proxy threads/GPU；1/2/4 threads需要独立源码构建，因为冻结代码把线程数编译为常量。另冻结CPU affinity/NUMA、SM、QP/NIC mapping、inflight bytes/count；主表matched-resource，native-best使用equal tune budget。
+- **NCCL EP**：LL/HT严格分开；route/layout/handle create或update、`Dispatch(+Complete)`、`Combine(+Complete)`和one-time group/JIT分层。不能沿用作者NCCL-host/DeepEP-Kineto混合边界，也不能把tag `ep_bench`的跨rank mean或错误方向的kernel throughput min/max列当共同统计。论文LL与later v0.1 release的HT优化/`>8` nodes修复分开归档，release当前不支持quantization。
 - **SABRE**：高/低skew、块拆分、overlap开关；补严格reference与rank-max，保留作者回退点。
 - **fabric-lib**：NIC数、sharding/rotation、proxy core/NUMA；decode/prefill分panel。
 - **SwiftEP**：buffer fusion、SGL、QP并行、TMA offload；只有合并到同一冻结源码基座、共享`off/off`并有两个独立开关时才做SwiftEP×Rail 2×2，否则只报两个独立对比。
@@ -328,7 +342,7 @@ chunk、hop penalty、pipeline stage等参数只有在代码确实存在、接�
 
 | 编号 | 图/表 | 数据来源 | 关键编码 | 进入条件 |
 |---|---|---|---|---|
-| Fig. 1 | transport rank-max latency与speedup | `TM-01/03/04` | system × trace class，p50/p95/p99 + 95% CI | T3真实网络、correctness全过 |
+| Fig. 1 | transport rank-max latency与speedup | `TM-01/07/08` | 五系统 × trace class，p50/p95/p99 + 95% CI | T3真实网络、correctness全过；失败保留状态 |
 | Fig. 2 | latency vs 实际Rail imbalance | `TM-01/05/06` | x=per-Rail max/mean，y=rank-max latency | 有物理counter |
 | Fig. 3 | per-node/per-NIC heatmap | `TM-01/04` | before/after bytes与utilization | counter窗口闭合 |
 | Fig. 4 | peak Rail load vs extra local forwarding Pareto | Rail消融 | 点=mode/cap/shape | 有NIC+NVLink counters |
@@ -336,8 +350,8 @@ chunk、hop penalty、pipeline stage等参数只有在代码确实存在、接�
 | Fig. 6 | phase/time-line breakdown | representative profiles | planner/dispatch/forward/combine/compute | profile lineage完整 |
 | Fig. 7 | expert skew × Rail skew 2×2 | `PM-01` | placement主效应、Rail主效应、interaction | UltraEP组合跑通 |
 | Fig. 8 | scaling | `TM-05` | nodes/tokens/H/K/E/dtype逐轴 | 每点同trace合同 |
-| Fig. 9 | 直接系统同机比较 | `TM-07..11` 中实际可比子集 | API-rank-max；失败/不支持保留空位和状态 | DeepEP/Rail + ≥1个原生EP + ≥1个NIC-balancing系统同机通过 |
-| Fig. S1 | MoonEP单机组件 | `PS-01/02` | 作者rank-mean与共同rank-max分panel | 精确H20或明确port |
+| Fig. 9 | 扩展直接系统同机比较 | `TM-09..11` 中实际可比子集 | API-rank-max；失败/不支持保留空位和状态 | 主五系统之外的算法族至少一个同机通过或留下最终失败状态 |
+| Fig. S1 | MoonEP单机组件/整层 | `PS-01/02/02b` | 作者rank-mean与共同rank-max分panel；另列FWD/BWD/GEMM/memory | 精确H20或明确port |
 | Fig. S2 | SABRE/UBEP novelty边界 | 证据账本与`TM-09` | endpoint、调度粒度、hop、forwarding、API对照 | 不混跨硬件作者speedup |
 | Table 1 | 系统范围与第一手证据 | 证据账本 | transport/placement、single/multi、SHA | 无GPU要求 |
 | Table 2 | 环境与资源 | manifests | GPU/NIC/software/SM/QP/CPU/memory | 每个性能block必填 |
@@ -384,13 +398,15 @@ chunk、hop penalty、pipeline stage等参数只有在代码确实存在、接�
 执行顺序冻结为：
 
 1. 完成T0：统一manifest、raw schema、trace生成/replay、reference和失败状态。
-2. 卡数不足时完成T1/T2：为 NCCL EP、SABRE、SwiftEP、fabric-lib 建2/4-GPU
-   `DERIVED_SCALE_DOWN` build/API/correctness harness；UniEP做公开`EP=2/4/8`前向融合段，
-   不预注册不存在的完整backward入口；所有缩小结果不称作者复现。
+2. 卡数不足时完成T1/T2：为 NCCL EP、UCCL-EP、SABRE、SwiftEP、fabric-lib 建2/4-GPU
+   `DERIVED_SCALE_DOWN` build/API/correctness harness；NCCL少卡K8走带`--validate`的
+   `ep_bench`或共同adapter而不是会降K的stock `ep_test`；UniEP做公开`EP=2/4/8`
+   前向融合段，不预注册不存在的完整backward入口；所有缩小结果不称作者复现。
 3. 有8卡但只有单节点时跑T2，优先same-tree开销、DeepEP clean anchor，以及硬件支持的
    P0-R编译/正确性；Moon仅H20，Ultra只做功能/整层，UniEP只做公开前向融合段；
    不写多节点Rail收益。
-4. 有多节点8卡/节点时先跑`TM-01/03/04`，再按可构建性跑`TM-07..11`；每个系统均走
+4. 有多节点8卡/节点时先跑`TM-01/07/08`五系统共同主矩阵，再跑UCCL官方shape兼容
+   `TM-03/04`与`TM-09..11`扩展对手；每个系统均走
    correctness→stable timing→profile闭环，失败行不删除；再跑Ultra/SwiftEP组合。
 5. P0-E/P1的无代码系统不阻塞P0-R主线，但必须保留novelty/组合边界。
 
@@ -400,9 +416,10 @@ chunk、hop penalty、pipeline stage等参数只有在代码确实存在、接�
 
 - same-tree `off`、clean DeepEP v2 和 tuning-frozen RailBalance best 在同机共同口径下
   的完整正确性与 paired raw samples；
-- 外部可运行覆盖必须同时包含至少一个原生 EP 系统（NCCL EP、UCCL-EP 或
-  SwiftEP）和至少一个显式 NIC-balancing 系统（SABRE 或 fabric-lib）；
-  二者可以是不同系统，不得用一个通用 P0-R 名额替代两类证据；
+- UCCL-EP与NCCL EP都必须进入主表，或留下可审计的build/API/hardware最终失败状态；
+  UCCL本身已有QP round-robin和多NIC聚合，属于原生EP与显式NIC-balancing的交集，但
+  仍应尽量加入一个算法边界不同的NIC-balancing系统（SABRE或fabric-lib），不能用一项
+  模糊的通用P0-R结果代表全部类别；
 - 所有 P0-R 在论文冻结时都必须从通用`NOT_RUN`转为最终状态：
   `BENCHMARK_PASS`，或明确的build/correctness/API/hardware/environment失败状态；
 - balanced、Rail-hot、expert-skew × Rail-skew，以及至少一个真实或连续采样trace；

@@ -1,0 +1,592 @@
+{
+  "schema_version": 1,
+  "preflight_id": "rail-balance-competitor-local-v1",
+  "mode": "check_only",
+  "execution_contract": {
+    "gpu_launch_policy": "FORBIDDEN",
+    "build_execution_status": "NOT_RUN",
+    "future_build_executor_status": "NOT_IMPLEMENTED",
+    "performance_claim_allowed": false,
+    "checkout_write_policy": "FORBIDDEN",
+    "stage_root_policy": "FRESH_EMPTY_OWNER_0700_NO_SYMLINKS_NO_REUSE",
+    "source_materialization_policy": "PINNED_GIT_OBJECTS_ONLY"
+  },
+  "resources": {
+    "home_path": "/home/chen",
+    "home_hard_limit_bytes": 300000000000,
+    "artifact_budget_bytes": 8000000000,
+    "emergency_reserve_bytes": 1000000000,
+    "required_gpu_count": 8,
+    "expected_gpu_mapping": [
+      {
+        "index": 0,
+        "uuid": "GPU-34d06e04-4c63-02ac-12c5-cb4fbe14e78f"
+      },
+      {
+        "index": 1,
+        "uuid": "GPU-7c2d67e2-baa9-e52c-b14b-d323d689db49"
+      },
+      {
+        "index": 2,
+        "uuid": "GPU-43dd5b59-3ad6-d72e-4b30-97f70795d0d9"
+      },
+      {
+        "index": 3,
+        "uuid": "GPU-b2d439c0-5ad1-b1f4-b639-28da8cd5bf6a"
+      },
+      {
+        "index": 4,
+        "uuid": "GPU-60b40059-df23-0d8d-8583-9e3f8d746874"
+      },
+      {
+        "index": 5,
+        "uuid": "GPU-30413ecd-d9b3-ae05-d2d7-aa5bbe208cc2"
+      },
+      {
+        "index": 6,
+        "uuid": "GPU-100c4b75-c009-44ff-0a6d-79097e0ce112"
+      },
+      {
+        "index": 7,
+        "uuid": "GPU-b018d7a0-2075-e96a-33f9-d970485abb1f"
+      }
+    ]
+  },
+  "tools": [
+    {
+      "id": "du",
+      "path": "/usr/bin/du",
+      "realpath": "/usr/bin/du",
+      "sha256": "860235f0294d9c2185140f4ebab8301d5db8357fb195f7b79ad3b94b495763c7",
+      "owner_uid": 0
+    },
+    {
+      "id": "git",
+      "path": "/usr/bin/git",
+      "realpath": "/usr/bin/git",
+      "sha256": "2a8c18fbf43da9f692d75474c72bea9dfd796c260b0f3dfe456376abc3bbd668",
+      "owner_uid": 0
+    },
+    {
+      "id": "gxx",
+      "path": "/usr/bin/g++",
+      "realpath": "/usr/bin/x86_64-linux-gnu-g++-13",
+      "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
+      "owner_uid": 0
+    },
+    {
+      "id": "ibv_devices",
+      "path": "/usr/bin/ibv_devices",
+      "realpath": "/usr/bin/ibv_devices",
+      "sha256": "41732736a50a5a11c408ad295b9b6cf5a98e5431853a3ea6da9fd33b82127b9f",
+      "owner_uid": 0
+    },
+    {
+      "id": "make",
+      "path": "/usr/bin/make",
+      "realpath": "/usr/bin/make",
+      "sha256": "d78b8f1d099fbcfb6f2f49ab87223b9b68fb3956642f92d6ec6de812e8afa965",
+      "owner_uid": 0
+    },
+    {
+      "id": "mpicc",
+      "path": "/usr/bin/mpicc",
+      "realpath": "/usr/bin/opal_wrapper",
+      "sha256": "4f59e0ba9ae1fb3c3d3e8ae494eb8f0cd8ca563fb9f9b88f523e0ded9ee291af",
+      "owner_uid": 0
+    },
+    {
+      "id": "mpirun",
+      "path": "/usr/bin/mpirun",
+      "realpath": "/usr/bin/orterun",
+      "sha256": "e3a009cd4ab8b41ef23019df3a1388944294b330b7c51ad17be18a0120b36daa",
+      "owner_uid": 0
+    },
+    {
+      "id": "nvcc",
+      "path": "/usr/local/cuda/bin/nvcc",
+      "realpath": "/public/lianghong/shenjie/cuda128_full/bin/nvcc",
+      "sha256": "3aadf006f53dd288a372b2c4fabd46df1caa25aacd2e60964d7a26af25e91517",
+      "owner_uid": 0
+    },
+    {
+      "id": "nvidia_smi",
+      "path": "/usr/bin/nvidia-smi",
+      "realpath": "/usr/bin/nvidia-smi",
+      "sha256": "b6ea95ba54db6dd177bc463bb441853ba0f0d08bd978a1f169090c9b0505ce18",
+      "owner_uid": 0
+    },
+    {
+      "id": "python",
+      "path": "/home/chen/.cache/deepep-sjlgpt/bin/python",
+      "realpath": "/home/chen/.cache/deepep-sjlgpt/bin/python3.11",
+      "sha256": "8180848c5183d004dd3478f9522dca9076e77a09b1a4c9f3ef9a430749751ac6",
+      "owner_uid": 1004
+    },
+    {
+      "id": "readelf",
+      "path": "/usr/bin/readelf",
+      "realpath": "/usr/bin/x86_64-linux-gnu-readelf",
+      "sha256": "64c58e15274bbbb5153f31078e455e9e77ee5f51489e709bba5bb788ce9df2b0",
+      "owner_uid": 0
+    }
+  ],
+  "probes": {
+    "du_argv": [
+      "/usr/bin/du",
+      "-sx",
+      "--block-size=1",
+      "--",
+      "/home/chen"
+    ],
+    "gpu_mapping_argv": [
+      "/usr/bin/nvidia-smi",
+      "--query-gpu=index,uuid,name,memory.total,compute_mode,mig.mode.current",
+      "--format=csv,noheader,nounits"
+    ],
+    "gpu_process_argv": [
+      "/usr/bin/nvidia-smi",
+      "--query-compute-apps=gpu_uuid,pid,process_name,used_memory",
+      "--format=csv,noheader,nounits"
+    ],
+    "topology_argv": [
+      "/usr/bin/nvidia-smi",
+      "topo",
+      "-m"
+    ],
+    "ibv_devices_argv": [
+      "/usr/bin/ibv_devices"
+    ]
+  },
+  "network": {
+    "nics": [
+      {
+        "name": "mlx5_bond_0",
+        "topology_label": "NIC0",
+        "port": 1,
+        "state": "4: ACTIVE",
+        "physical_state": "5: LinkUp",
+        "rate": "200 Gb/sec (2X NDR)",
+        "link_layer": "Ethernet",
+        "pci_bdf": "0000:0d:00.0",
+        "numa_node": 0,
+        "vendor": "0x15b3",
+        "device": "0x1021"
+      },
+      {
+        "name": "mlx5_bond_1",
+        "topology_label": "NIC1",
+        "port": 1,
+        "state": "4: ACTIVE",
+        "physical_state": "5: LinkUp",
+        "rate": "200 Gb/sec (2X NDR)",
+        "link_layer": "Ethernet",
+        "pci_bdf": "0000:5a:00.0",
+        "numa_node": 0,
+        "vendor": "0x15b3",
+        "device": "0x1021"
+      },
+      {
+        "name": "mlx5_bond_2",
+        "topology_label": "NIC2",
+        "port": 1,
+        "state": "4: ACTIVE",
+        "physical_state": "5: LinkUp",
+        "rate": "200 Gb/sec (2X NDR)",
+        "link_layer": "Ethernet",
+        "pci_bdf": "0000:60:00.0",
+        "numa_node": 0,
+        "vendor": "0x15b3",
+        "device": "0x1021"
+      },
+      {
+        "name": "mlx5_bond_3",
+        "topology_label": "NIC3",
+        "port": 1,
+        "state": "4: ACTIVE",
+        "physical_state": "5: LinkUp",
+        "rate": "200 Gb/sec (2X NDR)",
+        "link_layer": "Ethernet",
+        "pci_bdf": "0000:67:00.0",
+        "numa_node": 0,
+        "vendor": "0x15b3",
+        "device": "0x1021"
+      },
+      {
+        "name": "mlx5_bond_4",
+        "topology_label": "NIC4",
+        "port": 1,
+        "state": "4: ACTIVE",
+        "physical_state": "5: LinkUp",
+        "rate": "200 Gb/sec (2X NDR)",
+        "link_layer": "Ethernet",
+        "pci_bdf": "0000:99:00.0",
+        "numa_node": 1,
+        "vendor": "0x15b3",
+        "device": "0x1021"
+      },
+      {
+        "name": "mlx5_bond_5",
+        "topology_label": "NIC5",
+        "port": 1,
+        "state": "4: ACTIVE",
+        "physical_state": "5: LinkUp",
+        "rate": "200 Gb/sec (2X NDR)",
+        "link_layer": "Ethernet",
+        "pci_bdf": "0000:b9:00.0",
+        "numa_node": 1,
+        "vendor": "0x15b3",
+        "device": "0x1021"
+      },
+      {
+        "name": "mlx5_bond_6",
+        "topology_label": "NIC6",
+        "port": 1,
+        "state": "4: ACTIVE",
+        "physical_state": "5: LinkUp",
+        "rate": "200 Gb/sec (2X NDR)",
+        "link_layer": "Ethernet",
+        "pci_bdf": "0000:c9:00.0",
+        "numa_node": 1,
+        "vendor": "0x15b3",
+        "device": "0x1021"
+      },
+      {
+        "name": "mlx5_bond_7",
+        "topology_label": "NIC7",
+        "port": 1,
+        "state": "4: ACTIVE",
+        "physical_state": "5: LinkUp",
+        "rate": "200 Gb/sec (2X NDR)",
+        "link_layer": "Ethernet",
+        "pci_bdf": "0000:da:00.0",
+        "numa_node": 1,
+        "vendor": "0x15b3",
+        "device": "0x1021"
+      }
+    ],
+    "ibv_expected_devices": [
+      "mlx5_bond_0",
+      "mlx5_bond_1",
+      "mlx5_bond_2",
+      "mlx5_bond_3",
+      "mlx5_bond_4",
+      "mlx5_bond_5",
+      "mlx5_bond_6",
+      "mlx5_bond_7"
+    ],
+    "ibv_devinfo_execution_status": "NOT_RUN"
+  },
+  "competitors": [
+    {
+      "id": "nccl-ep",
+      "checkout": "/home/chen/workspace/infra/nccl-ep-v0.1.0",
+      "commit": "63cf786b015b2b6bff6cf263461621acf584bd18",
+      "source_tree": "22f0c4ad56f505c4b47dd7a8f0a3c4f93efed4ce",
+      "subtree": "contrib/nccl_ep",
+      "subtree_tree": "a417b4e0b427bd8b2a815796d19be0be34eba48c",
+      "subtree_content_sha256": "0bfef077ebd863d7d4e01833779082bd4217bf2bf9571bf8b975afe3202b5fac",
+      "build_source_policy": "PINNED_GIT_OBJECTS_TO_FRESH_STAGE",
+      "source_materialization": {
+        "method": "PINNED_GIT_OBJECTS_ONLY",
+        "paths": [
+          "."
+        ],
+        "destination": "{stage_root}/nccl-ep/source-copy",
+        "expected_content_sha256": "d5786299223487c99506997c8caf6e093ffc9fd1659e41a7601c4279164d705b"
+      },
+      "future_build_stages": [
+        {
+          "id": "nccl-ep-core",
+          "cwd": "{stage_root}/nccl-ep",
+          "argv": [
+            "/usr/bin/make",
+            "-C",
+            "{stage_root}/nccl-ep/source-copy",
+            "-j8",
+            "src.build",
+            "BUILDDIR={stage_root}/nccl-ep/nccl-core",
+            "CUDA_HOME=/usr/local/cuda",
+            "CXX=/usr/bin/g++",
+            "VERBOSE=1",
+            "NVCC_GENCODE=-gencode=arch=compute_90,code=sm_90"
+          ],
+          "gpu_query_guard": null,
+          "env": {
+            "CUDA_VISIBLE_DEVICES": "",
+            "HOME": "{stage_root}/nccl-ep/home",
+            "LANG": "C",
+            "LC_ALL": "C",
+            "PATH": "/usr/local/cuda/bin:/usr/bin:/bin",
+            "TMPDIR": "{stage_root}/nccl-ep/tmp"
+          },
+          "depends_on": [],
+          "expected_outputs": [
+            "{stage_root}/nccl-ep/nccl-core/include/nccl.h",
+            "{stage_root}/nccl-ep/nccl-core/lib/libnccl.so.2.30.7"
+          ]
+        },
+        {
+          "id": "nccl-ep-correctness",
+          "cwd": "{stage_root}/nccl-ep",
+          "argv": [
+            "/usr/bin/make",
+            "-C",
+            "{stage_root}/nccl-ep/source-copy/contrib/nccl_ep",
+            "-j8",
+            "ep_test",
+            "ep_bench",
+            "BUILDDIR={stage_root}/nccl-ep/nccl-ep",
+            "NCCL_HOME={stage_root}/nccl-ep/nccl-core",
+            "NCCL_EP_BUILDDIR={stage_root}/nccl-ep/nccl-ep",
+            "MPI=1",
+            "MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi",
+            "CUDA_HOME=/usr/local/cuda",
+            "CXX=/usr/bin/g++",
+            "VERBOSE=1",
+            "NVCC_GENCODE=-gencode=arch=compute_90,code=sm_90"
+          ],
+          "gpu_query_guard": null,
+          "env": {
+            "CUDA_VISIBLE_DEVICES": "",
+            "HOME": "{stage_root}/nccl-ep/home",
+            "LANG": "C",
+            "LC_ALL": "C",
+            "PATH": "/usr/local/cuda/bin:/usr/bin:/bin",
+            "TMPDIR": "{stage_root}/nccl-ep/tmp"
+          },
+          "depends_on": [
+            "nccl-ep-core"
+          ],
+          "expected_outputs": [
+            "{stage_root}/nccl-ep/nccl-ep/include/nccl_ep.h",
+            "{stage_root}/nccl-ep/nccl-ep/lib/libnccl_ep.a",
+            "{stage_root}/nccl-ep/nccl-ep/lib/libnccl_ep.so",
+            "{stage_root}/nccl-ep/nccl-ep/lib/libnccl_ep.so.0",
+            "{stage_root}/nccl-ep/nccl-ep/lib/libnccl_ep.so.0.1.0",
+            "{stage_root}/nccl-ep/nccl-ep/test/nccl_ep/ep_bench",
+            "{stage_root}/nccl-ep/nccl-ep/test/nccl_ep/ep_test"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "uccl-ep",
+      "checkout": "/home/chen/workspace/infra/uccl-ep-61ee4240",
+      "commit": "61ee42402819cabba3ac2a56dd4addec3363976c",
+      "source_tree": "0a9acaafb8fd24cde14b76ee01f0ab5a1c4c4161",
+      "subtree": "ep",
+      "subtree_tree": "a1c4179b18024bf8d5c47c818e9844d45b43f409",
+      "subtree_content_sha256": "d248f24f4c259f27a0dabe1bd8a8317c1682ea4c35adfe61ea83b2a1447ae8bb",
+      "build_source_policy": "PINNED_GIT_OBJECTS_TO_FRESH_STAGE",
+      "source_materialization": {
+        "method": "PINNED_GIT_OBJECTS_ONLY",
+        "paths": [
+          "ep",
+          "include"
+        ],
+        "destination": "{stage_root}/uccl/source-copy",
+        "expected_content_sha256": "0c4f219e052c49b16b93c6b1cc3b083fabc5517331eaacc53d1f63701531f368"
+      },
+      "future_build_stages": [
+        {
+          "id": "uccl-ep-extension",
+          "cwd": "{stage_root}/uccl/source-copy/ep",
+          "argv": [
+            "/usr/bin/make",
+            "-C",
+            "{stage_root}/uccl/source-copy/ep",
+            "-j8",
+            "all",
+            "PYTHON=/home/chen/.cache/deepep-sjlgpt/bin/python",
+            "CUDA_PATH=/usr/local/cuda",
+            "DETECTED_SM=90",
+            "SM=90",
+          "GPU_NAME=NVIDIA L20X",
+            "EFA_HOME=/nonexistent",
+            "USE_DMABUF=0",
+            "USE_LIBFABRIC_CXI=0",
+            "USE_INTEL_RDMA_NIC=0",
+            "PER_EXPERT_BATCHING=0",
+            "MAX_NUM_GPUS=8",
+            "NUM_MAX_NVL_PEERS=8"
+          ],
+          "gpu_query_guard": {
+            "path": "{stage_root}/uccl/toolshim/nvidia-smi",
+            "content_hex": "23212f62696e2f73680a657869742039370a",
+            "sha256": "d3b5f42d8a63f02454ce59ec36d72b0cb90e0f02df8b3f1793c6a7d85102542e",
+            "mode": 365,
+            "expected_exit_code": 97
+          },
+          "env": {
+            "CUDA_VISIBLE_DEVICES": "",
+            "HOME": "{stage_root}/uccl/home",
+            "LANG": "C",
+            "LC_ALL": "C",
+            "PATH": "{stage_root}/uccl/toolshim:/usr/local/cuda/bin:/usr/bin:/bin",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONPATH": "{stage_root}/uccl/python_deps",
+            "TMPDIR": "{stage_root}/uccl/tmp"
+          },
+          "depends_on": [],
+          "expected_outputs": [
+            "{stage_root}/uccl/source-copy/ep/ep.cpython-311-x86_64-linux-gnu.so"
+          ]
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "id": "common-cuda-header",
+      "competitor_id": "common",
+      "kind": "file",
+      "required": true,
+      "visibility_paths": [
+        "/usr/local/cuda/include/cuda.h"
+      ],
+      "missing_status": "BLOCKED_DEPENDENCY"
+    },
+    {
+      "id": "common-nvcc",
+      "competitor_id": "common",
+      "kind": "executable",
+      "required": true,
+      "visibility_paths": [
+        "/usr/local/cuda/bin/nvcc"
+      ],
+      "missing_status": "BLOCKED_DEPENDENCY"
+    },
+    {
+      "id": "common-python",
+      "competitor_id": "common",
+      "kind": "executable",
+      "required": true,
+      "visibility_paths": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python"
+      ],
+      "missing_status": "BLOCKED_DEPENDENCY"
+    },
+    {
+      "id": "nccl-mpi-header",
+      "competitor_id": "nccl-ep",
+      "kind": "file",
+      "required": true,
+      "visibility_paths": [
+        "/usr/lib/x86_64-linux-gnu/openmpi/include/mpi.h"
+      ],
+      "missing_status": "BLOCKED_DEPENDENCY"
+    },
+    {
+      "id": "nccl-mpi-library",
+      "competitor_id": "nccl-ep",
+      "kind": "file",
+      "required": true,
+      "visibility_paths": [
+        "/usr/lib/x86_64-linux-gnu/openmpi/lib/libmpi.so"
+      ],
+      "missing_status": "BLOCKED_DEPENDENCY"
+    },
+    {
+      "id": "uccl-ibverbs-header",
+      "competitor_id": "uccl-ep",
+      "kind": "file",
+      "required": true,
+      "visibility_paths": [
+        "/usr/include/infiniband/verbs.h"
+      ],
+      "missing_status": "BLOCKED_DEPENDENCY"
+    },
+    {
+      "id": "uccl-ibverbs-library",
+      "competitor_id": "uccl-ep",
+      "kind": "file",
+      "required": true,
+      "visibility_paths": [
+        "/usr/lib/x86_64-linux-gnu/libibverbs.so"
+      ],
+      "missing_status": "BLOCKED_DEPENDENCY"
+    },
+    {
+      "id": "uccl-libnl-header",
+      "competitor_id": "uccl-ep",
+      "kind": "file",
+      "required": true,
+      "visibility_paths": [
+        "/usr/include/libnl3/netlink/netlink.h"
+      ],
+      "missing_status": "BLOCKED_DEPENDENCY"
+    },
+    {
+      "id": "uccl-libnl-library",
+      "competitor_id": "uccl-ep",
+      "kind": "file",
+      "required": true,
+      "visibility_paths": [
+        "/usr/lib/x86_64-linux-gnu/libnl-3.so"
+      ],
+      "missing_status": "BLOCKED_DEPENDENCY"
+    },
+    {
+      "id": "uccl-libnl-route-library",
+      "competitor_id": "uccl-ep",
+      "kind": "file",
+      "required": true,
+      "visibility_paths": [
+        "/usr/lib/x86_64-linux-gnu/libnl-route-3.so"
+      ],
+      "missing_status": "BLOCKED_DEPENDENCY"
+    },
+    {
+      "id": "uccl-nanobind",
+      "competitor_id": "uccl-ep",
+      "kind": "file",
+      "required": true,
+      "visibility_paths": [
+        "/home/chen/.cache/deepep-sjlgpt/lib/python3.11/site-packages/nanobind/__init__.py"
+      ],
+      "missing_status": "BLOCKED_DEPENDENCY_NANOBIND"
+    },
+    {
+      "id": "uccl-numa-header",
+      "competitor_id": "uccl-ep",
+      "kind": "file",
+      "required": true,
+      "visibility_paths": [
+        "/usr/include/numa.h"
+      ],
+      "missing_status": "BLOCKED_DEPENDENCY"
+    },
+    {
+      "id": "uccl-numa-library",
+      "competitor_id": "uccl-ep",
+      "kind": "file",
+      "required": true,
+      "visibility_paths": [
+        "/usr/lib/x86_64-linux-gnu/libnuma.so"
+      ],
+      "missing_status": "BLOCKED_DEPENDENCY"
+    },
+    {
+      "id": "uccl-torch-headers",
+      "competitor_id": "uccl-ep",
+      "kind": "directory",
+      "required": true,
+      "visibility_paths": [
+        "/home/chen/.cache/deepep-sjlgpt/lib/python3.11/site-packages/torch/include"
+      ],
+      "missing_status": "BLOCKED_DEPENDENCY"
+    },
+    {
+      "id": "uccl-torch-package",
+      "competitor_id": "uccl-ep",
+      "kind": "directory",
+      "required": true,
+      "visibility_paths": [
+        "/home/chen/.cache/deepep-sjlgpt/lib/python3.11/site-packages/torch"
+      ],
+      "missing_status": "BLOCKED_DEPENDENCY"
+    }
+  ]
+}

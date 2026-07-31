@@ -8,8 +8,8 @@ GitHub fork：`git@github.com:CyberSecurityErial/DeepEP.git`
 
 当前分支：`feat/rail-balance-hop-aware`
 
-最近已发布检查点：`be4a69b`；本次继续补齐 source-round authoring入口（恢复时实际
-HEAD以 `git rev-parse HEAD` 为准）
+最近已发布检查点：`6103180`；本次继续补齐 UCCL/NCCL竞品静态预检与论文实验基础设施
+（恢复时实际 HEAD以 `git rev-parse HEAD` 为准）
 
 原型基线：`feat/rail-balance-prototype` / `5199a04`
 
@@ -22,16 +22,18 @@ source round、4×2 vnode复验和真实多机 Rail/Gin 仍是门槛。**
 
 ## 0. 一屏状态
 
-- `be4a69b` 相对 prototype `5199a04` 有 48 个 hop-aware提交。核心 planner/checkpoint
+- `6103180` 相对 prototype `5199a04` 有 49 个 hop-aware提交。核心 planner/checkpoint
   已提交为 `286da0a`，benchmark证据门禁为 `771fcc6`，CUDA harness监督契约为
   `0f38688`，fail-closed campaign/formal source-round控制面为 `448a727`，竞品证据与
-  论文口径为 `be4a69b`。后续提交会继续增加计数，恢复时必须现场查询 Git。
-- 当前没有 `csrc/`、`deep_ep/include/` 或核心 CUDA 测试的未提交改动。工作树中的
-  campaign/formal-round执行控制面已经提交；本次新增的是 CPU-only manifest preparer、
-  合同测试和文档，不能用旧的“9 个 dirty实现文件”清单判断是否丢改动。
+  论文口径为 `be4a69b`，source-round manifest freezer为`6103180`。后续提交会继续增加
+  计数，恢复时必须现场查询 Git。
+- 当前没有 `csrc/`、`deep_ep/include/` 或核心 CUDA 测试的未提交改动。campaign、
+  formal-round执行控制面和 CPU-only source-round preparer已经提交；本次新增的是
+  CPU-only competitor preflight、合同测试和论文证据文档，不能用旧的 dirty实现文件清单
+  判断是否丢改动。
 - 交接时没有遗留 benchmark、sanitizer 或构建进程；2026-08-01 takeover resource gate
   观察到用户 Qwen占 GPU0–1，短算子也曾瞬时占满8卡，均不得终止或干扰。
-- 分支已推送并跟踪 `fork/feat/rail-balance-hop-aware`；`be4a69b` 时本地/远端
+- 分支已推送并跟踪 `fork/feat/rail-balance-hop-aware`；`6103180` 时本地/远端
   ahead/behind为 `0/0`。新提交后仍须重新 push并现场核对。
 - `off` 默认路径和 `legacy_exact` 必须保持不变。
 - Python host capability 与编译 capability 仍为 false；不得因为 vnode 通过而解锁。
@@ -457,21 +459,23 @@ formal source-round live-executor CPU contracts          16/16 PASS
 terminal合同下最近的 clean-tree finalized scaffold：
 
 ```text
-run: takeover-scaffold-20260801-02
-source: be4a69b9e363614373b1298d94e338a340fdcfa0, clean pre/post
+run: takeover-scaffold-20260801-03
+source: 6103180323e798c1c146ce54d719b0912e097359, clean pre/post
 status/scope: scaffold_only/scaffold_only
 reasons: Qwen PID 3047501,3047502 + explicit scaffold-only
 CPU gates: 6/6 PASS
 exclusive-8GPU stages skipped: 19
 GPU attempts/process starts: 0/0
-artifact: 128,319 bytes
-/home pre/post: 271,565,897,728 / 271,567,323,136 bytes
+artifact: 115,814 bytes before result
+/home pre/post: 271,835,348,992 / 271,836,360,704 bytes
 result.json sha256:
-b2c12aba2afa55a3aa734c55b2d4c3aab7c136902ceee78e089b555fd3424d04
+a2ecd3797dcc2b42d0d84dd190765c7017bd4f579d20c925ea7f1778c5cb5c49
 SHA256SUMS sha256:
-4b51d963430d63c756f45378f4105e8a4bc4e8df1e8faa4daca9e2ac05a2a755
+cf203463ea005eaa883ef7f0226f308c13217a46f3ab5e154427656619735134
 FINALIZED.json sha256:
-aef4a7bec4d2c343c49da6c28e7ba1ff853abc35cd57075f338f8561480f8db6
+47d26d62cc4bace8f24717d030c563ad7112ca4fbb7f2703e7efe7df4e4a8009
+terminal Leaderboard sha256:
+e56382a8cc18487dbda28a3939d1ce725abf4fae8348dd82beca7b021de4805f
 ```
 
 全部 SHA条目已重算一致。因为是 scaffold-only，terminal record正确写出
@@ -495,8 +499,17 @@ f03a48ad989ec98cea33488805296bd95ea153f195df18bb484f70607c99ad38
 
 这份 `-01` artifact 早于终端提交合同，缺少 `FINALIZED.json`。其 hash 只保留历史
 provenance；formal evaluator 必须拒绝，不能把它当作当前协议合规证明、正式轮证据或
-晋升依据。`-02` 已补上当时 clean HEAD的 finalized证据；新增 preparer提交后还要再跑
-新的 clean scaffold，不能把 `-02` 的 source hash套到新 HEAD。
+晋升依据。`-02` 只绑定旧的`be4a69b`；`-03` 已补上 clean `6103180` 的 finalized证据。
+任何后续代码提交仍须新跑 clean scaffold，不能套用旧 source hash。
+
+UCCL/NCCL的当前 CPU-only静态预检为
+`.cache/rail_balance/competitors/preflight-20260801-08/result.json`，mode `0444`，SHA256
+`8e46f41c081e7838aecfaf7a50c6a64ef4d3b73e23f9d872afb454f2d3e907d5`。它绑定 program
+`3ed5e463...`、test `c17e5d3b...`、manifest `8bea6de8...`、root-owned系统 Python和
+113文件 runtime closure。结果为`BLOCKED_DEPENDENCY_NANOBIND`并观察到Qwen PID
+`3047501/3047502`导致`WAITING_GPU`；build、correctness、benchmark、profile和GPU
+kernel均为`NOT_RUN`，future executor为`NOT_IMPLEMENTED`。这只是静态基础设施证据，
+不证明RDMA runtime ready，也不是竞品结果；`-01`至`-07`均已 superseded。
 
 协议、可复现命令和运行时 Leaderboard 见
 [`HOP_AWARE_EXPERIMENT_PROTOCOL.md`](HOP_AWARE_EXPERIMENT_PROTOCOL.md) 与
@@ -594,18 +607,20 @@ one_hop/adaptive/off 对照。下一个 Codex 必须先建立这个真值，再�
 4. `448a727`：campaign supervisor、formal coordinator/evaluator与持有整轮 lease 的
    source-round executor；
 5. `be4a69b`：竞品第一手证据、论文实验矩阵、协议与交接文档；分支已推送 fork；
-6. CPU-only source-round preparer把 human spec与现场 Git身份冻结成 immutable manifest/
-   plan，不创建候选、不启动 GPU；其 contracts为 10/10；
+6. `6103180`：CPU-only source-round preparer把 human spec与现场 Git身份冻结成 immutable
+   manifest/plan，不创建候选、不启动 GPU；其 contracts为 10/10；
 7. 最终实现树 force build、20/20 planner、CPU/API/codegen全套与四类 sanitizer均通过；
 8. supervisor 20/20、preparer 10/10、coordinator 9/9、evaluator 19/19、executor 16/16
    CPU contracts，Ruff、`py_compile` 与静态审计均通过；
-9. `takeover-scaffold-20260801-02` 在 clean `be4a69b` 上 finalized，CPU 6/6且 GPU启动
-   0 次；它是 scaffold证据，不是性能证据。
+9. `takeover-scaffold-20260801-03` 在 clean `6103180` 上 finalized，CPU 6/6且 GPU启动
+   0 次；它是 scaffold证据，不是性能证据；
+10. UCCL/NCCL check-only静态预检 26/26 CPU contracts通过；`preflight-20260801-08`
+    fail-close于缺失 nanobind和非独占8卡，竞品 build/GPU仍为`NOT_RUN`。
 
 仍需完成：
 
-1. 提交 source-round preparer与本轮文档，clean tree再跑一份新的 finalized scaffold，
-   记录精确 hash并 push fork；
+1. 提交 competitor preflight与本轮论文证据文档，clean tree再跑一份新的 finalized
+   scaffold，记录精确 hash并 push fork；
 2. 只有完整 8 卡均空闲时，先重跑两个 4×2 vnode；
 3. 从当前最快且完全正确的 sealed parent生成 2～4 个单变量 CUDA候选，以
    `prepare_rail_balance_source_round.py` 冻结 source manifest/plan，
@@ -865,14 +880,18 @@ fork   = CyberSecurityErial/DeepEP
 
 - `fork/feat/rail-balance-prototype`；
 - `fork/review/rail-balance-prototype`；
-- prototype archive。
+- prototype archive；
+- `fork/feat/rail-balance-hop-aware`，本地分支已设置为其 upstream。
 
-截至本文档冻结时，远端还没有 `feat/rail-balance-hop-aware`。本地提交和 clean scaffold
-完成后执行：
+`6103180` 检查点已推送且当时 ahead/behind 为 `0/0`。每个后续本地提交及 clean
+scaffold文档更新完成后执行：
 
 ```bash
-git push -u fork feat/rail-balance-hop-aware
+git push fork feat/rail-balance-hop-aware
+git rev-list --left-right --count fork/feat/rail-balance-hop-aware...HEAD
 ```
+
+只有第二条输出 `0 0` 才能写“已发布”；恢复时仍须现场核对，不能套用旧检查点状态。
 
 用户说明 `humor`、`WenhaoHe02`、`CyberSecurityErial` 都是自己团队成员，review 时不要把
 他们的提交当作第三方可疑来源。

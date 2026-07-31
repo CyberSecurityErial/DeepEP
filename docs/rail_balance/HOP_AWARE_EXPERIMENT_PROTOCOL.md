@@ -1,6 +1,6 @@
 # Hop-aware RailBalance 实验协议与无人值守脚手架
 
-状态：2026-08-01 bootstrap v3。单 worktree campaign 已能在 8 卡不满足时
+状态：2026-08-01 bootstrap v4。单 worktree campaign 已能在 8 卡不满足时
 fail-close 为 `scaffold_only`，并保存固定命令、CPU gate、环境、失败与 artifact hash。
 另有 stdlib-only 的 formal source-round preparer、coordinator、evaluator和整轮 live
 executor：CUDA源码候选必须来自独立 clean worktree，只能在相同算法配置下与同一个
@@ -259,20 +259,22 @@ PYTHONPATH="$PWD/tests/elastic:$PWD" \
 当前 terminal合同下的 clean-tree finalized记录为：
 
 ```text
-run_id: takeover-scaffold-20260801-02
-source: be4a69b9e363614373b1298d94e338a340fdcfa0, clean pre/post
+run_id: takeover-scaffold-20260801-03
+source: 6103180323e798c1c146ce54d719b0912e097359, clean pre/post
 status/scope: scaffold_only/scaffold_only
 reasons: Qwen PID 3047501,3047502; explicit scaffold-only
 CPU gates: 6/6 PASS
 exclusive-8GPU stages: 19 skipped; GPU attempts/process starts: 0/0
-artifact bytes: 128,319
-/home pre/post: 271,565,897,728 / 271,567,323,136 bytes
+artifact bytes before result: 115,814
+/home pre/post: 271,835,348,992 / 271,836,360,704 bytes
 result.json sha256:
-b2c12aba2afa55a3aa734c55b2d4c3aab7c136902ceee78e089b555fd3424d04
+a2ecd3797dcc2b42d0d84dd190765c7017bd4f579d20c925ea7f1778c5cb5c49
 SHA256SUMS sha256:
-4b51d963430d63c756f45378f4105e8a4bc4e8df1e8faa4daca9e2ac05a2a755
+cf203463ea005eaa883ef2f0226f308c13217a46f3ab5e154427656619735134
 FINALIZED.json sha256:
-aef4a7bec4d2c343c49da6c28e7ba1ff853abc35cd57075f338f8561480f8db6
+47d26d62cc4bace8f24717d030c563ad7112ca4fbb7f2703e7efe7df4e4a8009
+terminal Leaderboard entry:
+e56382a8cc18487dbda28a3939d1ce725abf4fae8348dd82beca7b021de4805f
 ```
 
 全部 `SHA256SUMS` 条目已重算一致。`FINALIZED.json` 的
@@ -329,3 +331,53 @@ token发送任务，fabric-lib/UCCL-EP等也已有多 NIC 分配。因此 novelt
 
 在 competitor commit、同机硬件、route hash、dtype、API 边界、rank-max、raw samples 和
 正确性全部冻结前，只能写“待复现 anchor”，不能写“已打平/超过”。
+
+### 8.1 本机竞品静态预检
+
+UCCL-EP 与 NCCL EP 的本机入口先经过一个 stdlib-only、check-only 预检。脚本禁止
+直接执行；唯一冻结启动方式先对 loader 注入变量赋空，再用 root-owned `env -i`建立
+五键环境，最后由 root-owned系统 Python关闭环境注入、`site`/`.pth`、用户 site和字节码：
+
+```bash
+LD_PRELOAD= LD_AUDIT= LD_LIBRARY_PATH= GCONV_PATH= LOCPATH= \
+/usr/bin/env -i CUDA_VISIBLE_DEVICES= HOME=/nonexistent LANG=C LC_ALL=C \
+  PATH=/usr/bin:/bin /usr/bin/python3 -I -S -B \
+  /home/chen/workspace/source_code/DeepEP/tests/elastic/rail_balance_competitor_preflight.py \
+  --manifest /home/chen/workspace/source_code/DeepEP/tests/elastic/experiments/rail_balance_competitor_local_v1.json \
+  --output /home/chen/workspace/source_code/DeepEP/.cache/rail_balance/competitors/<fresh-run-id>/result.json
+```
+
+manifest逐字冻结工具 realpath/SHA/owner、两个 detached checkout的 Git身份与完整 future
+build-input closure、future argv/env/output、依赖路径、8卡 UUID/静态事实、NV18/PIX拓扑、
+8个 NIC的 BDF/NUMA/link facts以及 decimal 300 GB预算。两个将来构建都只能从 pinned Git
+objects物化到全新、空、owner-only `0700` stage；不得从 working tree复制，也不得在冻结
+checkout内输出。UCCL的 GNU Make解析期 `nvidia-smi` 由精确哈希的 deny shim截断。
+
+当前权威静态 artifact是：
+
+```text
+path: .cache/rail_balance/competitors/preflight-20260801-08/result.json
+mode/sha256: 0444 / 8e46f41c081e7838aecfaf7a50c6a64ef4d3b73e23f9d872afb454f2d3e907d5
+program sha256: 3ed5e4630d967c737438b5da239d9059577ad2167564f6c649621c077ff529e8
+test/manifest sha256: c17e5d3bd5ed250a91f864711dbe39a2c5eda53de4f17da3ee7a0c6855495cd3 / 8bea6de8b0fdb33ae3b1e6792b86d585ac4cbea70b4579c3d274988d5f9f5792
+system Python sha256: 1643dacd9feaedc58f3cc581e4d22577dfe25c09b10282936186ccf0f2e61118
+runtime closure: 112 root-owned files + pinned program (113 total), 1de0e6b561fdf2524cec6ee5c2fc4a70edd01b140000eee285c640afc82e3287
+launch: PINNED_ARGV_EMPTY_ENV; runtime capture: PINNED_SUBPROCESS_CAPTURE
+status: BLOCKED_DEPENDENCY_NANOBIND
+observations: BLOCKED_DEPENDENCY_NANOBIND, WAITING_GPU
+Qwen PIDs: 3047501,3047502
+/home used/projected: 272,008,781,824 / 281,008,781,824 bytes
+source/topology/NIC/ibv_devices/static GPU mapping: PASS
+build/GPU/performance: NOT_RUN / 0 attempts / false
+future build executor: NOT_IMPLEMENTED
+```
+
+`preflight-20260801-01`至`-07`已被`-08`替代，均为
+`SUPERSEDED_NON_AUTHORITATIVE`，消费者不得 glob选最新文件。即使未来得到
+`STATIC_CHECKS_PASSED_NO_BUILD_AUTHORITY`，它也只表示点时静态事实，没有 GPU lease，
+不证明 verbs context/RDMA runtime可打开，更不授权 build。实现 future executor之前还
+必须冻结传递工具链和 Python/header/library内容闭包，并在 fresh stage重算物化哈希、
+重查磁盘/source/GPU；当前缺少 nanobind，所以本机竞品仍未编译、未正确性对拍、未测速。
+launch/runtime closure是 root-owned OS信任根下的进程内证据，不是对 hostile parent、
+ptrace peer、kernel或同 UID主动篡改者的远程证明；这与本项目其余用户态实验门禁的
+协作式威胁模型一致。

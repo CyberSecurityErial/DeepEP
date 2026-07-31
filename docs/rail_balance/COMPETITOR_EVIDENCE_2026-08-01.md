@@ -26,11 +26,11 @@
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|
 | UltraEP | 精确负载驱动的专家复制、token reroute、权重/梯度搬运 | 作用层不同；是否可组合且收益正交必须由2×2实验验证 | 有 | 有 | 有 | 有 | 未公开 | 有 | 否 |
 | MoonEP | 单机动态冗余专家、静态 shape、零拷贝通信 | 截止日已审计入口仅单机；不是当前多节点 Rail 对手 | 无独立论文 | 有 | 有 | 有 | 未公开 | 有但落后一提交 | 否 |
-| NCCL EP | NCCL Device API 原生 LL/HT dispatch/combine | 直接通信对手；HT同样含节点内聚合和跨节点阶段 | 有 | 有 | 有 | 有 | 未公开 | 无 | 否 |
+| NCCL EP | NCCL Device API 原生 LL/HT dispatch/combine | 直接通信对手；HT同样含节点内聚合和跨节点阶段 | 有 | 有 | 有 | 有 | 未公开 | 有，冻结tag | 否 |
 | SABRE | skew-aware AllToAllv proxy 分流、块拆分和节点内重排 | 与 proxy/NIC 分流及节点内转发有明确算法重叠 | 有 | 有 | 有 | 有 | 未公开 | 无 | 否 |
 | fabric-lib | CPU proxy、多 NIC sharding/rotation | 直接多 NIC/Rail 对手 | 有 | 有 | 有 | 有 | 未公开 | 无 | 否 |
 | SwiftEP | DeepEP buffer fusion、SGL、多 QP、TMA 节点内搬运 | 直接通信对手；与 Rail 的组合空间待共享源码基座验证 | 有 | 分支/开放 PR | 有 | 有 | 未公开 | 无 | 否 |
-| UCCL-EP | 可移植的 EP 通信传输栈与 CPU proxy | 直接通信对手 | 有 | 有 | 有 | 有 | 未公开 | 有但不是冻结 SHA | 否 |
+| UCCL-EP | 可移植的 EP 通信传输栈与 CPU proxy | 直接通信对手 | 有 | 有 | 有 | 有 | 未公开 | 有，冻结SHA | 否 |
 | DeepEP v2 | EP dispatch/combine 基线传输栈 | 上游基线；RailBalance 的直接母体 | 无独立 v2 论文 | 有 | 有 | 有 | 未公开 | 有开发分支但不是冻结 SHA | 否 |
 | UBEP | CM384 上按一/两跳距离调度 token 发送任务 | 核心思想直接，但硬件不同且无代码 | 有 | 无 | 无 | 有 | 未公开 | 无 | 否 |
 | UniEP | 论文的dispatch/GEMM/combine mega-kernel；冻结代码公开单机前向融合段 | integrated；非纯 transport，公开完整训练backward入口未找到 | 有 | 有 | 有 | 有 | 未公开 | 无 | 否 |
@@ -56,12 +56,16 @@ UltraEP根据当前 microbatch 的 post-gating 精确负载复制热点专家，
 
 RailBalance保持一个已经确定的物理目标端点不变，只在可用 NIC/Rail 间选择出口，必要时付出一次本地 NVLink 转发。因此两者作用于不同层：UltraEP先决定“这个 token 去哪个专家实例”，RailBalance再决定“去该实例的网络 payload 从哪条 Rail 出去”。这给出了可组合的实现假设，但是否存在资源竞争、主效应是否独立以及组合收益是否保留，都必须由共享基座的2×2实验验证；不能把 UltraEP 当成 RailBalance 的替代基线，也不能用二选一比较推导谁全面优于谁。
 
+[UltraEP §7](https://arxiv.org/html/2606.04101v3#S7)的公开集成基于其 HybridEP/DeepEP-v1
+分支，而 RailBalance位于本地 DeepEP-v2树。只有先把两个独立开关放到同一个冻结
+transport基座，2×2交互才可归因；否则只能发布两个独立结果，不能解释组合效应。
+
 ### 3.2 第一手证据
 
-- **P**：[UltraEP arXiv:2606.04101v3](https://arxiv.org/abs/2606.04101v3)，[第 8 节评测](https://arxiv.org/html/2606.04101v3#S8)。论文报告公共云 RSN：每 rack 64 GPU/16 server，训练使用 2 或 4 racks、serving prefill 使用 1 rack，最多 256 GPU；论文未披露具体 GPU 型号。论文评测统一写明 BF16。
-- **C**：冻结 [Dots-Infra/UltraEP@94cab099b44fffa99a82fea99e7c12d89cf65e4f](https://github.com/Dots-Infra/UltraEP/tree/94cab099b44fffa99a82fea99e7c12d89cf65e4f)，tag `v1.0.0`。
+- **P**：[UltraEP arXiv:2606.04101v3](https://arxiv.org/abs/2606.04101v3)，[第 8 节评测](https://arxiv.org/html/2606.04101v3#S8)。论文报告公共云 RSN：每 rack 64 GPU/16 server；研究原型的训练使用 2 或 4 racks、serving prefill 使用 1 rack，所以公开研究结果覆盖到 256 GPU。论文没有披露生产部署规模，也未披露具体 GPU 型号。论文评测统一写明 BF16。
+- **C**：冻结 [Dots-Infra/UltraEP@94cab099b44fffa99a82fea99e7c12d89cf65e4f](https://github.com/Dots-Infra/UltraEP/tree/94cab099b44fffa99a82fea99e7c12d89cf65e4f)，tag `v1.0.0`。它能冻结公开 README/demo/test artifact，但论文没有证明所有 Fig. 11–17 都由该 tag 生成。
 - **R**：[分布式 `tests/test_e2e.py`](https://github.com/Dots-Infra/UltraEP/blob/94cab099b44fffa99a82fea99e7c12d89cf65e4f/tests/test_e2e.py#L680-L729)、[8×Hopper demo 与 Qwen3-235B recipe](https://github.com/Dots-Infra/UltraEP/blob/94cab099b44fffa99a82fea99e7c12d89cf65e4f/examples/README.md)。README 的公共入口是 `torchrun ... tests/test_e2e.py --num-experts 256`。
-- **A**：论文 Fig. 11–18、README 的 EP64 `test_e2e.py` 表格和端到端汇总图。它们是作者 artifact，不是本机测量。
+- **A**：论文 Fig. 11–17、README 的 EP64 `test_e2e.py` 表格和端到端汇总图。它们是作者 artifact，不是本机测量。
 - **A-data**：仓库未发布可重算论文图或 README 表格的逐样本日志/CSV/JSON。
 - **Local**：`/home/chen/workspace/infra/UltraEP`，`94cab099b44fffa99a82fea99e7c12d89cf65e4f`，审计时 clean，与冻结代码一致。
 - **Reproduced**：未复现；本轮未构建、未运行 GPU、未产生本机 UltraEP 性能数字。
@@ -81,7 +85,12 @@ RailBalance保持一个已经确定的物理目标端点不变，只在可用 NI
 
 ### 4.1 系统边界
 
-MoonEP通过动态冗余专家把每个 rank 的接收量固定为 `S×K`，使用 CUDA VMM 和 NVLink/NVSwitch multicast 提供单机静态 shape 与 zero-copy buffer view。公开实现和 README 截止本账本日期只验证单节点 8×H20 EP8，没有公开多节点 RDMA 后端。因此 MoonEP可以作为“单机专家负载与通信布局”相关工作，但当前不能作为 RailBalance 多节点 Rail 加速的直接横向对手。
+MoonEP通过动态冗余专家把每个 rank 的接收量固定为 `S×K`，使用 CUDA VMM、对称映射和
+NVLink remote reads 提供单机静态 shape 与 zero-copy buffer view。公开 README/源码没有
+给出 NVSwitch multicast 的实现证据，不能把它补写成系统机制。公开实现和 README 截止
+本账本日期只验证单节点 8×H20 EP8，没有公开多节点 RDMA 后端。因此 MoonEP可以作为
+“单机专家负载与通信布局”相关工作，但当前不能作为 RailBalance 多节点 Rail 加速的
+直接横向对手。
 
 ### 4.2 第一手证据
 
@@ -97,7 +106,7 @@ MoonEP通过动态冗余专家把每个 rank 的接收量固定为 `S×K`，使�
 
 | 项目 | `bench_vs_deepep.py` 可证内容 | 缺口/限制 |
 |---|---|---|
-| 硬件 | README声明 8×H20，单节点 EP8 | NVLink/NVSwitch固件、GPU clocks、CUDA/PyTorch版本未随图冻结 |
+| 硬件 | README声明 8×H20，单节点 EP8 | 节点内互联的精确拓扑/固件、GPU clocks、CUDA/PyTorch版本未随图冻结；README未明确列出NVSwitch |
 | shape | `S=8192` token/rank、`E=384`、`H=7168`、`K=8`、MoonEP expert inner `H'=2048`、32 SM；MaxVio target `.2,1,10,20` | 只覆盖 EP8 单机；不是 2×8 RDMA workload |
 | dtype | hidden BF16、route weights FP32；DeepEP v2 走 expanded dispatch/reduced combine | 不是 DeepEP README 的 FP8 dispatch/BF16 combine口径 |
 | 输入 | 固定 routing seed 1234；每 rank data seed `7777+rank`；两库共享 routing/hidden/weights | 官方图对应的最终 CSV 和环境 hash未公开 |
@@ -105,6 +114,13 @@ MoonEP通过动态冗余专家把每个 rank 的接收量固定为 `S×K`，使�
 | 计时 | eager CUDA-event；每个 rank 对 back-to-back iterations 求均值，再对 8 ranks 求**算术均值** | RailBalance正式口径计划使用 rank-max；跨-rank mean 与 rank-max不可直接比较 |
 | API 边界 | MoonEP forward dispatch包含 inter-rank sync、planning、dispatch、fused permute、`prefetch_weight`；combine用 zero-copy view。DeepEP v2用 expanded dispatch和reduced combine | `grad_reduce`明确排除；DeepEP v2 layout以 `d_f-d_b`估算；端到端训练图没有公开运行脚本、warmup/iters或raw data |
 | 正确性 | 独立 `tests/test_e2e.py`覆盖通信路径 | `bench_vs_deepep.py`本身没有在每个计时点对两库输出做 reference gate；正确性与图表结果没有 artifact lineage |
+
+通信图不能代替 full-layer/FWD+BWD 证据。正式单机补充实验还要按
+[官方 buffer合同](https://github.com/MoonshotAI/MoonEP/blob/0f385f038fc33bec22e3bcf5a07a8a22693e754c/README.md#L49-L70)
+和[公开 benchmark 参数](https://github.com/MoonshotAI/MoonEP/blob/0f385f038fc33bec22e3bcf5a07a8a22693e754c/benchmarks/bench_vs_deepep.py#L342-L438)
+冻结训练所需的 `B=E/R=48` 和 padding 128，分别保存 grouped GEMM、prefetch、完整 backward、
+`grad_reduce`、峰值 allocated/reserved memory、OOM与碎片状态；这些分项不得偷偷并回
+作者的 communication-only 柱状图。
 
 ## 5. UCCL-EP
 
@@ -117,9 +133,9 @@ UCCL-EP保持 DeepEP 风格 dispatch/combine API，以 GPU→CPU lock-free FIFO 
 ### 5.2 第一手证据
 
 - **P**：[UCCL-EP arXiv:2512.19849v2](https://arxiv.org/abs/2512.19849v2)，[第 5 节评测](https://arxiv.org/html/2512.19849v2#S5)。
-- **C**：冻结 [uccl-project/uccl@61ee42402819cabba3ac2a56dd4addec3363976c/ep](https://github.com/uccl-project/uccl/tree/61ee42402819cabba3ac2a56dd4addec3363976c/ep)。
+- **C**：冻结 [uccl-project/uccl@61ee42402819cabba3ac2a56dd4addec3363976c/ep](https://github.com/uccl-project/uccl/tree/61ee42402819cabba3ac2a56dd4addec3363976c/ep)。该提交日期为 2026-07-31，晚于论文 v2 约六个月；它只是截止日官方代码，不是论文 Fig. 8–17 的已证 source lineage。
 - **R**：[官方 EP README 命令](https://github.com/uccl-project/uccl/blob/61ee42402819cabba3ac2a56dd4addec3363976c/ep/README.md)、[HT internode benchmark](https://github.com/uccl-project/uccl/blob/61ee42402819cabba3ac2a56dd4addec3363976c/ep/bench/test_internode.py)、[LL internode benchmark](https://github.com/uccl-project/uccl/blob/61ee42402819cabba3ac2a56dd4addec3363976c/ep/bench/test_low_latency.py)。
-- **A**：论文 Fig. 8–16 和官方 README 的硬件结果表。
+- **A**：论文 Fig. 8–17 和官方 README 的硬件结果表。
 - **A-data**：未发现论文图/README表格的逐样本原始数据、CI或可校验 manifest。
 - **Local**：开发 checkout仍是 `/home/chen/workspace/source_code/uccl` / `f071f2e...`；
   另已从同一 object store建立 detached clean frozen worktree
@@ -142,18 +158,25 @@ UCCL-EP保持 DeepEP 风格 dispatch/combine API，以 GPU→CPU lock-free FIFO 
 | AMD_CX7 | 4–16×(8×MI300X) | CX7 400G×8/机 |
 | AMD_BRC | 4×(8×MI300X) | Broadcom Thor-2 400G×8/机 |
 
+`AMD_BRC` 的节点数存在论文内部矛盾：[Table 2](https://arxiv.org/html/2512.19849v2#S4)
+写 4 servers，[§5.3.2/Fig. 14](https://arxiv.org/html/2512.19849v2#S5.SS3.SSS2)
+写 16 servers。该项标记为 `PAPER_INTERNAL_INCONSISTENCY`，不能自行挑选其一当作
+冻结事实。
+
 官方 README 可提取的预注册形状是：
 
-- HT：4 nodes×8 ranks，4096 tokens、H7168、K8、E288；DeepSeek-V3口径为 FP8 dispatch/BF16 combine。
-- LL：4 nodes×8 ranks，128 tokens、H7168、K8、E288；同样是 FP8 dispatch/BF16 combine。
-- intranode：8 ranks，4096 tokens、H7168、K8、E256。
+- HT：4 nodes×8 ranks，4096 tokens/rank、H7168、K8、E288；DeepSeek-V3口径为 FP8 dispatch/BF16 combine。
+- LL：4 nodes×8 ranks，128 tokens/rank、H7168、K8、E288；同样是 FP8 dispatch/BF16 combine。
+- intranode：8 ranks，4096 tokens/rank、H7168、K8、E256。
 
 计时与正确性必须区分“代码能力”和“论文图口径”：
 
 - [代码计时工具](https://github.com/uccl-project/uccl/blob/61ee42402819cabba3ac2a56dd4addec3363976c/ep/bench/utils.py#L415-L544)提供 CUDA-event `warmup=50/test=50`（丢弃首个样本，返回 average/min/max）以及默认 30 次的 Kineto named-kernel计时。
 - `test_internode.py`的调优主路径调用 Kineto并由 node-local rank 0打印本地 best；它不是统一的全局 rank-max聚合。论文没有披露每张图最终采用的 warmup/iters、rank aggregation、独立重复或 CI，因此不能把代码默认值无条件归给论文曲线。
+- [论文 Fig. 8](https://arxiv.org/html/2512.19849v2#S5.SS2.SSS1)的每个点取 HT 与 LL 中较小的时延。这种逐点 mode-selection oracle 只能在 `AUTHOR_REPRO` 兼容图中复现；`COMMON_FAIR` 必须把 LL/HT 分开，或只用 tuning 集选择一次模式后冻结，不能在 confirmatory 数据上逐点挑最优。
 - HT测试在 benchmark 前验证 layout、recv count、token/weight内容和 combine reference；LL测试对 FP8 combine使用 `<9e-4`、BF16使用 `<1e-5` 的差异门禁，并有多项 exact/structural assert。正式横比仍需使用一套共同 reference harness，不能只相信各自自测。
 - 论文说明基线使用相同 GPU资源（与 DeepEP相同 SM数），UCCL-EP每 GPU使用4个 CPU proxy threads；后续 manifest必须同时冻结 CPU affinity/NUMA和实际线程数。
+- [论文 §4](https://arxiv.org/html/2512.19849v2#S4)明确描述 CPU proxy 在 QP 间 round-robin，并跨多个 NIC 聚合带宽；实现细节被论文省略。因此 UCCL-EP本身也属于显式 QP/NIC-balancing 对手，不能只把 SABRE/fabric-lib放入该类别。
 
 ## 6. DeepEP v2
 
@@ -265,23 +288,65 @@ RailBalance存在可比较的数据路径成分，但实现和API边界并不相
   [NVIDIA/nccl `nccl-ep-v0.1.0` / `63cf786...`](https://github.com/NVIDIA/nccl/tree/63cf786b015b2b6bff6cf263461621acf584bd18/contrib/nccl_ep)。tag 晚于论文，论文没有冻结生成图表的精确 commit，二者不能冒充同一 lineage。
   [v0.1官方发布页](https://github.com/NVIDIA/nccl/releases/tag/nccl-ep-v0.1.0)已列出
   HT优化及 `>8` nodes HT修复，所以这两项必须与论文中的 future-work描述分开记录。
-- **口径**：论文 LL 为 E256、H7168、K8、128 token/rank、BF16、8–64 GPU。论文用
-  包含 launch 的 NCCL EP host C API 时间对比 DeepEP Kineto GPU kernel 时间；这不是
-  共同计时。正式实验必须把 LL/HT 分开，改用同一 public API CUDA-event、逐 iteration
-  rank-max，并保存 raw samples。
+- **口径**：论文 LL 为 E256、H7168、K8、128 token/rank、BF16、8–64 GPU。硬件是
+  EOS H100 80 GB、8 GPU/node、第四代 NVLink 900 GB/s、Xeon 8480CL 和每节点
+  8×400 Gb/s InfiniBand，实验覆盖 1–8 nodes。论文用包含 launch 的 NCCL EP host C API
+  时间对比 DeepEP Kineto GPU kernel 时间；这不是共同计时。正式实验必须把 LL/HT
+  分开，改用同一 public API 边界、逐 iteration rank-max，并保存 raw samples。
 - **release 与公开覆盖边界**：[v0.1官方发布页](https://github.com/NVIDIA/nccl/releases/tag/nccl-ep-v0.1.0)
   指出 CUDA 12用户需要从源码构建；[同 tag EP README prerequisites](https://github.com/NVIDIA/nccl/blob/63cf786b015b2b6bff6cf263461621acf584bd18/contrib/nccl_ep/README.md)
-  则把当前 Python `nccl4py` 支持列为 CUDA 13。两份文本描述的分发/构建路径不同，因此
-  CUDA 12.8本机只能标为“source build待验证”：既不能把 wheel约束推广为源码绝对不
-  支持，也不能在真正编译前声称可用。
+  则把 prerequisites 和当前 Python `nccl4py` 支持列为 CUDA 13+。官方文本本身存在
+  不一致；CUDA 12.8本机只能标为“source build待验证”：既不能把 README/wheel约束
+  推广为源码绝对不支持，也不能在真正编译前声称可用。
   release 当前不支持 quantization，但这不等于可以笼统声称
   “BF16-only”。公开 reference/performance 表的实测覆盖至多到 8 nodes；即使 release
   修复了 `>8` nodes HT，也不能把该修复当成 `>8` nodes 公开性能证据。论文
   vLLM 结果同样不能改写成“NCCL EP 已胜出”。
+- **tag 表格 lineage**：[v0.1 README 的性能表](https://github.com/NVIDIA/nccl/blob/63cf786b015b2b6bff6cf263461621acf584bd18/contrib/nccl_ep/README.md#L307-L328)
+  明确注明来自 NCCL v2.29u1，只覆盖 LL BF16、最多 8 nodes；release 的 HT优化又依赖
+  后续 Device API。该表不是 `63cf786...` 当前 tag 二进制的完整性能 lineage。
+- **本地 benchmark边界**：tag 的
+  [`ep_bench`](https://github.com/NVIDIA/nccl/blob/63cf786b015b2b6bff6cf263461621acf584bd18/contrib/nccl_ep/ep_bench.cu#L1797-L1906)
+  默认 10 warmup/50 iterations，但先求每个 rank的均值，再做跨 rank算术平均，并不
+  产生逐 iteration rank-max分布。其
+  [kernel-only throughput](https://github.com/NVIDIA/nccl/blob/63cf786b015b2b6bff6cf263461621acf584bd18/contrib/nccl_ep/ep_bench.cu#L2185-L2202)
+  还把 minimum latency对应列标成 minimum throughput、maximum latency对应列标成
+  maximum throughput，数学方向相反；这些字段不能进入共同图。
+  `COMMON_FAIR` 必须保存每个 rank每次 iteration的原始时延并自行计算 rank-max。
+- **API边界**：[论文的 handle/layout 生命周期](https://arxiv.org/html/2603.13606v3#S3.SS2)
+  要求把 route/layout/handle create或update、`Dispatch(+Complete)`、
+  `Combine(+Complete)`、group creation/JIT分层记录。只计 Dispatch/Combine会在
+  HT或staged模式隐藏 metadata exchange、handle update和 completion成本；正式表同时
+  给出 steady data-plane 与包含每层控制开销的边界。
+- **serving外部有效性**：[论文 §VII-B/Table VII](https://arxiv.org/html/2603.13606v3#S7.SS2)
+  使用 Qwen3-30B-A3B、1/2/4 nodes、1000 requests、maximum concurrency 32，每个
+  backend 4 runs并做 IQR filtering。它没有公开逐请求 raw data/CI，只能作为独立
+  `AUTHOR_REPRO`/外部有效性轨，不能替代 transport共同主矩阵。
 - **Local**：`/home/chen/workspace/infra/nccl-ep-v0.1.0` 是精确 tag
   `nccl-ep-v0.1.0` / `63cf786...` 的 detached clean checkout，大小18,028,459 bytes。
   本机 `mpicc`/`mpirun`可见，nvcc为 CUDA 12.8 / V12.8.61 / build 35404655；这只证明
   前置工具可见，尚未证明 NCCL EP可构建，也未运行 correctness或启动任何 GPU。
+
+### 10.1 UCCL/NCCL共享本机静态预检状态
+
+check-only入口与完整启动合同见
+[`HOP_AWARE_EXPERIMENT_PROTOCOL.md` §8.1](HOP_AWARE_EXPERIMENT_PROTOCOL.md)。它冻结
+UCCL `61ee4240...` 的 `ep+include` build-input closure和NCCL `63cf786...` 的完整
+tracked tree，future build只允许从 pinned Git objects物化到 fresh stage；冻结
+checkout、ignored/untracked working-tree文件、Git conversion filter与lazy fetch均不
+进入构建输入。工具、future argv/env/output、依赖路径、GPU/NIC/topology和磁盘预算也
+逐项 fail-close。
+
+当前权威记录为
+`.cache/rail_balance/competitors/preflight-20260801-08/result.json`，mode `0444`，
+SHA256 `8e46f41c081e7838aecfaf7a50c6a64ef4d3b73e23f9d872afb454f2d3e907d5`。
+它使用 root-owned系统 Python、exact empty-env argv和113文件 runtime closure，结果为
+`BLOCKED_DEPENDENCY_NANOBIND`，并同时记录 Qwen PID `3047501/3047502`造成的
+`WAITING_GPU`。source closure、工具、磁盘、GPU mapping、NV18/PIX、8个 NIC sysfs和
+`ibv_devices`静态枚举通过；`ibv_devinfo`、build、correctness、benchmark和GPU kernel
+全部 `NOT_RUN`。future build executor明确为`NOT_IMPLEMENTED`，因此这不是
+`Reproduced`，也不证明 verbs/RDMA runtime ready。`preflight-20260801-01`至`-07`均为
+`SUPERSEDED_NON_AUTHORITATIVE`，不得用 glob消费或引用其状态。
 
 ## 11. SABRE
 
@@ -430,11 +495,12 @@ Engine 在节点内复制动态 expert 权重和 token，在欠载 GPU 执行。
 
 | ID | 固定代码 | 官方 shape/负载 anchor | 官方硬件约束 | 官方 timing anchor | manifest 必须补齐 |
 |---|---|---|---|---|---|
-| `ultraep-v1.0.0-e2e` | `94cab099...` | E256、K8、8192 token/rank、2 redundant/rank；rank max/mean 约1.5/2/3；BF16 weight、FP32 grad | SM90/100 + NVLink + NVSHMEM；论文 RSN硬件型号未知 | test默认10/30；CUDA-event带barrier，Kineto comm取rank-max | GPU/NIC型号、CUDA/NVSHMEM、exact argv、route hash、API边界、raw samples |
-| `moonep-h20-ep8-vs-v2` | `0f385f03...` | EP8、S8192/rank、E384、H7168、K8、H'2048、MaxVio .2/1/10/20、BF16 | 单机8×H20、NVLink/NVSwitch | 20/50 eager CUDA-event，跨rank mean；排除grad_reduce | CUDA/PyTorch、clocks、rank-max补测、correctness lineage、CSV/raw samples |
-| `uccl-ep-ht-ep32` | `61ee4240...` | 4096 token、H7168、K8、E288、FP8 dispatch/BF16 combine | 论文六类testbed；本项目最近的是 NVIDIA+CX7 IB而非EFA/AMD | 代码有50/50 event和30-test Kineto；论文聚合/CI未知 | exact GPU/NIC、proxy affinity、SM/QP、rank-max、API边界、route/raw hash |
-| `uccl-ep-ll-ep32` | `61ee4240...` | 128 token、H7168、K8、E288、FP8 dispatch/BF16 combine | 同上 | 同上 | 同上，另冻结LL buffer清理与zero-copy/logfmt选项 |
-| `nccl-ep-ll-ep8-64` | `63cf786...` / tag `nccl-ep-v0.1.0` | 论文：E256、H7168、K8、128 token/rank、BF16 | 论文：H100、8–64 GPU（至多8 nodes）；release：CUDA12源码/CUDA13 wheel | 论文 NCCL host API vs DeepEP Kineto，不可直接用 | 共同 public API event/rank-max、exact tag/build、无quantization共同dtype、correctness、raw samples |
+| `ultraep-v1.0.0-demo-ep8` | `94cab099...` | E32、K4、20 layers；官方8×Hopper demo | 8×Hopper + NVLink + NVSHMEM；非论文RSN | demo入口，只作功能/整层轨 | exact dataset/argv、CUDA/NVSHMEM、route hash、分项/raw samples |
+| `ultraep-v1.0.0-ep64-microbench` | `94cab099...` | EP64、E256、K8、8192 token/rank、2 redundant/rank；rank max/mean 约1.5/2/3；BF16 weight、FP32 grad | SM90/100 + NVLink + NVSHMEM；论文 RSN硬件型号未知 | test默认10/30；CUDA-event带barrier，Kineto comm取rank-max | GPU/NIC型号、CUDA/NVSHMEM、exact argv、route hash、API边界、raw samples |
+| `moonep-h20-ep8-vs-v2` | `0f385f03...` | EP8、S8192/rank、E384、H7168、K8、H'2048、MaxVio .2/1/10/20、BF16 | 单机8×H20；互联精确拓扑未公开 | 20/50 eager CUDA-event，跨rank mean；排除grad_reduce | CUDA/PyTorch、clocks、rank-max补测、correctness lineage、CSV/raw samples |
+| `uccl-ep-ht-ep32` | `61ee4240...` | 4096 token/rank、H7168、K8、E288、FP8 dispatch/BF16 combine | 论文六类testbed且AMD_BRC节点数自相矛盾；本项目最近的是 NVIDIA+CX7 IB而非EFA/AMD | 代码有50/50 event和30-test Kineto；论文Fig.8逐点取HT/LL最小值 | exact GPU/NIC、proxy affinity、SM/QP、固定mode、rank-max、API边界、route/raw hash |
+| `uccl-ep-ll-ep32` | `61ee4240...` | 128 token/rank、H7168、K8、E288、FP8 dispatch/BF16 combine | 同上 | 同上；COMMON_FAIR不得逐点挑HT/LL | 同上，另冻结LL buffer清理与zero-copy/logfmt选项 |
+| `nccl-ep-ll-ep8-64` | `63cf786...` / tag `nccl-ep-v0.1.0` | 论文：E256、H7168、K8、128 token/rank、BF16 | 论文：EOS H100、8×400G IB/node、8–64 GPU；官方CUDA12/13文本冲突 | 论文 NCCL host API vs DeepEP Kineto；tag `ep_bench`跨rank mean，不可直接用 | 分层handle/update/Complete与data-plane、逐iteration rank-max、exact tag/build、correctness/raw samples |
 | `nccl-ep-ht-prefill` | `63cf786...` / tag `nccl-ep-v0.1.0` | `>=4096` token/rank；使用三方共同非量化dtype | release已含HT优化与`>8` nodes修复；公开表仍只覆盖≤8 nodes | 论文无 HT 性能结果；release修复不是性能数据 | 本地共同口径首次实验，不能称作者复现 |
 | `sabre-skew-alltoallv` | `b3f2c5a...` | BF16；高/低 skew；64–512 MB/rank | Perlmutter，4×A100+4×Cassini NIC/node，16–256 GPU | 论文10 trials mean；代码5/20且rank0 local | exact matrix/packing、rank-max、严格reference、API adapter或`NO_COMMON_API` |
 | `fabric-lib-decode-prefill` | `2446003...` | H7168、K8；decode<=128与prefill4096；FP8/BF16 | 每GPU 1–4 NIC；CPU proxy | 10k/10k后pool ranks，不是rank-max | CPU affinity/NUMA、NIC集合、逐iteration rank-max、raw samples |
