@@ -1211,3 +1211,7 @@ Out of scope until evidence expands the project:
   focused memcheck/initcheck/synccheck pass. The planner is still dominant;
   the next target is its sequential endpoint assignment. No capability or
   real-Rail claim changed.
+- Clean `989c9c7` 10+100 confirms one-hop finish at 44.436 ms versus 203.951 ms
+  before O096 (4.59x), and adaptive at 416.741 ms versus 575.660 ms (1.38x).
+  Both reports pass eligibility. Adaptive residual search remains a separate
+  hotspot; source-stage medians are 113.268 and 681.248 us respectively.

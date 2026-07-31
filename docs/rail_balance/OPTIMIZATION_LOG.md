@@ -2351,3 +2351,10 @@ forces one complete minimum-level reset. GPU planner 11/11, both one-hop and
 adaptive vnode round trips, and planner memcheck/initcheck/synccheck pass with
 zero errors. This checkpoint is useful but not a final planner design; the
 remaining sequential endpoint assignment is the next measured target.
+
+Commit `989c9c7` then passed clean-tree 10+100 eligibility. One-hop `finish`
+is 44.436 ms median (p95 44.550 ms), confirming the 4.59x reduction from the
+203.951 ms pre-edit boundary; its source stage is 113.268 us median. Adaptive
+`finish` falls from 575.660 to 416.741 ms (1.38x), while its source stage is
+681.248 us. The adaptive residual search is therefore a separate dominant
+algorithmic cost and is not hidden by calling O096 complete for all modes.

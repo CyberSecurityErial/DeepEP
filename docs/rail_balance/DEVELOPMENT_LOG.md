@@ -6812,6 +6812,22 @@ that the pre-existing file is not globally formatted; applying it created a
 reverted to keep this commit reviewable. No test logic from the new case was
 removed.
 
+### Clean HA060-E closeout
+
+The clean `989c9c7` tree passed 10 warmups plus 100 steady iterations and both
+reports passed baseline eligibility:
+
+```text
+one-hop finish median / p95       44.436 / 44.550 ms
+one-hop source median / p95        0.113 / 0.132 ms
+adaptive finish median / p95     416.741 / 416.976 ms
+adaptive source median / p95       0.681 / 0.727 ms
+```
+
+Relative to the clean pre-edit reports, finish improves 4.59x for one-hop and
+1.38x for adaptive. Adaptive residual selection remains a distinct hotspot;
+the next planner investigation keeps one-hop and adaptive evidence separate.
+
 ### Decision
 
 Keep this as a separate exact planner optimization. The planner remains 92.3%

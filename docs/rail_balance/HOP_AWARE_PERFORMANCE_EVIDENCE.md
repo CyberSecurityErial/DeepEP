@@ -335,3 +335,23 @@ comparison uses the same C100 checked-adapter workload and is diagnostic under
 profiler perturbation. An exact 256-channel greedy-oracle case, 11/11 GPU
 planner tests, two vnode round trips, and all three focused sanitizer tools
 pass. Real multi-node capability remains false.
+
+The clean `989c9c7` 10+100 reports close the provisional profiler-free gap:
+
+| Mode | finish median / p95 (ms) | source median / p95 (us) |
+| --- | ---: | ---: |
+| one-hop | 44.436 / 44.550 | 113.268 / 131.701 |
+| adaptive | 416.741 / 416.976 | 681.248 / 727.293 |
+
+Before O096 those finish medians were 203.951 and 575.660 ms. The clean
+one-hop reduction is 4.59x and adaptive is 1.38x. Reports passed automatic
+baseline eligibility and hash to:
+
+```text
+6a16a95b67a6fbd3cac7160098500799c873d6a68d17d8a5af0f9eefc5734b07  c100-onehop-channelmask-formal.json
+046d758a895a88cd0e4a7d43821715af5d1fa69013a1488297c3d9eaaf7a7f43  c100-adaptive-channelmask-formal.json
+```
+
+Adaptive remains planner-bound because selective residual search is separate
+from exact channel materialization. No claim expands beyond the checked
+single-node adapter.
