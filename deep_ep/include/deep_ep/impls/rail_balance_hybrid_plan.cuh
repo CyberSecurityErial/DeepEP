@@ -349,6 +349,7 @@ void rail_balance_hop_precount_impl(
         int* owner_remaining,
         int* endpoint_count,
         int* endpoint_owner_quota,
+        int* owner_group_cursor,
         int* total_units,
         int* status,
         const int num_rails,
@@ -359,8 +360,9 @@ void rail_balance_hop_precount_impl(
     const int lane = ptx::get_lane_idx();
     if (records == nullptr or resolutions == nullptr or
         owner_remaining == nullptr or endpoint_count == nullptr or
-        endpoint_owner_quota == nullptr or total_units == nullptr or
-        status == nullptr or num_rails < 1 or num_rails > 32 or
+        endpoint_owner_quota == nullptr or owner_group_cursor == nullptr or
+        total_units == nullptr or status == nullptr or
+        num_rails < 1 or num_rails > 32 or
         num_tokens < 0 or num_topk < 1 or num_topk > 32 or
         num_channels < 1 or num_channels > kNumHybridMaxChannels or
         num_destinations < 2 or num_destinations > 32) {
@@ -414,6 +416,9 @@ void rail_balance_hop_precount_impl(
             atomicAdd(endpoint_count + hybrid_plan_detail::odt_offset(
                 owner, record.destination, target,
                 num_destinations, num_rails), 1);
+            atomicAdd(owner_group_cursor + hybrid_plan_detail::lgcd_offset(
+                owner, target, channel, record.destination,
+                num_rails, num_channels, num_destinations), 1);
         } else {
             atomicExch(endpoint_owner_quota, 1);
         }
@@ -422,11 +427,280 @@ void rail_balance_hop_precount_impl(
     }
 }
 
+// Multi-block one-hop materializer. Launch boundaries are the only grid-wide
+// synchronization; every mutable cursor has exactly one owning block.
+template <int kStage, int kInstantiation = 0>
+__global__ __launch_bounds__(32, 1)
+void rail_balance_hop_materialize_impl(
+        const HopCopyRecord* records,
+        HopCopyResolution* resolutions,
+        const int* endpoint_owner_quota,
+        int* owner_group_cursor,
+        int* retained,
+        int* moved,
+        int* retained_prefix,
+        int* group_prefix,
+        int* proxy_required,
+        int* path_units,
+        int* moved_copies,
+        int* status,
+        const int num_rails,
+        const int num_tokens,
+        const int num_topk,
+        const int num_channels,
+        const int num_destinations,
+        const int proxy_capacity_per_egress) {
+    const int lane = ptx::get_lane_idx();
+    if (records == nullptr or resolutions == nullptr or
+        endpoint_owner_quota == nullptr or owner_group_cursor == nullptr or
+        retained == nullptr or moved == nullptr or
+        retained_prefix == nullptr or group_prefix == nullptr or
+        proxy_required == nullptr or path_units == nullptr or
+        moved_copies == nullptr or status == nullptr or
+        num_rails < 1 or num_rails > 32 or num_tokens < 0 or
+        num_topk < 1 or num_topk > 32 or num_channels < 1 or
+        num_channels > kNumHybridMaxChannels or num_destinations < 2 or
+        num_destinations > 32 or proxy_capacity_per_egress < 0) {
+        if (lane == 0)
+            hybrid_plan_detail::report_error(
+                status, HybridPlanError::InvalidSchedule);
+        return;
+    }
+    if (*status != static_cast<int>(HybridPlanError::Success))
+        return;
+
+    if constexpr (kStage == kHopEndpointPrefix) {
+        const int flat = static_cast<int>(blockIdx.x);
+        const int target = flat % num_rails;
+        const int destination = (flat / num_rails) % num_destinations;
+        const int owner = flat / (num_rails * num_destinations);
+        if (owner >= num_rails)
+            return;
+
+        int base = 0;
+        for (int tile = 0; tile < num_channels; tile += 32) {
+            const int channel = tile + lane;
+            const auto offset = hybrid_plan_detail::lgcd_offset(
+                owner, target, channel, destination,
+                num_rails, num_channels, num_destinations);
+            const int count = channel < num_channels ?
+                owner_group_cursor[offset] : 0;
+            int inclusive = count;
+            for (int delta = 1; delta < 32; delta *= 2) {
+                const int upper = __shfl_up_sync(
+                    0xffffffff, inclusive, delta);
+                if (lane >= delta)
+                    inclusive += upper;
+            }
+            if (channel < num_channels)
+                owner_group_cursor[offset] = base + inclusive - count;
+            base += __shfl_sync(0xffffffff, inclusive, 31);
+        }
+        return;
+    }
+
+    if constexpr (kStage == kHopEndpointAssign) {
+        const int owner_channel = static_cast<int>(blockIdx.x);
+        const int owner = owner_channel / num_channels;
+        const int channel = owner_channel % num_channels;
+        if (owner >= num_rails)
+            return;
+        for (int token = channel; token < num_tokens; token += num_channels) {
+            const int64_t begin =
+                (static_cast<int64_t>(owner) * num_tokens + token) * num_topk;
+            if (lane >= num_topk)
+                continue;
+            const auto record = records[begin + lane];
+            if (record.target_mask == 0)
+                continue;
+            auto& resolution = resolutions[begin + lane];
+            if (__popc(record.target_mask) != 1) {
+                if (resolution.egress < 0)
+                    hybrid_plan_detail::report_error(
+                        status, HybridPlanError::InvalidSchedule);
+                continue;
+            }
+            const int target =
+                __ffs(static_cast<int>(record.target_mask)) - 1;
+            const auto group = hybrid_plan_detail::odt_offset(
+                owner, record.destination, target,
+                num_destinations, num_rails);
+            const auto cursor = hybrid_plan_detail::lgcd_offset(
+                owner, target, channel, record.destination,
+                num_rails, num_channels, num_destinations);
+            const int ordinal = owner_group_cursor[cursor]++;
+            resolution.egress =
+                ordinal < endpoint_owner_quota[group] ? owner : target;
+        }
+        return;
+    }
+
+    if constexpr (kStage == kHopGroupCount) {
+        const int owner_source_channel = static_cast<int>(blockIdx.x);
+        const int owner = owner_source_channel / num_channels;
+        const int source_channel = owner_source_channel % num_channels;
+        if (owner >= num_rails)
+            return;
+        const int channel = (source_channel + owner) % num_channels;
+        for (int flat = lane; flat < num_rails * num_destinations; flat += 32) {
+            const int egress = flat / num_destinations;
+            const int destination = flat % num_destinations;
+            owner_group_cursor[hybrid_plan_detail::lgcd_offset(
+                owner, egress, channel, destination,
+                num_rails, num_channels, num_destinations)] = 0;
+        }
+        __syncwarp();
+
+        int local_paths[4] = {};
+        int local_moved = 0;
+        for (int token = source_channel;
+             token < num_tokens; token += num_channels) {
+            const int64_t begin =
+                (static_cast<int64_t>(owner) * num_tokens + token) * num_topk;
+            if (lane >= num_topk)
+                continue;
+            const auto record = records[begin + lane];
+            if (record.target_mask == 0)
+                continue;
+            const int egress = resolutions[begin + lane].egress;
+            if (egress < 0 or egress >= num_rails) {
+                hybrid_plan_detail::report_error(
+                    status, HybridPlanError::InvalidSchedule);
+                continue;
+            }
+            ++owner_group_cursor[hybrid_plan_detail::lgcd_offset(
+                owner, egress, channel, record.destination,
+                num_rails, num_channels, num_destinations)];
+
+            int path = static_cast<int>(HopPathKind::TwoHop);
+            if (egress == owner) {
+                path = record.target_mask == (uint32_t{1} << owner) ?
+                    static_cast<int>(HopPathKind::Direct) :
+                    static_cast<int>(HopPathKind::DestinationForward);
+            } else if ((record.target_mask &
+                        (uint32_t{1} << egress)) != 0) {
+                path = static_cast<int>(HopPathKind::SourceForward);
+            }
+            ++local_paths[path];
+            local_moved += egress != owner;
+        }
+        for (int path = 0; path < 4; ++path) {
+            const int units = ptx::reduce_add(local_paths[path]);
+            if (lane == 0 and units != 0)
+                atomicAdd(path_units + path, units);
+        }
+        const int moved_units = ptx::reduce_add(local_moved);
+        if (lane == 0 and moved_units != 0)
+            atomicAdd(moved_copies, moved_units);
+        return;
+    }
+
+    if constexpr (kStage == kHopGroupPrefix) {
+        const int egress = static_cast<int>(blockIdx.x);
+        if (egress >= num_rails)
+            return;
+        int moved_base = 0;
+        int retained_base = 0;
+        const int num_groups = num_channels * num_destinations;
+        for (int tile = 0; tile < num_groups; tile += 32) {
+            const int group_index = tile + lane;
+            int moved_count = 0;
+            int retained_count = 0;
+            int channel = 0;
+            int destination = 0;
+            if (group_index < num_groups) {
+                channel = group_index / num_destinations;
+                destination = group_index % num_destinations;
+                for (int owner = 0; owner < num_rails; ++owner) {
+                    const auto offset = hybrid_plan_detail::lgcd_offset(
+                        owner, egress, channel, destination,
+                        num_rails, num_channels, num_destinations);
+                    const int count = owner_group_cursor[offset];
+                    if (owner == egress) {
+                        owner_group_cursor[offset] = 0;
+                        retained_count = count;
+                    } else {
+                        owner_group_cursor[offset] = moved_count;
+                        moved_count += count;
+                    }
+                }
+            }
+
+            int moved_inclusive = moved_count;
+            int retained_inclusive = retained_count;
+            for (int delta = 1; delta < 32; delta *= 2) {
+                const int moved_upper = __shfl_up_sync(
+                    0xffffffff, moved_inclusive, delta);
+                const int retained_upper = __shfl_up_sync(
+                    0xffffffff, retained_inclusive, delta);
+                if (lane >= delta) {
+                    moved_inclusive += moved_upper;
+                    retained_inclusive += retained_upper;
+                }
+            }
+            if (group_index < num_groups) {
+                const int group =
+                    (egress * num_channels + channel) * num_destinations +
+                    destination;
+                retained[group] = retained_count;
+                moved[group] = moved_count;
+                retained_prefix[group] =
+                    retained_base + retained_inclusive - retained_count;
+                group_prefix[group] =
+                    moved_base + moved_inclusive - moved_count;
+            }
+            moved_base += __shfl_sync(0xffffffff, moved_inclusive, 31);
+            retained_base +=
+                __shfl_sync(0xffffffff, retained_inclusive, 31);
+        }
+        if (lane == 0) {
+            proxy_required[egress] = moved_base;
+            if (moved_base > proxy_capacity_per_egress or
+                retained_base > proxy_capacity_per_egress)
+                hybrid_plan_detail::report_error(
+                    status, HybridPlanError::CapacityExceeded);
+        }
+        return;
+    }
+
+    if constexpr (kStage == kHopSlotFinalize) {
+        const int owner_source_channel = static_cast<int>(blockIdx.x);
+        const int owner = owner_source_channel / num_channels;
+        const int source_channel = owner_source_channel % num_channels;
+        if (owner >= num_rails)
+            return;
+        const int channel = (source_channel + owner) % num_channels;
+        for (int token = source_channel;
+             token < num_tokens; token += num_channels) {
+            const int64_t begin =
+                (static_cast<int64_t>(owner) * num_tokens + token) * num_topk;
+            if (lane >= num_topk)
+                continue;
+            const auto record = records[begin + lane];
+            if (record.target_mask == 0)
+                continue;
+            auto& resolution = resolutions[begin + lane];
+            const int egress = resolution.egress;
+            const int remote_slot = owner_group_cursor[
+                hybrid_plan_detail::lgcd_offset(
+                    owner, egress, channel, record.destination,
+                    num_rails, num_channels, num_destinations)]++;
+            resolution.channel = channel;
+            resolution.remote_slot = remote_slot;
+            resolution.proxy_slot = egress == owner ? -1 :
+                group_prefix[
+                    (egress * num_channels + channel) * num_destinations +
+                    record.destination] + remote_slot;
+        }
+    }
+}
+
 // Correctness-first deterministic hop planner. It always builds the endpoint
 // plan first, then optionally moves only profitable residual copies to a
 // third Rail. One lane keeps selection order reproducible; later profiling
 // decides whether this phase warrants parallelization.
-template <int kInstantiation = 0, bool kPrecounted = false>
+template <int kInstantiation = 0, bool kPrecounted = false,
+          bool kDecisionOnly = false>
 __global__ __launch_bounds__(32, 1)
 void rail_balance_hop_plan_impl(
         const HopCopyRecord* records,
@@ -503,7 +777,7 @@ void rail_balance_hop_plan_impl(
             endpoint_count[i] = 0;
             endpoint_owner_quota[i] = 0;
         }
-    if (planner_chunk_size > 1)
+    if (planner_chunk_size > 1 and not kDecisionOnly)
         for (int64_t i = lane; i < num_owner_groups; i += 32)
             owner_group_cursor[i] = 0;
     for (int i = lane; i < num_groups; i += 32) {
@@ -690,6 +964,8 @@ void rail_balance_hop_plan_impl(
     }
     __syncwarp();
     if (*status != static_cast<int>(HybridPlanError::Success))
+        return;
+    if constexpr (kDecisionOnly)
         return;
 
     if (planner_chunk_size > 1) {

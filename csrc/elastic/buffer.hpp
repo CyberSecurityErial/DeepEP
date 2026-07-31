@@ -334,7 +334,8 @@ public:
             .endpoint_owner_quota = torch::zeros(
                 {num_rails, num_destinations, num_rails}, int_options),
             .owner_group_cursor = planner_chunk_size > 1 ? torch::zeros(
-                {32, num_rails, num_channels, num_destinations}, int_options) :
+                {max_two_hop_percent == 0 ? num_rails : 32,
+                 num_rails, num_channels, num_destinations}, int_options) :
                 torch::zeros({1}, int_options),
             .path_units = torch::zeros({4}, int_options),
             .local_records = local_records,
@@ -344,7 +345,9 @@ public:
             .max_two_hop_percent = max_two_hop_percent,
             .hop_penalty_percent = hop_penalty_percent,
             .planner_chunk_size = planner_chunk_size,
-            .prepared = prepare_rail_balance_hop_plan(num_channels),
+            .prepared = prepare_rail_balance_hop_plan(
+                num_channels, planner_chunk_size > 1,
+                planner_chunk_size > 1 and max_two_hop_percent == 0),
         };
     }
 

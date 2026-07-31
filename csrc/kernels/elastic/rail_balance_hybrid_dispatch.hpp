@@ -165,6 +165,7 @@ public:
         int* owner_remaining;
         int* endpoint_count;
         int* endpoint_owner_quota;
+        int* owner_group_cursor;
         int* total_units;
         int* status;
         int num_rails;
@@ -195,10 +196,169 @@ static void __instantiate_kernel() {
             kernel, config,
             args.records, args.resolutions, args.owner_remaining,
             args.endpoint_count, args.endpoint_owner_quota,
-            args.total_units, args.status, args.num_rails, args.num_tokens,
-            args.num_topk, args.num_channels, args.num_destinations));
+            args.owner_group_cursor, args.total_units, args.status,
+            args.num_rails, args.num_tokens, args.num_topk,
+            args.num_channels, args.num_destinations));
     }
 };
+
+class RailBalanceHopMaterializeRuntime final:
+    public jit::LaunchRuntime<RailBalanceHopMaterializeRuntime> {
+public:
+    struct Args {
+        const rail_balance::HopCopyRecord* records;
+        rail_balance::HopCopyResolution* resolutions;
+        const int* endpoint_owner_quota;
+        int* owner_group_cursor;
+        int* retained;
+        int* moved;
+        int* retained_prefix;
+        int* group_prefix;
+        int* proxy_required;
+        int* path_units;
+        int* moved_copies;
+        int* status;
+        int num_rails;
+        int num_tokens;
+        int num_topk;
+        int num_channels;
+        int num_destinations;
+        int proxy_capacity_per_egress;
+        int stage;
+        jit::LaunchArgs launch_args;
+    };
+
+    static std::string generate_impl(const Args& args) {
+        const auto instantiate = [](const int stage) {
+            return fmt::format(R"(
+#include <deep_ep/impls/rail_balance_hybrid_plan.cuh>
+
+using namespace deep_ep::elastic;
+
+static void __instantiate_kernel() {{
+    auto ptr = reinterpret_cast<void*>(
+        &rail_balance::rail_balance_hop_materialize_impl<{}, 0>);
+}}
+)", stage);
+        };
+        EP_HOST_ASSERT(
+            args.stage >= rail_balance::kHopEndpointPrefix and
+            args.stage <= rail_balance::kHopSlotFinalize);
+        return instantiate(args.stage);
+    }
+
+    static void launch_impl(const jit::KernelHandle& kernel,
+                            const jit::LaunchConfigHandle& config,
+                            Args args) {
+        EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(
+            kernel, config, args.records, args.resolutions,
+            args.endpoint_owner_quota, args.owner_group_cursor,
+            args.retained, args.moved, args.retained_prefix,
+            args.group_prefix, args.proxy_required, args.path_units,
+            args.moved_copies, args.status, args.num_rails, args.num_tokens,
+            args.num_topk, args.num_channels, args.num_destinations,
+            args.proxy_capacity_per_egress));
+    }
+};
+
+using RailBalanceHopMaterializers =
+    std::array<std::shared_ptr<jit::KernelRuntime>, 5>;
+
+static RailBalanceHopMaterializers prepare_rail_balance_hop_materializers() {
+    static constexpr std::array<const char*, 5> names = {
+        "rail_balance_hop_endpoint_prefix_v1",
+        "rail_balance_hop_endpoint_assign_v1",
+        "rail_balance_hop_group_count_v1",
+        "rail_balance_hop_group_prefix_v1",
+        "rail_balance_hop_slot_finalize_v1",
+    };
+    RailBalanceHopMaterializers runtimes;
+    for (int stage = 0; stage < static_cast<int>(runtimes.size()); ++stage) {
+        const RailBalanceHopMaterializeRuntime::Args prototype = {
+            .records = nullptr,
+            .resolutions = nullptr,
+            .endpoint_owner_quota = nullptr,
+            .owner_group_cursor = nullptr,
+            .retained = nullptr,
+            .moved = nullptr,
+            .retained_prefix = nullptr,
+            .group_prefix = nullptr,
+            .proxy_required = nullptr,
+            .path_units = nullptr,
+            .moved_copies = nullptr,
+            .status = nullptr,
+            .num_rails = 0,
+            .num_tokens = 0,
+            .num_topk = 0,
+            .num_channels = 0,
+            .num_destinations = 0,
+            .proxy_capacity_per_egress = 0,
+            .stage = stage,
+            .launch_args = jit::LaunchArgs(1, 32),
+        };
+        runtimes[stage] = jit::compiler->build(
+            names[stage],
+            RailBalanceHopMaterializeRuntime::generate(prototype));
+    }
+    return runtimes;
+}
+
+static void launch_prepared_rail_balance_hop_materializers(
+    const RailBalanceHopMaterializers& runtimes,
+    const rail_balance::HopCopyRecord* records,
+    rail_balance::HopCopyResolution* resolutions,
+    const int* endpoint_owner_quota,
+    int* owner_group_cursor,
+    int* retained,
+    int* moved,
+    int* retained_prefix,
+    int* group_prefix,
+    int* proxy_required,
+    int* path_units,
+    int* moved_copies,
+    int* status,
+    const int& num_rails,
+    const int& num_tokens,
+    const int& num_topk,
+    const int& num_channels,
+    const int& num_destinations,
+    const int& proxy_capacity_per_egress,
+    const at::cuda::CUDAStream& stream) {
+    const std::array grids = {
+        num_rails * num_destinations * num_rails,
+        num_rails * num_channels,
+        num_rails * num_channels,
+        num_rails,
+        num_rails * num_channels,
+    };
+    for (int stage = 0; stage < static_cast<int>(runtimes.size()); ++stage) {
+        RailBalanceHopMaterializeRuntime::launch(
+            runtimes[stage],
+            RailBalanceHopMaterializeRuntime::Args{
+                .records = records,
+                .resolutions = resolutions,
+                .endpoint_owner_quota = endpoint_owner_quota,
+                .owner_group_cursor = owner_group_cursor,
+                .retained = retained,
+                .moved = moved,
+                .retained_prefix = retained_prefix,
+                .group_prefix = group_prefix,
+                .proxy_required = proxy_required,
+                .path_units = path_units,
+                .moved_copies = moved_copies,
+                .status = status,
+                .num_rails = num_rails,
+                .num_tokens = num_tokens,
+                .num_topk = num_topk,
+                .num_channels = num_channels,
+                .num_destinations = num_destinations,
+                .proxy_capacity_per_egress = proxy_capacity_per_egress,
+                .stage = stage,
+                .launch_args = jit::LaunchArgs(grids[stage], 32),
+            },
+            stream);
+    }
+}
 
 class RailBalanceHopPlanRuntime final:
     public jit::LaunchRuntime<RailBalanceHopPlanRuntime> {
@@ -233,10 +393,22 @@ public:
         int max_two_hop_percent;
         int hop_penalty_percent;
         bool precounted;
+        bool decision_only;
         jit::LaunchArgs launch_args;
     };
 
     static std::string generate_impl(const Args& args) {
+        if (args.precounted and args.decision_only)
+            return R"(
+#include <deep_ep/impls/rail_balance_hybrid_plan.cuh>
+
+using namespace deep_ep::elastic;
+
+static void __instantiate_kernel() {
+    auto ptr = reinterpret_cast<void*>(
+        &rail_balance::rail_balance_hop_plan_impl<0, true, true>);
+}
+)";
         if (args.precounted)
             return R"(
 #include <deep_ep/impls/rail_balance_hybrid_plan.cuh>
@@ -245,7 +417,7 @@ using namespace deep_ep::elastic;
 
 static void __instantiate_kernel() {
     auto ptr = reinterpret_cast<void*>(
-        &rail_balance::rail_balance_hop_plan_impl<0, true>);
+        &rail_balance::rail_balance_hop_plan_impl<0, true, false>);
 }
 )";
         return R"(
@@ -255,7 +427,7 @@ using namespace deep_ep::elastic;
 
 static void __instantiate_kernel() {
     auto ptr = reinterpret_cast<void*>(
-        &rail_balance::rail_balance_hop_plan_impl<0, false>);
+        &rail_balance::rail_balance_hop_plan_impl<0, false, false>);
 }
 )";
     }
@@ -285,14 +457,21 @@ static void __instantiate_kernel() {
 struct PreparedRailBalanceHopPlan {
     std::shared_ptr<jit::KernelRuntime> record;
     std::shared_ptr<jit::KernelRuntime> plan;
+    std::shared_ptr<jit::KernelRuntime> precount;
+    RailBalanceHopMaterializers materializers;
+    bool precounted;
+    bool parallel_materialize;
     jit::LaunchArgs record_launch_args;
     jit::LaunchArgs plan_launch_args;
 };
 
 static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
-    const int& num_channels) {
+    const int& num_channels,
+    const bool& precounted = false,
+    const bool& parallel_materialize = false) {
     EP_HOST_ASSERT(num_channels >= 1 and
                    num_channels <= rail_balance::kNumHybridMaxChannels);
+    EP_HOST_ASSERT(not parallel_materialize or precounted);
     const RailBalanceHopRecordRuntime::Args record_args = {
         .topk_idx = nullptr,
         .records = nullptr,
@@ -337,7 +516,24 @@ static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
         .two_hop_threshold_percent = 0,
         .max_two_hop_percent = 0,
         .hop_penalty_percent = 0,
-        .precounted = false,
+        .precounted = precounted,
+        .decision_only = parallel_materialize,
+        .launch_args = jit::LaunchArgs(1, 32),
+    };
+    const RailBalanceHopPrecountRuntime::Args precount_args = {
+        .records = nullptr,
+        .resolutions = nullptr,
+        .owner_remaining = nullptr,
+        .endpoint_count = nullptr,
+        .endpoint_owner_quota = nullptr,
+        .owner_group_cursor = nullptr,
+        .total_units = nullptr,
+        .status = nullptr,
+        .num_rails = 0,
+        .num_tokens = 0,
+        .num_topk = 0,
+        .num_channels = 0,
+        .num_destinations = 0,
         .launch_args = jit::LaunchArgs(1, 32),
     };
     return {
@@ -345,8 +541,18 @@ static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
             "rail_balance_hop_record_v1",
             RailBalanceHopRecordRuntime::generate(record_args)),
         .plan = jit::compiler->build(
-            "rail_balance_hop_plan_v2",
+            parallel_materialize ? "rail_balance_hop_decision_v4" :
+            precounted ? "rail_balance_hop_plan_precounted_v3" :
+                         "rail_balance_hop_plan_v2",
             RailBalanceHopPlanRuntime::generate(plan_args)),
+        .precount = precounted ? jit::compiler->build(
+            "rail_balance_hop_precount_v1",
+            RailBalanceHopPrecountRuntime::generate(precount_args)) : nullptr,
+        .materializers = parallel_materialize ?
+            prepare_rail_balance_hop_materializers() :
+            RailBalanceHopMaterializers{},
+        .precounted = precounted,
+        .parallel_materialize = parallel_materialize,
         .record_launch_args = record_args.launch_args,
         .plan_launch_args = plan_args.launch_args,
     };
@@ -417,6 +623,29 @@ static void launch_prepared_rail_balance_hop_plan(
     const int& max_two_hop_percent,
     const int& hop_penalty_percent,
     const at::cuda::CUDAStream& stream) {
+    if (prepared.precounted) {
+        EP_HOST_ASSERT(prepared.precount != nullptr);
+        RailBalanceHopPrecountRuntime::launch(
+            prepared.precount,
+            RailBalanceHopPrecountRuntime::Args{
+                .records = records,
+                .resolutions = resolutions,
+                .owner_remaining = owner_remaining,
+                .endpoint_count = endpoint_count,
+                .endpoint_owner_quota = endpoint_owner_quota,
+                .owner_group_cursor = owner_group_cursor,
+                .total_units = moved_copies,
+                .status = status,
+                .num_rails = num_rails,
+                .num_tokens = record_token_capacity,
+                .num_topk = num_topk,
+                .num_channels = num_channels,
+                .num_destinations = num_destinations,
+                .launch_args = jit::LaunchArgs(
+                    num_rails * num_channels, 32),
+            },
+            stream);
+    }
     RailBalanceHopPlanRuntime::launch(
         prepared.plan,
         RailBalanceHopPlanRuntime::Args{
@@ -448,10 +677,18 @@ static void launch_prepared_rail_balance_hop_plan(
             .two_hop_threshold_percent = two_hop_threshold_percent,
             .max_two_hop_percent = max_two_hop_percent,
             .hop_penalty_percent = hop_penalty_percent,
-            .precounted = false,
+            .precounted = prepared.precounted,
+            .decision_only = prepared.parallel_materialize,
             .launch_args = prepared.plan_launch_args,
         },
         stream);
+    if (prepared.parallel_materialize)
+        launch_prepared_rail_balance_hop_materializers(
+            prepared.materializers, records, resolutions,
+            endpoint_owner_quota, owner_group_cursor, retained, moved,
+            retained_prefix, group_prefix, proxy_required, path_units,
+            moved_copies, status, num_rails, record_token_capacity, num_topk,
+            num_channels, num_destinations, proxy_capacity_per_egress, stream);
 }
 
 class RailBalanceHybridPlanRuntime final:
@@ -1745,7 +1982,8 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
         {num_rails, num_destinations, num_rails}, int_options);
     auto endpoint_owner_quota = torch::zeros_like(endpoint_count);
     auto owner_group_cursor = planner_chunk_size > 1 ? torch::zeros(
-        {32, num_rails, num_channels, num_destinations}, int_options) :
+        {max_two_hop_percent == 0 ? num_rails : 32,
+         num_rails, num_channels, num_destinations}, int_options) :
         torch::zeros({1}, int_options);
     auto retained = torch::zeros(
         {num_rails, num_channels, num_destinations}, int_options);
@@ -1767,6 +2005,8 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
     }
 
     const bool precounted = planner_chunk_size > 1;
+    const bool parallel_materialize =
+        precounted and max_two_hop_percent == 0;
     if (precounted) {
         const RailBalanceHopPrecountRuntime::Args count_args = {
             .records = reinterpret_cast<const rail_balance::HopCopyRecord*>(
@@ -1777,6 +2017,7 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
             .owner_remaining = owner_remaining.data_ptr<int>(),
             .endpoint_count = endpoint_count.data_ptr<int>(),
             .endpoint_owner_quota = endpoint_owner_quota.data_ptr<int>(),
+            .owner_group_cursor = owner_group_cursor.data_ptr<int>(),
             .total_units = moved_copies.data_ptr<int>(),
             .status = status.data_ptr<int>(),
             .num_rails = num_rails,
@@ -1824,9 +2065,11 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
         .max_two_hop_percent = 0,
         .hop_penalty_percent = 0,
         .precounted = precounted,
+        .decision_only = parallel_materialize,
         .launch_args = jit::LaunchArgs(1, 32),
     };
     const auto runtime = jit::compiler->build(
+        parallel_materialize ? "rail_balance_hop_decision_v4" :
         precounted ? "rail_balance_hop_plan_precounted_v3" :
                      "rail_balance_hop_plan_v2",
         RailBalanceHopPlanRuntime::generate(prototype));
@@ -1865,9 +2108,28 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
             .max_two_hop_percent = max_two_hop_percent,
             .hop_penalty_percent = hop_penalty_percent,
             .precounted = precounted,
+            .decision_only = parallel_materialize,
             .launch_args = prototype.launch_args,
         },
         stream);
+
+    if (parallel_materialize) {
+        const auto materializers = prepare_rail_balance_hop_materializers();
+        launch_prepared_rail_balance_hop_materializers(
+            materializers,
+            reinterpret_cast<const rail_balance::HopCopyRecord*>(
+                records.data_ptr<int64_t>()),
+            reinterpret_cast<rail_balance::HopCopyResolution*>(
+                resolutions.data_ptr<int>()),
+            endpoint_owner_quota.data_ptr<int>(),
+            owner_group_cursor.data_ptr<int>(), retained.data_ptr<int>(),
+            moved.data_ptr<int>(), retained_prefix.data_ptr<int>(),
+            group_prefix.data_ptr<int>(), proxy_required.data_ptr<int>(),
+            path_units.data_ptr<int>(), moved_copies.data_ptr<int>(),
+            status.data_ptr<int>(), num_rails, num_tokens, num_topk,
+            num_channels, num_destinations, proxy_capacity_per_egress,
+            stream);
+    }
 
     int host_status = 0;
     CUDA_RUNTIME_CHECK(cudaMemcpyAsync(

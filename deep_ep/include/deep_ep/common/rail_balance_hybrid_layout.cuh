@@ -16,6 +16,14 @@ static constexpr int64_t kNumHybridBufferAlignmentBytes = 2 * 1024 * 1024;
 static constexpr int kMaxHybridPolicyThresholdPercent = 3100;
 static constexpr int kDefaultHopPlannerChunkSize = 8;
 
+enum HopMaterializeStage : int {
+    kHopEndpointPrefix = 0,
+    kHopEndpointAssign = 1,
+    kHopGroupCount = 2,
+    kHopGroupPrefix = 3,
+    kHopSlotFinalize = 4,
+};
+
 // Planner-only policy ABI. Dispatch, shuffle, and combine consume only the
 // resulting quota/segments and therefore stay policy-free.
 enum class HybridPolicy : int {
