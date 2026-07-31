@@ -7002,3 +7002,11 @@ planner memcheck/initcheck/synccheck                  0 errors
 
 The edit adds no state or output. Capability remains false pending clean and
 real multi-node evidence.
+
+### Clean HA060-K closeout
+
+Commit `7b0466f` passes clean-tree 10+100 collection. One-hop `finish` is
+34.701 ms median / 34.898 ms p95, down from 41.510 / 41.758 ms. Adaptive is
+52.919 / 52.989 ms, down from 59.493 / 59.689 ms. Source-stage medians are
+116.921 and 665.269 us. Both reports pass eligibility; HA060-K is accepted for
+the experimental planner without changing capability.

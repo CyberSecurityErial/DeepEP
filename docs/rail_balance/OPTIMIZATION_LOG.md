@@ -2503,3 +2503,8 @@ off-diagonal control              12.143 -> 12.177 ms (noise)
 Exact tests, both vnode round trips, and focused memcheck/initcheck/synccheck
 pass. The dirty-tree diagnostics decide to keep the candidate pending clean
 10+100 evidence.
+
+Clean commit `7b0466f` accepts O102. One-hop `finish` is 34.701 ms median /
+34.898 ms p95 (1.196x below O101); adaptive is 52.919 / 52.989 ms (1.124x).
+Source-stage medians remain separate at 116.921/665.269 us. Both reports pass
+baseline eligibility.

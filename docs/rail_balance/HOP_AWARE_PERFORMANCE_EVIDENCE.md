@@ -503,3 +503,20 @@ medians of 34.669 ms one-hop and 52.918 ms adaptive, from clean predecessors
 
 Correctness gates pass; clean distributions are pending and claim scope is
 unchanged.
+
+Clean commit `7b0466f` 10+100 distributions accept the singleton bypass:
+
+| Mode | finish median / p95 (ms) | source median / p95 (us) |
+| --- | ---: | ---: |
+| one-hop | 34.701 / 34.898 | 116.921 / 138.497 |
+| adaptive | 52.919 / 52.989 | 665.269 / 744.713 |
+
+The finish boundaries improve 1.196x/1.124x over O101. Reports pass baseline
+eligibility and hash to:
+
+```text
+55924e573f163b3936faec529df93a951b24b97b65227d02bee75b9772b8dfde  c100-onehop-singleton-formal.json
+be007ce3b37100ce4d500de6e3d34b4bc4c78754c6baa587ab9ed1011f96c29c  c100-adaptive-singleton-formal.json
+```
+
+Claim scope remains checked single-node adapter only.

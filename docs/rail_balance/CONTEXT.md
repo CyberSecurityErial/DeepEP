@@ -1259,3 +1259,6 @@ Out of scope until evidence expands the project:
   and 59.493 to 52.918 ms for adaptive; an off-diagonal two-candidate control
   is unchanged. GPU 11/11, both vnode round trips, and focused sanitizer gates
   pass. Clean committed-tree evidence remains pending.
+- Clean `7b0466f` 10+100 accepts HA060-K: one-hop finish is 34.701 ms median /
+  34.898 ms p95 and adaptive is 52.919 / 52.989 ms. These are 1.196x and
+  1.124x below O101; both eligibility gates pass. Capability remains false.
