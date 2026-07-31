@@ -200,7 +200,9 @@ def _validate(
                 endpoint = bool((target_mask | (1 << owner)) & (1 << egress))
                 if max_two_hop_percent == 0:
                     assert endpoint
-                assert 0 <= channel < channels and remote_slot >= 0
+                channel_capacity = (num_tokens + channels - 1) // channels
+                assert 0 <= channel < channels
+                assert 0 <= remote_slot < channel_capacity
                 is_moved = egress != owner
                 if is_moved:
                     assert proxy_slot >= 0
@@ -225,6 +227,8 @@ def _validate(
     assert torch.equal(source_load, expected_source)
     assert torch.equal(retained, expected_retained)
     assert torch.equal(moved, expected_moved)
+    channel_capacity = (num_tokens + channels - 1) // channels
+    assert torch.all(retained + moved <= channel_capacity)
     assert torch.equal(path_units, expected_paths)
     assert path_units[3].item() <= present * max_two_hop_percent // 100
     assert path_units.sum().item() == present
@@ -431,6 +435,7 @@ def test_random_one_hop_invariants_and_determinism() -> None:
             "destinations": destinations,
             "capacity": rails * num_tokens * num_topk,
             "seed": rng.randrange(64),
+            "planner_chunk_size": 8 if seed % 2 else 1,
         }
         tensor, first = _build(tuple(records), **kwargs)
         _tensor, second = _build(tuple(records), **kwargs)
@@ -441,6 +446,7 @@ def test_random_one_hop_invariants_and_determinism() -> None:
             channels=channels,
             destinations=destinations,
             seed=kwargs["seed"],
+            planner_chunk_size=kwargs["planner_chunk_size"],
         )
 
 
@@ -504,6 +510,7 @@ def test_random_adaptive_invariants_cap_and_determinism() -> None:
             "seed": rng.randrange(64),
             "max_two_hop_percent": ratio,
             "hop_penalty_percent": rng.choice((0, 25, 50)),
+            "planner_chunk_size": 8 if seed % 2 else 1,
         }
         tensor, first = _build(tuple(records), **kwargs)
         _tensor, second = _build(tuple(records), **kwargs)
@@ -514,6 +521,7 @@ def test_random_adaptive_invariants_cap_and_determinism() -> None:
             channels=kwargs["channels"],
             destinations=2,
             max_two_hop_percent=ratio,
+            planner_chunk_size=kwargs["planner_chunk_size"],
         )
 
 
@@ -555,6 +563,38 @@ def test_chunk_groups_preserve_invariants_and_determinism() -> None:
     )
     assert first[1].max().item() <= exact[1].max().item() + 8
     assert first[2].max().item() <= exact[2].max().item() + 8
+
+
+def test_chunk_channels_bound_combined_retained_and_moved() -> None:
+    records = (
+        ((_record(1, 1 << 1),), (_UNUSED,)),
+        ((_record(1, 1 << 1),), (_UNUSED,)),
+    )
+    for max_two_hop_percent in (0, 25):
+        tensor, outputs = _build(
+            records,
+            channels=2,
+            destinations=2,
+            capacity=2,
+            threshold_percent=10_000,
+            max_two_hop_percent=max_two_hop_percent,
+            planner_chunk_size=8,
+        )
+        _validate(
+            tensor,
+            outputs,
+            channels=2,
+            destinations=2,
+            max_two_hop_percent=max_two_hop_percent,
+            planner_chunk_size=8,
+        )
+        retained, moved = outputs[3], outputs[4]
+        assert retained[1, :, 1].sum().item() == 1
+        assert moved[1, :, 1].sum().item() == 1
+        assert torch.equal(
+            retained[1, :, 1] + moved[1, :, 1],
+            torch.ones(2, dtype=retained.dtype),
+        )
 
 
 def test_zero_tokens() -> None:

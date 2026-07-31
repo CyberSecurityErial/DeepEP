@@ -140,14 +140,26 @@ _COMMON_JIT_KERNEL_PREFIXES = (
 _LEGACY_SOURCE_JIT_KERNEL_PREFIX = (
     "kernel.rail_balance_hybrid_source_shuffle.",
 )
-_HOP_JIT_KERNEL_PREFIXES = (
+_HOP_ONE_HOP_JIT_KERNEL_PREFIXES = (
     "kernel.rail_balance_hop_record_v1.",
-    "kernel.rail_balance_hop_plan_v2.",
+    "kernel.rail_balance_hop_precount_v1.",
+    "kernel.rail_balance_hop_decision_v4.",
+    "kernel.rail_balance_hop_endpoint_prefix_v1.",
+    "kernel.rail_balance_hop_endpoint_assign_v1.",
+    "kernel.rail_balance_hop_group_count_v1.",
+    "kernel.rail_balance_hop_group_prefix_v1.",
+    "kernel.rail_balance_hop_slot_finalize_v1.",
+    "kernel.rail_balance_hop_source_shuffle.",
+)
+_HOP_ADAPTIVE_JIT_KERNEL_PREFIXES = (
+    "kernel.rail_balance_hop_record_v1.",
+    "kernel.rail_balance_hop_precount_v1.",
+    "kernel.rail_balance_hop_plan_precounted_v3.",
     "kernel.rail_balance_hop_source_shuffle.",
 )
 _JIT_KERNEL_PREFIXES = (
     _COMMON_JIT_KERNEL_PREFIXES + _LEGACY_SOURCE_JIT_KERNEL_PREFIX +
-    _HOP_JIT_KERNEL_PREFIXES
+    _HOP_ONE_HOP_JIT_KERNEL_PREFIXES + _HOP_ADAPTIVE_JIT_KERNEL_PREFIXES
 )
 _WATCHDOG_CHILD_ENV = "EP_RAIL_BALANCE_BENCH_WATCHDOG_CHILD"
 _INTERFERENCE_MODES = ("none", "compute-only", "concurrent")
@@ -1162,10 +1174,13 @@ def _build_report(
         for artifact in post_jit["artifacts"]
         if str(artifact["relative_path"]).endswith("/kernel.cubin")
     })
-    required_jit_prefixes = _COMMON_JIT_KERNEL_PREFIXES + (
-        _LEGACY_SOURCE_JIT_KERNEL_PREFIX
-        if args.hop_mode == "legacy" else _HOP_JIT_KERNEL_PREFIXES
-    )
+    if args.hop_mode == "legacy":
+        mode_jit_prefixes = _LEGACY_SOURCE_JIT_KERNEL_PREFIX
+    elif args.max_two_hop_percent == 0:
+        mode_jit_prefixes = _HOP_ONE_HOP_JIT_KERNEL_PREFIXES
+    else:
+        mode_jit_prefixes = _HOP_ADAPTIVE_JIT_KERNEL_PREFIXES
+    required_jit_prefixes = _COMMON_JIT_KERNEL_PREFIXES + mode_jit_prefixes
     for prefix in required_jit_prefixes:
         matches = [name for name in cubin_directories
                    if name.startswith(prefix)]

@@ -541,12 +541,11 @@ void rail_balance_hop_materialize_impl(
         const int source_channel = owner_source_channel % num_channels;
         if (owner >= num_rails)
             return;
-        const int channel = (source_channel + owner) % num_channels;
         for (int flat = lane; flat < num_rails * num_destinations; flat += 32) {
             const int egress = flat / num_destinations;
             const int destination = flat % num_destinations;
             owner_group_cursor[hybrid_plan_detail::lgcd_offset(
-                owner, egress, channel, destination,
+                owner, egress, source_channel, destination,
                 num_rails, num_channels, num_destinations)] = 0;
         }
         __syncwarp();
@@ -569,7 +568,7 @@ void rail_balance_hop_materialize_impl(
                 continue;
             }
             ++owner_group_cursor[hybrid_plan_detail::lgcd_offset(
-                owner, egress, channel, record.destination,
+                owner, egress, source_channel, record.destination,
                 num_rails, num_channels, num_destinations)];
 
             int path = static_cast<int>(HopPathKind::TwoHop);
@@ -599,6 +598,74 @@ void rail_balance_hop_materialize_impl(
         const int egress = static_cast<int>(blockIdx.x);
         if (egress >= num_rails)
             return;
+
+        // Prefix retained copies first, then moved copies, in one combined
+        // sequence. Modulo striping therefore bounds their sum in every
+        // target channel without a cross-block atomic or serial record scan.
+        for (int destination = 0;
+             destination < num_destinations; ++destination) {
+            int retained_total = 0;
+            for (int tile = 0; tile < num_channels; tile += 32) {
+                const int source_channel = tile + lane;
+                const auto offset = hybrid_plan_detail::lgcd_offset(
+                    egress, egress, source_channel, destination,
+                    num_rails, num_channels, num_destinations);
+                const int count = source_channel < num_channels ?
+                    owner_group_cursor[offset] : 0;
+                int inclusive = count;
+                for (int delta = 1; delta < 32; delta *= 2) {
+                    const int upper = __shfl_up_sync(
+                        0xffffffff, inclusive, delta);
+                    if (lane >= delta)
+                        inclusive += upper;
+                }
+                if (source_channel < num_channels)
+                    owner_group_cursor[offset] =
+                        retained_total + inclusive - count;
+                retained_total += __shfl_sync(
+                    0xffffffff, inclusive, 31);
+            }
+
+            int combined_total = retained_total;
+            for (int owner = 0; owner < num_rails; ++owner) {
+                if (owner == egress)
+                    continue;
+                for (int tile = 0; tile < num_channels; tile += 32) {
+                    const int source_channel = tile + lane;
+                    const auto offset = hybrid_plan_detail::lgcd_offset(
+                        owner, egress, source_channel, destination,
+                        num_rails, num_channels, num_destinations);
+                    const int count = source_channel < num_channels ?
+                        owner_group_cursor[offset] : 0;
+                    int inclusive = count;
+                    for (int delta = 1; delta < 32; delta *= 2) {
+                        const int upper = __shfl_up_sync(
+                            0xffffffff, inclusive, delta);
+                        if (lane >= delta)
+                            inclusive += upper;
+                    }
+                    if (source_channel < num_channels)
+                        owner_group_cursor[offset] =
+                            combined_total + inclusive - count;
+                    combined_total += __shfl_sync(
+                        0xffffffff, inclusive, 31);
+                }
+            }
+
+            for (int channel = lane;
+                 channel < num_channels; channel += 32) {
+                const int group =
+                    (egress * num_channels + channel) * num_destinations +
+                    destination;
+                retained[group] = retained_total > channel ?
+                    1 + (retained_total - 1 - channel) / num_channels : 0;
+                const int combined_count = combined_total > channel ?
+                    1 + (combined_total - 1 - channel) / num_channels : 0;
+                moved[group] = combined_count - retained[group];
+            }
+        }
+        __syncwarp();
+
         int moved_base = 0;
         int retained_base = 0;
         const int num_groups = num_channels * num_destinations;
@@ -611,19 +678,11 @@ void rail_balance_hop_materialize_impl(
             if (group_index < num_groups) {
                 channel = group_index / num_destinations;
                 destination = group_index % num_destinations;
-                for (int owner = 0; owner < num_rails; ++owner) {
-                    const auto offset = hybrid_plan_detail::lgcd_offset(
-                        owner, egress, channel, destination,
-                        num_rails, num_channels, num_destinations);
-                    const int count = owner_group_cursor[offset];
-                    if (owner == egress) {
-                        owner_group_cursor[offset] = 0;
-                        retained_count = count;
-                    } else {
-                        owner_group_cursor[offset] = moved_count;
-                        moved_count += count;
-                    }
-                }
+                const int group =
+                    (egress * num_channels + channel) * num_destinations +
+                    destination;
+                retained_count = retained[group];
+                moved_count = moved[group];
             }
 
             int moved_inclusive = moved_count;
@@ -669,7 +728,6 @@ void rail_balance_hop_materialize_impl(
         const int source_channel = owner_source_channel % num_channels;
         if (owner >= num_rails)
             return;
-        const int channel = (source_channel + owner) % num_channels;
         for (int token = source_channel;
              token < num_tokens; token += num_channels) {
             const int64_t begin =
@@ -681,10 +739,21 @@ void rail_balance_hop_materialize_impl(
                 continue;
             auto& resolution = resolutions[begin + lane];
             const int egress = resolution.egress;
-            const int remote_slot = owner_group_cursor[
+            const int ordinal = owner_group_cursor[
                 hybrid_plan_detail::lgcd_offset(
-                    owner, egress, channel, record.destination,
+                    owner, egress, source_channel, record.destination,
                     num_rails, num_channels, num_destinations)]++;
+            const int channel = ordinal % num_channels;
+            const int retained_count = retained[
+                (egress * num_channels + channel) * num_destinations +
+                record.destination];
+            const int remote_slot = ordinal / num_channels -
+                (egress == owner ? 0 : retained_count);
+            if (remote_slot < 0) {
+                hybrid_plan_detail::report_error(
+                    status, HybridPlanError::InvalidSchedule);
+                continue;
+            }
             resolution.channel = channel;
             resolution.remote_slot = remote_slot;
             resolution.proxy_slot = egress == owner ? -1 :
@@ -1212,145 +1281,6 @@ void rail_balance_hop_plan_impl(
     if (*status != static_cast<int>(HybridPlanError::Success))
         return;
 
-    if (planner_chunk_size > 1) {
-        int local_paths[4] = {};
-        int local_moved = 0;
-        const int owner = lane % num_rails;
-        const int owner_lane = lane / num_rails;
-        const int num_owner_lanes = (31 - owner) / num_rails + 1;
-        for (int token = owner_lane;
-             token < num_tokens; token += num_owner_lanes) {
-            const int64_t token_begin =
-                (static_cast<int64_t>(owner) * num_tokens + token) * num_topk;
-            for (int slot = 0; slot < num_topk; ++slot) {
-                const int64_t index = token_begin + slot;
-                const auto record = records[index];
-                if (record.target_mask == 0)
-                    break;
-                const int egress = resolutions[index].egress;
-                const int channel =
-                    (token % num_channels + owner) % num_channels;
-                const auto group = hybrid_plan_detail::lgcd_offset(
-                    lane, egress, channel, record.destination,
-                    num_rails, num_channels, num_destinations);
-                ++owner_group_cursor[group];
-
-                int path = static_cast<int>(HopPathKind::TwoHop);
-                if (egress == owner) {
-                    path = record.target_mask == (uint32_t{1} << owner) ?
-                        static_cast<int>(HopPathKind::Direct) :
-                        static_cast<int>(HopPathKind::DestinationForward);
-                } else if ((record.target_mask &
-                            (uint32_t{1} << egress)) != 0) {
-                    path = static_cast<int>(HopPathKind::SourceForward);
-                }
-                ++local_paths[path];
-                local_moved += egress != owner;
-            }
-        }
-        for (int path = 0; path < 4; ++path) {
-            const int units = ptx::reduce_add(local_paths[path]);
-            if (lane == 0)
-                path_units[path] = units;
-        }
-        const int moved_units = ptx::reduce_add(local_moved);
-        if (lane == 0)
-            *moved_copies = moved_units;
-        __syncwarp();
-
-        const int num_channel_groups =
-            num_rails * num_channels * num_destinations;
-        for (int flat = lane; flat < num_channel_groups; flat += 32) {
-            const int destination = flat % num_destinations;
-            const int channel =
-                (flat / num_destinations) % num_channels;
-            const int egress = flat / (num_destinations * num_channels);
-            int moved_prefix = 0;
-            int retained_count = 0;
-            for (int worker_lane = 0; worker_lane < 32; ++worker_lane) {
-                const auto offset = hybrid_plan_detail::lgcd_offset(
-                    worker_lane, egress, channel, destination,
-                    num_rails, num_channels, num_destinations);
-                const int count = owner_group_cursor[offset];
-                if (worker_lane % num_rails == egress) {
-                    owner_group_cursor[offset] = retained_count;
-                    retained_count += count;
-                } else {
-                    owner_group_cursor[offset] = moved_prefix;
-                    moved_prefix += count;
-                }
-            }
-            retained[flat] = retained_count;
-            moved[flat] = moved_prefix;
-        }
-        __syncwarp();
-
-        for (int token = owner_lane;
-             token < num_tokens; token += num_owner_lanes) {
-            const int64_t token_begin =
-                (static_cast<int64_t>(owner) * num_tokens + token) * num_topk;
-            for (int slot = 0; slot < num_topk; ++slot) {
-                const int64_t index = token_begin + slot;
-                const auto record = records[index];
-                if (record.target_mask == 0)
-                    break;
-                const int egress = resolutions[index].egress;
-                const int channel =
-                    (token % num_channels + owner) % num_channels;
-                const auto group = hybrid_plan_detail::lgcd_offset(
-                    lane, egress, channel, record.destination,
-                    num_rails, num_channels, num_destinations);
-                resolutions[index] = {
-                    egress, channel, owner_group_cursor[group]++, -1};
-            }
-        }
-        __syncwarp();
-
-        if (lane < num_rails) {
-            int prefix = 0;
-            int retained_cursor = 0;
-            for (int channel = 0; channel < num_channels; ++channel) {
-                for (int destination = 0;
-                     destination < num_destinations; ++destination) {
-                    const int group =
-                        (lane * num_channels + channel) * num_destinations +
-                        destination;
-                    retained_prefix[group] = retained_cursor;
-                    retained_cursor += retained[group];
-                    group_prefix[group] = prefix;
-                    prefix += moved[group];
-                }
-            }
-            proxy_required[lane] = prefix;
-            if (prefix > proxy_capacity_per_egress or
-                    retained_cursor > proxy_capacity_per_egress)
-                hybrid_plan_detail::report_error(
-                    status, HybridPlanError::CapacityExceeded);
-        }
-        __syncwarp();
-
-        for (int token = owner_lane;
-             token < num_tokens; token += num_owner_lanes) {
-            const int64_t token_begin =
-                (static_cast<int64_t>(owner) * num_tokens + token) * num_topk;
-            for (int slot = 0; slot < num_topk; ++slot) {
-                const int64_t index = token_begin + slot;
-                auto& resolution = resolutions[index];
-                if (resolution.egress < 0)
-                    break;
-                if (resolution.egress == owner)
-                    continue;
-                const int destination = records[index].destination;
-                const int group =
-                    (resolution.egress * num_channels + resolution.channel) *
-                        num_destinations + destination;
-                resolution.proxy_slot =
-                    group_prefix[group] + resolution.remote_slot;
-            }
-        }
-        return;
-    }
-
     if (lane != 0)
         return;
 
@@ -1379,6 +1309,16 @@ void rail_balance_hop_plan_impl(
                 }
             }
         }
+    } else {
+        // Endpoint quotas are dead after egress selection. Reuse one entry per
+        // (egress, destination) as a combined retained/moved channel ordinal.
+        for (int egress = 0; egress < num_rails; ++egress)
+            for (int destination = 0;
+                 destination < num_destinations; ++destination) {
+                endpoint_owner_quota[hybrid_plan_detail::odt_offset(
+                    egress, destination, 0,
+                    num_destinations, num_rails)] = 0;
+            }
     }
 
     for (int64_t index = 0; index < num_records; ++index) {
@@ -1392,7 +1332,9 @@ void rail_balance_hop_plan_impl(
         const int token = static_cast<int>((index / num_topk) % num_tokens);
         const int egress = resolutions[index].egress;
         const int source_channel = token % num_channels;
+        const bool is_moved = egress != owner;
         int best_channel = (source_channel + owner) % num_channels;
+        int remote_slot = -1;
         if (planner_chunk_size == 1) {
             best_channel = -1;
             const int source_word = source_channel / 32;
@@ -1421,6 +1363,12 @@ void rail_balance_hop_plan_impl(
                 if (mask != 0)
                     best_channel = word * 32 + __ffs(mask) - 1;
             }
+        } else {
+            const auto counter = hybrid_plan_detail::odt_offset(
+                egress, record.destination, 0,
+                num_destinations, num_rails);
+            const int ordinal = endpoint_owner_quota[counter]++;
+            best_channel = ordinal % num_channels;
         }
         if (best_channel < 0) {
             hybrid_plan_detail::report_error(
@@ -1431,9 +1379,10 @@ void rail_balance_hop_plan_impl(
         const int group =
             (egress * num_channels + best_channel) * num_destinations +
             record.destination;
-        const bool is_moved = egress != owner;
         int& group_count = is_moved ? moved[group] : retained[group];
-        resolutions[index] = {egress, best_channel, group_count++, -1};
+        remote_slot = group_count;
+        resolutions[index] = {egress, best_channel, remote_slot, -1};
+        ++group_count;
 
         if (planner_chunk_size == 1) {
             const int mask_word = best_channel / 32;

@@ -4,6 +4,7 @@
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <sstream>
 #include <vector>
 #include <pybind11/functional.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -530,7 +531,8 @@ public:
                 num_max_tokens_per_rank, num_topk,
                 num_scaleout_ranks, num_channels,
                 two_hop_threshold_percent, max_two_hop_percent,
-                hop_penalty_percent, 1));
+                hop_penalty_percent,
+                rail_balance::kDefaultHopPlannerChunkSize));
         const int64_t active_count_values =
             static_cast<int64_t>(num_channels) * num_scaleout_ranks;
         EP_HOST_ASSERT(active_count_values > 0 and
@@ -2480,6 +2482,8 @@ public:
             int_options, num_source_ranks, num_channels, num_destinations);
         std::optional<RailBalanceHopPlanState> hop;
         if (hop_aware) {
+            const int planner_chunk_size =
+                rail_balance::kDefaultHopPlannerChunkSize;
             hop.emplace(RailBalanceHopPlanState{
                 .records = *hop_records,
                 .resolutions = torch::full(
@@ -2497,7 +2501,10 @@ public:
                 .endpoint_owner_quota = torch::zeros(
                     {num_source_ranks, num_destinations, num_source_ranks},
                     int_options),
-                .owner_group_cursor = torch::zeros({1}, int_options),
+                .owner_group_cursor = torch::zeros(
+                    {max_two_hop_percent == 0 ? num_source_ranks : 32,
+                     num_source_ranks, num_channels, num_destinations},
+                    int_options),
                 .path_units = torch::zeros({4}, int_options),
                 .local_records = nullptr,
                 .peer_records = {},
@@ -2505,8 +2512,9 @@ public:
                 .two_hop_threshold_percent = two_hop_threshold_percent,
                 .max_two_hop_percent = max_two_hop_percent,
                 .hop_penalty_percent = hop_penalty_percent,
-                .planner_chunk_size = 1,
-                .prepared = prepare_rail_balance_hop_plan(num_channels),
+                .planner_chunk_size = planner_chunk_size,
+                .prepared = prepare_rail_balance_hop_plan(
+                    num_channels, true, max_two_hop_percent == 0),
             });
         }
         auto compact_quota = torch::empty(
@@ -2926,12 +2934,18 @@ public:
             throw;
         }
 
-        for (const int value : pending.host_stage_status) {
+        for (size_t index = 0;
+             index < pending.host_stage_status.size(); ++index) {
+            const int value = pending.host_stage_status[index];
             if (value != 0) {
                 pending.plan_status = value;
+                std::stringstream message;
+                message << "sticky device error: stage="
+                        << index / pending.status_stride
+                        << ", work=" << index % pending.status_stride
+                        << ", code=" << value;
                 throw EPExceptionWithLineInfo(
-                    "Rail balance Hybrid vnode finish",
-                    "a fixed vnode stage reported a sticky device error");
+                    "Rail balance Hybrid vnode finish", message.str());
             }
         }
         pending.finished = true;

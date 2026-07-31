@@ -48,6 +48,7 @@ _K = 1
 _CHANNELS = 2
 _PROXY_CAPACITY = 16
 _GENERATION = 1201
+_PLANNER_CHUNK_SIZE = 8
 
 
 def _case(case_name: str, workload_json: Path | None = None) -> VnodeRoundTripCase:
@@ -144,7 +145,7 @@ def _worker(local_rank: int, num_local_ranks: int,
             num_rails=_G,
             num_destinations=_D,
             mode=args.mode,
-            chunk_size=1,
+            chunk_size=_PLANNER_CHUNK_SIZE,
             two_hop_threshold=args.two_hop_threshold_percent / 100,
             max_two_hop_ratio=(
                 args.max_two_hop_percent / 100 if args.mode == "adaptive" else 0
