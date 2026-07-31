@@ -1203,3 +1203,11 @@ Out of scope until evidence expands the project:
   added. A missing host pointer first caused a fast early return; that result
   was rejected, the full vnode caught it, and the corrected one-hop/adaptive
   round trips pass. Capability remains closed.
+- HA060-E profiles the next boundary rather than guessing: the one-hop planner
+  kernel was 155.580 ms median and 97.7% of captured kernel time because every
+  active copy searched 256 channels. An exact eight-word minimum-load bitset
+  preserves the previous greedy channel and reduces the kernel to 34.928 ms.
+  A 256-channel wrap/reset oracle, GPU 11/11, both vnode round trips, and
+  focused memcheck/initcheck/synccheck pass. The planner is still dominant;
+  the next target is its sequential endpoint assignment. No capability or
+  real-Rail claim changed.

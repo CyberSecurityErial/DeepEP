@@ -296,3 +296,42 @@ The current device tools identify the visible accelerator as `NVIDIA L20X`,
 CC 9.0 with 132 SMs. Therefore this checkpoint remains
 `single_node_diagnostic`; it provides no H200, Gin, RDMA, NIC, or real
 multi-node performance claim, and capability remains false.
+
+### Clean HA060-D distribution
+
+Commit `bfffe7c` was measured without a profiler for 10 warmups and 100 steady
+iterations; all automatic eligibility gates passed. Legacy, one-hop, and
+adaptive source-stage medians were respectively 491.699, 122.753, and
+667.974 us. Their p95 values were 503.357, 145.578, and 703.740 us; p99 values
+were 505.909, 177.898, and 716.065 us. Raw reports and SHA-256 values are:
+
+```text
+ace5da5030fb34601d2c1ab98466fca8225495d3b6d5ce54dd4b666802157b8d  c100-legacy-source-formal.json
+7dd28be5c33a966ed2a1d3e9583941b7d3c4099439c8fa47cdffe1630b906f89  c100-onehop-source-prefix-formal.json
+de6b977ad02e56c0b412e5df2c4906fc623c7bfd1a6b74b44125af41bea73c37  c100-adaptive-source-prefix-formal.json
+```
+
+### HA060-E planner channel selection
+
+The clean one-hop report also exposes a 203.951 ms median `finish` boundary.
+The corresponding Nsys report attributes 155.580 ms median to the planner
+kernel, 97.7% of captured kernel duration. Replacing its exact 256-counter
+channel search with an equivalent eight-word minimum-load bitset reduces a
+3+20 diagnostic `finish` median to 44.445 ms and a second Nsys planner median
+to 34.928 ms. The kernel reduction is 4.45x; it remains the dominant 92.3% and
+therefore is not presented as finished optimization.
+
+The post-edit JSON, Nsys report, and SQLite hashes are:
+
+```text
+e219a9e03961646d56a565cc7a0bceee78980f11bedc644f59044613e3495042  c100-onehop-channelmask-diag.json
+264b753501895ca97d4e7be73e1c8cd74395637adc99309719d3c87e2613c5a7  c100-onehop-channelmask-nsys.nsys-rep
+a146bc749c25d766adb0467dcd3ecfc00614280ea2287e11e4fd0e6812d5c75b  c100-onehop-channelmask-nsys.sqlite
+```
+
+The before report is a clean 10+100 distribution and the after diagnostic is
+a dirty 3+20 run, so the profiler-free ratio is provisional. The Nsys kernel
+comparison uses the same C100 checked-adapter workload and is diagnostic under
+profiler perturbation. An exact 256-channel greedy-oracle case, 11/11 GPU
+planner tests, two vnode round trips, and all three focused sanitizer tools
+pass. Real multi-node capability remains false.

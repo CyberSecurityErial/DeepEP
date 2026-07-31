@@ -6773,3 +6773,47 @@ Commit this single-variable source-path optimization, collect clean 10+100
 profiler-free distributions, then profile the planner separately. Nsys already
 indicates planner construction is the next dominant diagnostic stage; no
 planner performance code will change before that evidence is captured.
+
+## 2026-07-31 — HA060-E: exact bitset channel selection
+
+### Measurement and implementation
+
+- The clean `bfffe7c` 10+100 source reports pass baseline eligibility:
+  legacy 491.699 us, one-hop 122.753 us, adaptive 667.974 us median.
+- That one-hop report also measures `finish` at 203.951 ms median. Nsys places
+  the planner kernel at 155.580 ms median and 97.7% of captured kernel time.
+- The channel materializer searched 256 counters per active copy. It now keeps
+  the exact current-minimum candidate set in eight 32-bit words and applies
+  the same circular source-channel tie-break.
+- Existing dead workspace is reused: no buffer, allocation, ticket, segment,
+  resolution, or public ABI was added.
+
+### Results and gates
+
+```text
+one-hop finish median, before clean 10+100       203.951 ms
+one-hop finish median, after diagnostic 3+20      44.445 ms
+planner Nsys median, before                       155.580 ms
+planner Nsys median, after                         34.928 ms
+source-stage median after                           0.126 ms
+GPU planner exact tests                                11/11 PASS
+256-channel cross-word/reset greedy equality              PASS
+one-hop/adaptive vnode round trips                          PASS
+planner memcheck/initcheck/synccheck                   0 errors
+```
+
+The after profiler-free distribution is still dirty-tree and short, so it is
+diagnostic. The Nsys before/after establishes the kernel effect but includes
+profiler perturbation. A clean 10+100 report follows the commit.
+
+Ruff check passes for the changed CUDA test. `ruff format --check` also exposed
+that the pre-existing file is not globally formatted; applying it created a
+193-line mechanical diff around a 14-line test. That unrelated rewrite was
+reverted to keep this commit reviewable. No test logic from the new case was
+removed.
+
+### Decision
+
+Keep this as a separate exact planner optimization. The planner remains 92.3%
+of captured kernel time, so the next evidence target is sequential endpoint
+assignment rather than source shuffle, TMA, or SM tuning.

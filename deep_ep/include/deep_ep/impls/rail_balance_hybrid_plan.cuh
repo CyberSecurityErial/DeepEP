@@ -558,7 +558,30 @@ void rail_balance_hop_plan_impl(
     }
 
     // Materialize dense channel-local slots only after two-hop selection has
-    // finalized every egress. This keeps data-plane offsets static.
+    // finalized every egress. A bit set denotes a channel at the current
+    // minimum load. Selecting the first set bit from source_channel preserves
+    // the original (load, circular distance, channel) ordering while reducing
+    // each lookup from C counters to ceil(C / 32) words. owner_remaining is
+    // dead after endpoint assignment and holds the number of minimum-load
+    // channels until final slot materialization completes.
+    const int channel_mask_words = (num_channels + 31) / 32;
+    for (int egress = 0; egress < num_rails; ++egress) {
+        for (int destination = 0;
+             destination < num_destinations; ++destination) {
+            owner_remaining[egress * num_destinations + destination] =
+                num_channels;
+            for (int word = 0; word < channel_mask_words; ++word) {
+                const int valid_bits = min(32, num_channels - word * 32);
+                const uint32_t mask = valid_bits == 32 ? UINT32_MAX :
+                    (uint32_t{1} << valid_bits) - 1;
+                group_prefix[hybrid_plan_detail::gcd_offset(
+                    egress, word, destination,
+                    num_channels, num_destinations)] =
+                        static_cast<int32_t>(mask);
+            }
+        }
+    }
+
     for (int64_t index = 0; index < num_records; ++index) {
         const auto record = records[index];
         if (record.target_mask == 0)
@@ -568,28 +591,32 @@ void rail_balance_hop_plan_impl(
         const int token = static_cast<int>((index / num_topk) % num_tokens);
         const int egress = resolutions[index].egress;
         int best_channel = -1;
-        int best_group_load = INT_MAX;
-        int best_channel_tie = INT_MAX;
         const int source_channel = token % num_channels;
-        const int channel_capacity =
-            (num_max_tokens_per_rank + num_channels - 1) / num_channels;
-        for (int channel = 0; channel < num_channels; ++channel) {
-            const int group =
-                (egress * num_channels + channel) * num_destinations +
-                record.destination;
-            const int group_load = retained[group] + moved[group];
-            const int channel_tie =
-                (channel - source_channel + num_channels) % num_channels;
-            if (group_load < channel_capacity and
-                    (group_load < best_group_load or
-                     (group_load == best_group_load and
-                      (channel_tie < best_channel_tie or
-                       (channel_tie == best_channel_tie and
-                        channel < best_channel))))) {
-                best_channel = channel;
-                best_group_load = group_load;
-                best_channel_tie = channel_tie;
+        const int source_word = source_channel / 32;
+        const int source_bit = source_channel % 32;
+        for (int word = source_word;
+             word < channel_mask_words and best_channel < 0; ++word) {
+            uint32_t mask = static_cast<uint32_t>(group_prefix[
+                hybrid_plan_detail::gcd_offset(
+                    egress, word, record.destination,
+                    num_channels, num_destinations)]);
+            if (word == source_word)
+                mask &= UINT32_MAX << source_bit;
+            if (mask != 0)
+                best_channel = word * 32 + __ffs(mask) - 1;
+        }
+        for (int word = 0;
+             word <= source_word and best_channel < 0; ++word) {
+            uint32_t mask = static_cast<uint32_t>(group_prefix[
+                hybrid_plan_detail::gcd_offset(
+                    egress, word, record.destination,
+                    num_channels, num_destinations)]);
+            if (word == source_word) {
+                mask &= source_bit == 0 ? 0 :
+                    (uint32_t{1} << source_bit) - 1;
             }
+            if (mask != 0)
+                best_channel = word * 32 + __ffs(mask) - 1;
         }
         if (best_channel < 0) {
             hybrid_plan_detail::report_error(
@@ -603,6 +630,28 @@ void rail_balance_hop_plan_impl(
         const bool is_moved = egress != owner;
         int& group_count = is_moved ? moved[group] : retained[group];
         resolutions[index] = {egress, best_channel, group_count++, -1};
+
+        const int mask_word = best_channel / 32;
+        const int mask_bit = best_channel % 32;
+        const auto mask_offset = hybrid_plan_detail::gcd_offset(
+            egress, mask_word, record.destination,
+            num_channels, num_destinations);
+        group_prefix[mask_offset] &=
+            static_cast<int32_t>(~(uint32_t{1} << mask_bit));
+        int& channels_at_minimum = owner_remaining[
+            egress * num_destinations + record.destination];
+        if (--channels_at_minimum == 0) {
+            channels_at_minimum = num_channels;
+            for (int word = 0; word < channel_mask_words; ++word) {
+                const int valid_bits = min(32, num_channels - word * 32);
+                const uint32_t mask = valid_bits == 32 ? UINT32_MAX :
+                    (uint32_t{1} << valid_bits) - 1;
+                group_prefix[hybrid_plan_detail::gcd_offset(
+                    egress, word, record.destination,
+                    num_channels, num_destinations)] =
+                        static_cast<int32_t>(mask);
+            }
+        }
 
         int path = static_cast<int>(HopPathKind::TwoHop);
         if (egress == owner) {

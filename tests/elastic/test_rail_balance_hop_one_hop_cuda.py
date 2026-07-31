@@ -478,6 +478,20 @@ def test_random_adaptive_invariants_cap_and_determinism() -> None:
         )
 
 
+def test_channel_masks_preserve_greedy_order_across_words() -> None:
+    records = tuple(
+        tuple(
+            (_record(1, 1 << 1),) if owner == 0 else (_UNUSED,)
+            for _ in range(513)
+        )
+        for owner in range(4)
+    )
+    tensor, outputs = _build(
+        records, channels=256, destinations=2, capacity=2048
+    )
+    _validate(tensor, outputs, channels=256, destinations=2)
+
+
 def test_zero_tokens() -> None:
     records = torch.empty((4, 0, 4), device="cuda", dtype=torch.int64)
     outputs = tuple(output.cpu() for output in

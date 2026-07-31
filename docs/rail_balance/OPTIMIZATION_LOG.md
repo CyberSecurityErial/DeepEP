@@ -2306,4 +2306,48 @@ Rejected evidence and failures are material:
 - full-vnode Compute Sanitizer ran the functional round trip to PASS but its
   NCCL initialization produced `NoKernelImageForDevice` under child-process
   instrumentation. That run is rejected as tool/environment incompatible.
-  Focused planner memcheck and initcheck remain zero-error.
+Focused planner memcheck and initcheck remain zero-error.
+
+The committed `bfffe7c` tree was then measured with the profiler disabled for
+10 warmups and 100 steady iterations. All three reports passed their automatic
+baseline-eligibility gates:
+
+| Mode | median / p95 / p99 (us) | population stddev (us) |
+| --- | ---: | ---: |
+| legacy | 491.699 / 503.357 / 505.909 | 6.453 |
+| one-hop | 122.753 / 145.578 / 177.898 | 13.187 |
+| adaptive | 667.974 / 703.740 / 716.065 | 36.323 |
+
+This closes O095. The source stage alone is 4.01x lower for one-hop than the
+legacy checked adapter in this fanout case. Adaptive is slower because it
+executes actual extra peer movement. Neither result includes plan/finish time,
+real RDMA, or the public Hybrid end-to-end path.
+
+## O096 — replace dense channel scan with exact minimum-load bitsets
+
+Before editing, the clean one-hop report measured 203.951 ms median in
+`finish`, and Nsys measured `rail_balance_hop_plan_impl` at 155.580 ms median
+over 16 invocations, 97.7% of captured kernel time. Source correlation found
+the planner scanning all 256 channel counters for every active copy.
+
+The original choice is lexicographic `(group load, circular distance from
+source channel, channel)`. Because the algorithm always increments a
+minimum-load channel, loads for one `(egress,destination)` differ by at most
+one. The exact candidate set is therefore represented by eight 32-bit words
+for 256 channels. `owner_remaining`, dead after endpoint assignment, holds the
+number of channels still at the current minimum; `group_prefix`, not consumed
+until the final prefix pass, temporarily holds the masks. No allocation,
+output field, public ABI, or approximate choice was introduced.
+
+The first diagnostic after the single edit reports 44.445 ms median `finish`
+(3+20, dirty-tree diagnostic), 4.59x below the clean pre-edit boundary. Nsys
+measures the planner kernel at 34.928 ms median, 4.45x below the matched
+155.580 ms kernel and still 92.3% of captured kernel time. The source stage
+remains unchanged within noise at 125.733 us median.
+
+Correctness is exact rather than invariant-only: the existing greedy oracle
+passes, plus a new 256-channel/513-token case crosses all eight words and
+forces one complete minimum-level reset. GPU planner 11/11, both one-hop and
+adaptive vnode round trips, and planner memcheck/initcheck/synccheck pass with
+zero errors. This checkpoint is useful but not a final planner design; the
+remaining sequential endpoint assignment is the next measured target.
