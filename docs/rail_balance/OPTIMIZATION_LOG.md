@@ -2649,3 +2649,39 @@ the remaining bottleneck.
 one-hop SHA256 d3fbdcc9451e1a322b907710dd1fcc3c6913e01aad80c68ac2f47120da32476c
 adaptive SHA256 dc12f779b42fd4ca48ba3a5280dad4b7db0a687b4d59ec0a3180c049fa7432c4
 ```
+
+## O107 — parallel one-hop assignment and static slots
+
+Hypothesis: after O106, repeated per-record assignment and slot materialization
+inside one warp dominate the remaining 9.098 ms. The implementation preserves
+one ordered coarse decision but assigns dense work to the predeclared CUDA
+ownership map. Five launch boundaries replace unsafe cross-block barriers.
+
+Profiler-free N8192/C256 one-hop 10+100:
+
+```text
+O106 precounted median / p95       9.198 / 9.206 ms
+O107 final median / p95            0.429 / 0.435 ms
+incremental speedup                           21.45x
+O104 accepted chunk-8 median                  13.586 ms
+cumulative speedup                            31.68x
+```
+
+Matched Nsys measures a 0.489 ms projected GPU range. The remaining coarse
+decision is 251.072 us; pre-count is 15.392 us; endpoint prefix, assignment,
+group count, group prefix, and finalize are 4.576, 14.592, 17.472, 20.320, and
+19.104 us. Allocator fill kernels account for 16.832 us. This is no longer a
+single-warp multi-millisecond data-materialization path.
+
+The exact chunk-1 control measured 96.034 ms in the final session versus
+92.678 ms in the older O104 session. Compile-time specialization did not change
+that value, so the cross-session 3.6% difference is not attributed to this
+optimization. Exact remains a correctness oracle, and O107's accepted evidence
+is the paired O106-to-O107 fast path plus downstream LSA/vnode correctness.
+
+```text
+/tmp/rail-hop-ha070-parallel-specialized.json
+SHA256 7d656074e99cd371965cde9b3f1cc1b1eee8af096d299079c1f199c7baf05bba
+.cache/rail_balance/hop-aware/ha070-onehop-n8192-parallel-materialize.nsys-rep
+SHA256 db90bcaae747593200d2231f1bf43df86781eb574a0031f6d370e7e8fc9e941a
+```

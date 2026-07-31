@@ -312,3 +312,8 @@ dense stages expose 2,048 independent blocks and each block sees roughly 32
 tokens. Launch boundaries provide the only grid-wide ordering. A later fusion
 is allowed only after profiling proves launch cost material; correctness is
 not based on cooperative-launch residency or cross-block spin barriers.
+
+HA070-C implements this map for `one_hop`. The prepared production launcher
+uses the same five materializer kernels as the private benchmark. `adaptive`
+uses the parallel pre-count but intentionally retains its prior residual/tail
+kernel until that path has an equally explicit ownership map.

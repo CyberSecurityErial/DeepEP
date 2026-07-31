@@ -7104,3 +7104,34 @@ zero errors. On N8192/C256, one-hop falls from 13.586 to 9.198 ms and adaptive
 from 15.608 to 11.177 ms. Nsys measures the new pre-count at 16.672 us and the
 remaining ordered planner at 9.098 ms (99.6% of kernel time), so the next slice
 is assignment/slot materialization rather than pre-count tuning.
+
+## 2026-07-31 — HA070-C: multi-block one-hop materializer
+
+The endpoint decision now stops after coarse chunk quotas in one warp. Five
+prepared kernels consume those quotas with explicit ownership: endpoint prefix
+uses `G*D*G` blocks, assignment/count/finalize each use `G*C` blocks, and one
+prefix block owns each egress. Slot ranges remain static and deterministic; no
+per-copy global tail atomic was introduced. Adaptive continues through the
+precounted monolithic tail until it is split independently.
+
+The first host build failed because the five-stage enum lived in a JIT-only
+header. Moving that small shared ABI to the common Hybrid layout fixed the
+ownership boundary without including kernel implementation in host code. The
+private and prepared production paths now share one materializer build/launch
+helper. One-hop allocates `G` cursor owners instead of the old 32 worker lanes;
+adaptive retains 32 because its existing tail still uses them.
+
+Validation passes:
+
+```text
+GPU planner invariants/determinism                         12/12
+Compute Sanitizer memcheck/synccheck/initcheck          0 errors
+true EP8 LSA source shuffle, static slots/payload bytes     PASS
+4x2 vnode dispatch/combine inverse round trip               PASS
+EP8 prepare/Gate failure recovery                           PASS
+```
+
+An unrelated `mmunlearner` briefly occupied about 0.5--1 GiB per GPU. It was
+not killed and no performance result collected during that interval is used.
+After it exited, the clean N8192/C256 10+100 one-hop median/p95 is
+0.429/0.435 ms. Public capability remains false.

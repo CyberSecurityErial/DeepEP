@@ -1292,3 +1292,9 @@ Out of scope until evidence expands the project:
   9.198/11.177 ms, 12/12 GPU tests and memcheck/synccheck pass. Nsys measures
   the pre-count at 16.672 us and leaves 9.098 ms in the ordered planner, so the
   next slice is parallel assignment and static slot materialization.
+- HA070-C keeps only coarse chunk decisions in one warp and moves endpoint
+  prefix/assignment/group count/prefix/final slots to the documented
+  `G*D*G`, `G*C`, and `G` grids. N8192/C256 one-hop is 0.429 ms median versus
+  9.198 ms after pre-count and 13.586 ms at O104. EP8 LSA consumes the new
+  production plan byte-exactly; vnode combine inverse and all sanitizer gates
+  pass. Adaptive still uses the precounted old tail. Capability remains false.
