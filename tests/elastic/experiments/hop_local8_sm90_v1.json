@@ -1,0 +1,984 @@
+{
+  "schema_version": 1,
+  "campaign_id": "hop-local8-sm90-v1",
+  "candidate": {
+    "id": "ha070g-takeover-v4",
+    "parent": "8c56939",
+    "primary_change": "Validate the bounded sparse multi-target adaptive planner and its fail-closed measurement contracts without changing the public capability gate.",
+    "hypothesis": "The corrected valid path remains exact while bounded sparse planning removes the previously exposed serial record scans; only a clean matched run may establish whether the gain exceeds noise.",
+    "expected_profile_metrics": [
+      "lower rail_balance_hop_plan_impl duration and instruction count",
+      "no regression in source-shuffle rank-max duration",
+      "two-hop cap and measured owner-to-egress movement remain exact"
+    ],
+    "risks": [
+      "planner latency may no longer be on the exposed critical path",
+      "adaptive batching can improve latency while worsening a tail load case",
+      "single-node checked-adapter evidence cannot establish NIC or RDMA speedup"
+    ]
+  },
+  "frozen_contract": {
+    "interface": {
+      "entry": "private checked hop planner plus C100 source adapter",
+      "planner_input": "packed int64 [G,N,K] destination/target-mask records",
+      "planner_outputs": "resolution, load, prefix, proxy, path and status tensors",
+      "public_capability": false
+    },
+    "supported_inputs": {
+      "dtype": [
+        "int64 packed records",
+        "BF16 TokenLayout payload",
+        "FP32 top-k weights"
+      ],
+      "shape": "planner G=2..8,K=1/2/4/8; performance anchor G8,N1024,K4,D9,H256,C256",
+      "layout": "contiguous packed records and 32-byte-aligned TokenLayout",
+      "stride": "contiguous only",
+      "alignment_bytes": 32
+    },
+    "target_platform": {
+      "gpu_arch": "SM90",
+      "required_gpus": 8,
+      "topology": "single-node all-peer NVLink diagnostic; no Gin/RDMA claim",
+      "driver": "570.172.08",
+      "cuda_toolkit": "12.8 build 35404655",
+      "pytorch": "2.11.0+cu128",
+      "python": "3.11.15",
+      "nsys": "2024.6.2.225-246235244400v0",
+      "ncu": "2025.1.1.0 build 35528883",
+      "compute_sanitizer": "2025.1.0.0 build 35351055"
+    },
+    "reference": {
+      "planner": "tests/elastic/rail_balance_hop_reference.py",
+      "payload": "tests/elastic/rail_balance_hybrid_vnode_reference.py",
+      "requirement": "exact integer planner outputs and exact vnode payload/metadata"
+    },
+    "build": {
+      "entry": "tests/elastic/run_rail_balance_build_warmup.py",
+      "command": "pinned Python, MAX_JOBS=8, TORCH_CUDA_ARCH_LIST=9.0, forced extension build and representative codegen"
+    },
+    "correctness": {
+      "cpu": "reference, report, API, layout, policy and lifecycle contracts",
+      "cuda": "20-case planner, dispatch/combine codegen and two 4x2 vnode round trips",
+      "sanitizer": "tiny-tail and G2 under memcheck/synccheck/initcheck/racecheck"
+    },
+    "benchmark": {
+      "case": "c100_volume_h256 source stage",
+      "modes": [
+        "one_hop",
+        "adaptive"
+      ],
+      "input_identity": "same deterministic C100 Top-k and packed records",
+      "warmup": 10,
+      "steady": 100,
+      "independent_order": "ABBA then BAAB",
+      "timer": "global rank-max stage span from synchronized host monotonic timestamps",
+      "truth": "profiler-free raw samples; median/p95/p99/std/CV retained"
+    },
+    "profile": {
+      "order": "accepted profiler-free distribution, then Nsys, then only a targeted NCU command justified by that Nsys",
+      "nsys": "CUDA/NVTX/OSRT process-tree trace with diagnostic NVTX mode",
+      "ncu": "application replay or another side-effect-safe mode only; never default kernel replay for cross-rank side effects"
+    },
+    "numerical_tolerance": {
+      "planner": "exact integer equality",
+      "payload_and_metadata": "bitwise equality",
+      "generic_float_ceiling": "relative error below 1e-3 where exactness is not declared"
+    },
+    "objective_and_budget": {
+      "performance_target": "improvement must exceed the paired run-to-run noise interval; no fixed speedup is assumed",
+      "theoretical_limit": "report planner fraction of exposed stage and measured Rail-load lower bound before claiming headroom",
+      "max_candidates_per_round": 4,
+      "minimum_candidates_per_round": 2,
+      "max_rounds": 6,
+      "exit": "goal reached, near measured upper bound, three rounds without significant gain, hypotheses exhausted, or budget exhausted"
+    }
+  },
+  "resources": {
+    "required_gpu_count": 8,
+    "require_all_host_gpus": true,
+    "expected_gpu_index_uuid_mapping": [
+      {
+        "index": 0,
+        "uuid": "GPU-34d06e04-4c63-02ac-12c5-cb4fbe14e78f"
+      },
+      {
+        "index": 1,
+        "uuid": "GPU-7c2d67e2-baa9-e52c-b14b-d323d689db49"
+      },
+      {
+        "index": 2,
+        "uuid": "GPU-43dd5b59-3ad6-d72e-4b30-97f70795d0d9"
+      },
+      {
+        "index": 3,
+        "uuid": "GPU-b2d439c0-5ad1-b1f4-b639-28da8cd5bf6a"
+      },
+      {
+        "index": 4,
+        "uuid": "GPU-60b40059-df23-0d8d-8583-9e3f8d746874"
+      },
+      {
+        "index": 5,
+        "uuid": "GPU-30413ecd-d9b3-ae05-d2d7-aa5bbe208cc2"
+      },
+      {
+        "index": 6,
+        "uuid": "GPU-100c4b75-c009-44ff-0a6d-79097e0ce112"
+      },
+      {
+        "index": 7,
+        "uuid": "GPU-b018d7a0-2075-e96a-33f9-d970485abb1f"
+      }
+    ],
+    "home_path": "/home/chen",
+    "home_hard_limit_bytes": 300000000000,
+    "artifact_budget_bytes": 8000000000,
+    "lock_path": "/tmp/deepep-rail-balance-hop-campaign.lock"
+  },
+  "stages": [
+    {
+      "id": "cpu-reference",
+      "kind": "correctness",
+      "resource": "cpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/test_rail_balance_hop_plan.py"
+      ],
+      "env": {
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}"
+      },
+      "timeout_seconds": 120,
+      "depends_on": []
+    },
+    {
+      "id": "cpu-report-contracts",
+      "kind": "correctness",
+      "resource": "cpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/test_rail_balance_hop_bench.py"
+      ],
+      "env": {
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}"
+      },
+      "timeout_seconds": 120,
+      "depends_on": []
+    },
+    {
+      "id": "cpu-api",
+      "kind": "correctness",
+      "resource": "cpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/test_rail_balance_hybrid_api.py"
+      ],
+      "env": {
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}"
+      },
+      "timeout_seconds": 120,
+      "depends_on": []
+    },
+    {
+      "id": "cpu-layout",
+      "kind": "correctness",
+      "resource": "cpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/test_rail_balance_hybrid_layout.py"
+      ],
+      "env": {
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}"
+      },
+      "timeout_seconds": 120,
+      "depends_on": []
+    },
+    {
+      "id": "cpu-policy",
+      "kind": "correctness",
+      "resource": "cpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/test_rail_balance_hybrid_policy.py"
+      ],
+      "env": {
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}"
+      },
+      "timeout_seconds": 120,
+      "depends_on": []
+    },
+    {
+      "id": "cpu-public-lifecycle",
+      "kind": "correctness",
+      "resource": "cpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/test_rail_balance_hybrid_public_lifecycle.py"
+      ],
+      "env": {
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}"
+      },
+      "timeout_seconds": 120,
+      "depends_on": []
+    },
+    {
+      "id": "compile-extension",
+      "kind": "compile",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/run_rail_balance_build_warmup.py",
+        "--run-id",
+        "hop-local8-sm90-v1",
+        "--output-dir",
+        "{stage_dir}/build-warmup",
+        "--cuda-device",
+        "0",
+        "--jobs",
+        "8",
+        "--timeout",
+        "3600"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "PYTHONPATH": "{root}"
+      },
+      "timeout_seconds": 4000,
+      "depends_on": [
+        "cpu-reference",
+        "cpu-report-contracts",
+        "cpu-api",
+        "cpu-layout",
+        "cpu-policy",
+        "cpu-public-lifecycle"
+      ],
+      "artifacts": [
+        "build-warmup/manifest.json"
+      ]
+    },
+    {
+      "id": "gpu-dispatch-codegen",
+      "kind": "correctness",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/test_rail_balance_hybrid_dispatch_codegen.py"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}"
+      },
+      "timeout_seconds": 900,
+      "depends_on": [
+        "compile-extension"
+      ]
+    },
+    {
+      "id": "gpu-combine-codegen",
+      "kind": "correctness",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/test_rail_balance_hybrid_combine_codegen.py"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}"
+      },
+      "timeout_seconds": 900,
+      "depends_on": [
+        "compile-extension"
+      ]
+    },
+    {
+      "id": "gpu-planner",
+      "kind": "correctness",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/test_rail_balance_hop_one_hop_cuda.py",
+        "--device",
+        "0"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 900,
+      "depends_on": [
+        "compile-extension"
+      ]
+    },
+    {
+      "id": "sanitizer-memcheck",
+      "kind": "sanitizer",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "memcheck",
+        "--error-exitcode",
+        "86",
+        "--target-processes",
+        "all",
+        "--log-file",
+        "{stage_dir}/sanitizer.log",
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/test_rail_balance_hop_one_hop_cuda.py",
+        "--device",
+        "0",
+        "--only",
+        "test_adaptive_g2_diagonal_uses_the_other_rail_as_two_hop",
+        "--only",
+        "test_adaptive_tiny_tail_treats_two_hop_cap_as_a_limit"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 1800,
+      "depends_on": [
+        "gpu-planner"
+      ],
+      "artifacts": [
+        "sanitizer.log"
+      ]
+    },
+    {
+      "id": "sanitizer-synccheck",
+      "kind": "sanitizer",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "synccheck",
+        "--error-exitcode",
+        "86",
+        "--target-processes",
+        "all",
+        "--log-file",
+        "{stage_dir}/sanitizer.log",
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/test_rail_balance_hop_one_hop_cuda.py",
+        "--device",
+        "0",
+        "--only",
+        "test_adaptive_g2_diagonal_uses_the_other_rail_as_two_hop",
+        "--only",
+        "test_adaptive_tiny_tail_treats_two_hop_cap_as_a_limit"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 1800,
+      "depends_on": [
+        "gpu-planner"
+      ],
+      "artifacts": [
+        "sanitizer.log"
+      ]
+    },
+    {
+      "id": "sanitizer-initcheck",
+      "kind": "sanitizer",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "initcheck",
+        "--error-exitcode",
+        "86",
+        "--target-processes",
+        "all",
+        "--check-api-memory-access",
+        "no",
+        "--log-file",
+        "{stage_dir}/sanitizer.log",
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/test_rail_balance_hop_one_hop_cuda.py",
+        "--device",
+        "0",
+        "--only",
+        "test_adaptive_g2_diagonal_uses_the_other_rail_as_two_hop",
+        "--only",
+        "test_adaptive_tiny_tail_treats_two_hop_cap_as_a_limit"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 1800,
+      "depends_on": [
+        "gpu-planner"
+      ],
+      "artifacts": [
+        "sanitizer.log"
+      ]
+    },
+    {
+      "id": "sanitizer-racecheck",
+      "kind": "sanitizer",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/usr/local/cuda/bin/compute-sanitizer",
+        "--tool",
+        "racecheck",
+        "--error-exitcode",
+        "86",
+        "--target-processes",
+        "all",
+        "--racecheck-detect-level",
+        "info",
+        "--racecheck-report",
+        "all",
+        "--print-level",
+        "info",
+        "--log-file",
+        "{stage_dir}/sanitizer.log",
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/test_rail_balance_hop_one_hop_cuda.py",
+        "--device",
+        "0",
+        "--only",
+        "test_adaptive_g2_diagonal_uses_the_other_rail_as_two_hop",
+        "--only",
+        "test_adaptive_tiny_tail_treats_two_hop_cap_as_a_limit"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 1800,
+      "depends_on": [
+        "gpu-planner"
+      ],
+      "artifacts": [
+        "sanitizer.log"
+      ]
+    },
+    {
+      "id": "gpu-vnode-one-hop",
+      "kind": "correctness",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/bench_rail_balance_hop.py",
+        "--backend",
+        "vnode",
+        "--mode",
+        "one_hop",
+        "--case",
+        "offdiag_hot",
+        "--num-nodes",
+        "2",
+        "--gpus-per-node",
+        "4",
+        "--tokens-per-rank",
+        "16",
+        "--topk",
+        "1",
+        "--num-experts",
+        "16",
+        "--hidden",
+        "256",
+        "--output-json",
+        "{stage_dir}/report.json"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "EP_DISABLE_GIN": "1",
+        "OMP_NUM_THREADS": "1",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 1200,
+      "depends_on": [
+        "compile-extension",
+        "gpu-planner",
+        "gpu-dispatch-codegen",
+        "gpu-combine-codegen",
+        "sanitizer-memcheck",
+        "sanitizer-synccheck",
+        "sanitizer-initcheck",
+        "sanitizer-racecheck"
+      ],
+      "artifacts": [
+        "report.json"
+      ]
+    },
+    {
+      "id": "gpu-vnode-adaptive",
+      "kind": "correctness",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/bench_rail_balance_hop.py",
+        "--backend",
+        "vnode",
+        "--mode",
+        "adaptive",
+        "--case",
+        "diag_hot",
+        "--num-nodes",
+        "2",
+        "--gpus-per-node",
+        "4",
+        "--tokens-per-rank",
+        "16",
+        "--topk",
+        "1",
+        "--num-experts",
+        "16",
+        "--hidden",
+        "256",
+        "--max-two-hop-percent",
+        "50",
+        "--hop-penalty-percent",
+        "0",
+        "--output-json",
+        "{stage_dir}/report.json"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "EP_DISABLE_GIN": "1",
+        "OMP_NUM_THREADS": "1",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 1200,
+      "depends_on": [
+        "compile-extension",
+        "gpu-planner",
+        "gpu-dispatch-codegen",
+        "gpu-combine-codegen",
+        "sanitizer-memcheck",
+        "sanitizer-synccheck",
+        "sanitizer-initcheck",
+        "sanitizer-racecheck"
+      ],
+      "artifacts": [
+        "report.json"
+      ]
+    },
+    {
+      "id": "bench-abba-a1",
+      "kind": "benchmark",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/bench_rail_balance_hybrid_lsa.py",
+        "--stage",
+        "source",
+        "--case-name",
+        "c100_volume_h256",
+        "--hop-mode",
+        "one_hop",
+        "--max-two-hop-percent",
+        "0",
+        "--warmup-iters",
+        "10",
+        "--steady-iters",
+        "100",
+        "--master-port",
+        "30301",
+        "--json-out",
+        "{stage_dir}/report.json"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "EP_DISABLE_GIN": "1",
+        "OMP_NUM_THREADS": "1",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 2400,
+      "depends_on": [
+        "gpu-vnode-one-hop",
+        "gpu-vnode-adaptive"
+      ],
+      "artifacts": [
+        "report.json"
+      ]
+    },
+    {
+      "id": "bench-abba-b1",
+      "kind": "benchmark",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/bench_rail_balance_hybrid_lsa.py",
+        "--stage",
+        "source",
+        "--case-name",
+        "c100_volume_h256",
+        "--hop-mode",
+        "adaptive",
+        "--max-two-hop-percent",
+        "25",
+        "--warmup-iters",
+        "10",
+        "--steady-iters",
+        "100",
+        "--master-port",
+        "30302",
+        "--json-out",
+        "{stage_dir}/report.json"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "EP_DISABLE_GIN": "1",
+        "OMP_NUM_THREADS": "1",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 2400,
+      "depends_on": [
+        "gpu-vnode-one-hop",
+        "gpu-vnode-adaptive",
+        "bench-abba-a1"
+      ],
+      "artifacts": [
+        "report.json"
+      ]
+    },
+    {
+      "id": "bench-abba-b2",
+      "kind": "benchmark",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/bench_rail_balance_hybrid_lsa.py",
+        "--stage",
+        "source",
+        "--case-name",
+        "c100_volume_h256",
+        "--hop-mode",
+        "adaptive",
+        "--max-two-hop-percent",
+        "25",
+        "--warmup-iters",
+        "10",
+        "--steady-iters",
+        "100",
+        "--master-port",
+        "30303",
+        "--json-out",
+        "{stage_dir}/report.json"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "EP_DISABLE_GIN": "1",
+        "OMP_NUM_THREADS": "1",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 2400,
+      "depends_on": [
+        "gpu-vnode-one-hop",
+        "gpu-vnode-adaptive",
+        "bench-abba-b1"
+      ],
+      "artifacts": [
+        "report.json"
+      ]
+    },
+    {
+      "id": "bench-abba-a2",
+      "kind": "benchmark",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/bench_rail_balance_hybrid_lsa.py",
+        "--stage",
+        "source",
+        "--case-name",
+        "c100_volume_h256",
+        "--hop-mode",
+        "one_hop",
+        "--max-two-hop-percent",
+        "0",
+        "--warmup-iters",
+        "10",
+        "--steady-iters",
+        "100",
+        "--master-port",
+        "30304",
+        "--json-out",
+        "{stage_dir}/report.json"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "EP_DISABLE_GIN": "1",
+        "OMP_NUM_THREADS": "1",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 2400,
+      "depends_on": [
+        "gpu-vnode-one-hop",
+        "gpu-vnode-adaptive",
+        "bench-abba-b2"
+      ],
+      "artifacts": [
+        "report.json"
+      ]
+    },
+    {
+      "id": "bench-baab-b3",
+      "kind": "benchmark",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/bench_rail_balance_hybrid_lsa.py",
+        "--stage",
+        "source",
+        "--case-name",
+        "c100_volume_h256",
+        "--hop-mode",
+        "adaptive",
+        "--max-two-hop-percent",
+        "25",
+        "--warmup-iters",
+        "10",
+        "--steady-iters",
+        "100",
+        "--master-port",
+        "30305",
+        "--json-out",
+        "{stage_dir}/report.json"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "EP_DISABLE_GIN": "1",
+        "OMP_NUM_THREADS": "1",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 2400,
+      "depends_on": [
+        "gpu-vnode-one-hop",
+        "gpu-vnode-adaptive",
+        "bench-abba-a2"
+      ],
+      "artifacts": [
+        "report.json"
+      ]
+    },
+    {
+      "id": "bench-baab-a3",
+      "kind": "benchmark",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/bench_rail_balance_hybrid_lsa.py",
+        "--stage",
+        "source",
+        "--case-name",
+        "c100_volume_h256",
+        "--hop-mode",
+        "one_hop",
+        "--max-two-hop-percent",
+        "0",
+        "--warmup-iters",
+        "10",
+        "--steady-iters",
+        "100",
+        "--master-port",
+        "30306",
+        "--json-out",
+        "{stage_dir}/report.json"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "EP_DISABLE_GIN": "1",
+        "OMP_NUM_THREADS": "1",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 2400,
+      "depends_on": [
+        "gpu-vnode-one-hop",
+        "gpu-vnode-adaptive",
+        "bench-baab-b3"
+      ],
+      "artifacts": [
+        "report.json"
+      ]
+    },
+    {
+      "id": "bench-baab-a4",
+      "kind": "benchmark",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/bench_rail_balance_hybrid_lsa.py",
+        "--stage",
+        "source",
+        "--case-name",
+        "c100_volume_h256",
+        "--hop-mode",
+        "one_hop",
+        "--max-two-hop-percent",
+        "0",
+        "--warmup-iters",
+        "10",
+        "--steady-iters",
+        "100",
+        "--master-port",
+        "30307",
+        "--json-out",
+        "{stage_dir}/report.json"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "EP_DISABLE_GIN": "1",
+        "OMP_NUM_THREADS": "1",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 2400,
+      "depends_on": [
+        "gpu-vnode-one-hop",
+        "gpu-vnode-adaptive",
+        "bench-baab-a3"
+      ],
+      "artifacts": [
+        "report.json"
+      ]
+    },
+    {
+      "id": "bench-baab-b4",
+      "kind": "benchmark",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/bench_rail_balance_hybrid_lsa.py",
+        "--stage",
+        "source",
+        "--case-name",
+        "c100_volume_h256",
+        "--hop-mode",
+        "adaptive",
+        "--max-two-hop-percent",
+        "25",
+        "--warmup-iters",
+        "10",
+        "--steady-iters",
+        "100",
+        "--master-port",
+        "30308",
+        "--json-out",
+        "{stage_dir}/report.json"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "EP_DISABLE_GIN": "1",
+        "OMP_NUM_THREADS": "1",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 2400,
+      "depends_on": [
+        "gpu-vnode-one-hop",
+        "gpu-vnode-adaptive",
+        "bench-baab-a4"
+      ],
+      "artifacts": [
+        "report.json"
+      ]
+    },
+    {
+      "id": "profile-nsys",
+      "kind": "profile_nsys",
+      "resource": "exclusive_8gpu",
+      "argv": [
+        "/usr/local/cuda/bin/nsys",
+        "profile",
+        "--trace=cuda,nvtx,osrt",
+        "--sample=none",
+        "--cpuctxsw=none",
+        "--capture-range=none",
+        "--wait=primary",
+        "--force-overwrite=true",
+        "--export=sqlite",
+        "--output={stage_dir}/trace",
+        "/home/chen/.cache/deepep-sjlgpt/bin/python",
+        "-B",
+        "tests/elastic/bench_rail_balance_hybrid_lsa.py",
+        "--stage",
+        "source",
+        "--case-name",
+        "c100_volume_h256",
+        "--hop-mode",
+        "adaptive",
+        "--max-two-hop-percent",
+        "25",
+        "--warmup-iters",
+        "10",
+        "--steady-iters",
+        "1",
+        "--nvtx",
+        "--master-port",
+        "30309",
+        "--json-out",
+        "{stage_dir}/report.json"
+      ],
+      "env": {
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
+        "EP_DISABLE_GIN": "1",
+        "OMP_NUM_THREADS": "1",
+        "PYTHONPATH": "{root}/tests:{root}/tests/elastic:{root}",
+        "EP_JIT_CACHE_DIR": "{stage_dir}/jit"
+      },
+      "timeout_seconds": 3600,
+      "enabled": false,
+      "skip_reason": "Enable only in a follow-up manifest for the winner accepted by the formal multi-candidate round aggregator.",
+      "depends_on": [
+        "bench-abba-a1",
+        "bench-abba-b1",
+        "bench-abba-b2",
+        "bench-abba-a2",
+        "bench-baab-b3",
+        "bench-baab-a3",
+        "bench-baab-a4",
+        "bench-baab-b4"
+      ],
+      "artifacts": [
+        "report.json",
+        "trace.nsys-rep",
+        "trace.sqlite"
+      ]
+    }
+  ],
+  "leaderboard_path": ".cache/rail_balance/hop_campaign/leaderboard.jsonl",
+  "notes": "Bootstrap checkpoint and same-binary algorithm-mode diagnostic only, not a 2-4-candidate CUDA source optimization round. Its one_hop/adaptive A/B blocks cannot promote a source version. A formal source round must clone this frozen contract, keep one algorithm configuration fixed, and compare an independently sealed parent worktree against 2-4 single-hypothesis candidate worktrees."
+}
