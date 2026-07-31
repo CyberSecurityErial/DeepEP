@@ -8,8 +8,8 @@ GitHub fork：`git@github.com:CyberSecurityErial/DeepEP.git`
 
 当前分支：`feat/rail-balance-hop-aware`
 
-实现/脚手架已提交检查点：`448a727`（本文档提交后的实际 HEAD 以
-`git rev-parse HEAD` 为准）
+最近已发布检查点：`be4a69b`；本次继续补齐 source-round authoring入口（恢复时实际
+HEAD以 `git rev-parse HEAD` 为准）
 
 原型基线：`feat/rail-balance-prototype` / `5199a04`
 
@@ -22,16 +22,17 @@ source round、4×2 vnode复验和真实多机 Rail/Gin 仍是门槛。**
 
 ## 0. 一屏状态
 
-- `448a727` 相对 prototype `5199a04` 有 47 个 hop-aware提交。核心 planner/checkpoint
+- `be4a69b` 相对 prototype `5199a04` 有 48 个 hop-aware提交。核心 planner/checkpoint
   已提交为 `286da0a`，benchmark证据门禁为 `771fcc6`，CUDA harness监督契约为
-  `0f38688`，fail-closed campaign/formal source-round控制面为 `448a727`。后续文档
-  提交会继续增加计数，恢复时必须现场查询 Git。
+  `0f38688`，fail-closed campaign/formal source-round控制面为 `448a727`，竞品证据与
+  论文口径为 `be4a69b`。后续提交会继续增加计数，恢复时必须现场查询 Git。
 - 当前没有 `csrc/`、`deep_ep/include/` 或核心 CUDA 测试的未提交改动。工作树中的
-  campaign/formal-round脚手架已经提交；本文档冻结前只剩文档待提交，不能用旧的
-  “9 个 dirty实现文件”清单判断是否丢改动。
+  campaign/formal-round执行控制面已经提交；本次新增的是 CPU-only manifest preparer、
+  合同测试和文档，不能用旧的“9 个 dirty实现文件”清单判断是否丢改动。
 - 交接时没有遗留 benchmark、sanitizer 或构建进程；2026-08-01 takeover resource gate
   观察到用户 Qwen占 GPU0–1，短算子也曾瞬时占满8卡，均不得终止或干扰。
-- `fork` 远端**尚无** `feat/rail-balance-hop-aware` 分支；工作仍只在本机。
+- 分支已推送并跟踪 `fork/feat/rail-balance-hop-aware`；`be4a69b` 时本地/远端
+  ahead/behind为 `0/0`。新提交后仍须重新 push并现场核对。
 - `off` 默认路径和 `legacy_exact` 必须保持不变。
 - Python host capability 与编译 capability 仍为 false；不得因为 vnode 通过而解锁。
 - 当前 CUDA planner 功能套件为 20/20；one-hop/adaptive 两条 4+4 vnode 在历史
@@ -441,6 +442,8 @@ tiny-tail + G2 memcheck/synccheck/initcheck              0 errors
 tiny-tail + G2 racecheck                                 0 errors/warnings/hazards
 independent CUDA/C++ static audit                        no S0-S2 finding
 campaign supervisor CPU contracts                       20/20 PASS
+campaign process-group supervision CPU contracts          3/3 PASS
+source-round preparer CPU contracts                     10/10 PASS
 source-round coordinator CPU contracts                    9/9 PASS
 formal source-round evaluator CPU contracts              19/19 PASS
 formal source-round live-executor CPU contracts          16/16 PASS
@@ -451,7 +454,31 @@ formal source-round live-executor CPU contracts          16/16 PASS
 `kWorldRanks=8`断言处 fail-close；没有进入数据搬运、没有生成 JSON，代码已撤回。
 不能用单GPU G2 planner通过替代 vnode round trip。
 
-无人值守脚手架的首个历史 dry-run：
+terminal合同下最近的 clean-tree finalized scaffold：
+
+```text
+run: takeover-scaffold-20260801-02
+source: be4a69b9e363614373b1298d94e338a340fdcfa0, clean pre/post
+status/scope: scaffold_only/scaffold_only
+reasons: Qwen PID 3047501,3047502 + explicit scaffold-only
+CPU gates: 6/6 PASS
+exclusive-8GPU stages skipped: 19
+GPU attempts/process starts: 0/0
+artifact: 128,319 bytes
+/home pre/post: 271,565,897,728 / 271,567,323,136 bytes
+result.json sha256:
+b2c12aba2afa55a3aa734c55b2d4c3aab7c136902ceee78e089b555fd3424d04
+SHA256SUMS sha256:
+4b51d963430d63c756f45378f4105e8a4bc4e8df1e8faa4daca9e2ac05a2a755
+FINALIZED.json sha256:
+aef4a7bec4d2c343c49da6c28e7ba1ff853abc35cd57075f338f8561480f8db6
+```
+
+全部 SHA条目已重算一致。因为是 scaffold-only，terminal record正确写出
+`round_evaluation_allowed=false`；它只证明 clean source下 CPU和资源门禁可复现，
+没有 GPU样本或性能结论。
+
+首个历史 dry-run为：
 
 ```text
 manifest: tests/elastic/experiments/hop_local8_sm90_v1.json
@@ -468,7 +495,8 @@ f03a48ad989ec98cea33488805296bd95ea153f195df18bb484f70607c99ad38
 
 这份 `-01` artifact 早于终端提交合同，缺少 `FINALIZED.json`。其 hash 只保留历史
 provenance；formal evaluator 必须拒绝，不能把它当作当前协议合规证明、正式轮证据或
-晋升依据。带 `FINALIZED.json` 的 fresh scaffold 会在脚手架提交且工作树 clean 后另跑。
+晋升依据。`-02` 已补上当时 clean HEAD的 finalized证据；新增 preparer提交后还要再跑
+新的 clean scaffold，不能把 `-02` 的 source hash套到新 HEAD。
 
 协议、可复现命令和运行时 Leaderboard 见
 [`HOP_AWARE_EXPERIMENT_PROTOCOL.md`](HOP_AWARE_EXPERIMENT_PROTOCOL.md) 与
@@ -565,18 +593,24 @@ one_hop/adaptive/off 对照。下一个 Codex 必须先建立这个真值，再�
 3. `0f38688`：CUDA harness接受 campaign监督；
 4. `448a727`：campaign supervisor、formal coordinator/evaluator与持有整轮 lease 的
    source-round executor；
-5. 最终实现树 force build、20/20 planner、CPU/API/codegen全套与四类 sanitizer均通过；
-6. supervisor 20/20、coordinator 9/9、evaluator 19/19、executor 16/16 CPU contracts，
-   Ruff、`py_compile` 与静态审计均通过。
+5. `be4a69b`：竞品第一手证据、论文实验矩阵、协议与交接文档；分支已推送 fork；
+6. CPU-only source-round preparer把 human spec与现场 Git身份冻结成 immutable manifest/
+   plan，不创建候选、不启动 GPU；其 contracts为 10/10；
+7. 最终实现树 force build、20/20 planner、CPU/API/codegen全套与四类 sanitizer均通过；
+8. supervisor 20/20、preparer 10/10、coordinator 9/9、evaluator 19/19、executor 16/16
+   CPU contracts，Ruff、`py_compile` 与静态审计均通过；
+9. `takeover-scaffold-20260801-02` 在 clean `be4a69b` 上 finalized，CPU 6/6且 GPU启动
+   0 次；它是 scaffold证据，不是性能证据。
 
 仍需完成：
 
-1. 在 clean tree运行一份带 `FINALIZED.json` 的 fresh scaffold，记录精确 hash；
-2. 推送 `feat/rail-balance-hop-aware` 到 fork；
-3. 只有完整 8 卡均空闲时，先重跑两个 4×2 vnode；
-4. 从当前最快且完全正确的 sealed parent生成 2～4 个单变量 CUDA候选及 source manifest，
+1. 提交 source-round preparer与本轮文档，clean tree再跑一份新的 finalized scaffold，
+   记录精确 hash并 push fork；
+2. 只有完整 8 卡均空闲时，先重跑两个 4×2 vnode；
+3. 从当前最快且完全正确的 sealed parent生成 2～4 个单变量 CUDA候选，以
+   `prepare_rail_balance_source_round.py` 冻结 source manifest/plan，
    再由 live executor执行正式 `4+4N` source round；不得为测试控制面伪造候选提交；
-5. 保留 capability=false，直到真实多机门槛另行通过。
+4. 保留 capability=false，直到真实多机门槛另行通过。
 
 不要大规模 rebase 历史提交。若以后整理 review branch，必须先保留 archive或可恢复 tag。
 
@@ -904,11 +938,14 @@ git push -u fork feat/rail-balance-hop-aware
 按这个顺序继续，不要在没有新测量时随机改 CUDA：
 
 ```text
-1. git status / git log / git diff --check，确认 286da0a、771fcc6、0f38688、448a727。
-2. 运行 campaign、source coordinator、formal evaluator、source executor 的全部 CPU/静态门禁。
-3. 提交当前文档；clean tree运行 fresh finalized scaffold并记录 hash。
-4. push fork；检查所有 8 张 GPU，任一 compute PID存在就只继续 CPU/论文脚手架。
-5. 完整 8 卡空闲后先重跑两个 vnode，再执行正式 4+4N source round。
+1. git status / git log / git diff --check，现场确认 286da0a、771fcc6、0f38688、448a727、
+   be4a69b及其后续 authoring提交。
+2. 运行 campaign、source preparer/coordinator、formal evaluator、source executor 的全部
+   CPU/静态门禁。
+3. clean tree运行 fresh finalized scaffold并记录 hash；push fork并核对 ahead/behind=0/0。
+4. 检查所有 8 张 GPU，任一 compute PID存在就只继续 CPU/论文脚手架。
+5. 完整 8 卡空闲后先重跑两个 vnode；依据新 profiler-free/Nsys事实生成2～4个单变量
+   candidate commit，由 preparer冻结 human spec，再执行正式 4+4N source round。
 6. 用 profiler-free paired block选候选；只有新 Nsys证明瓶颈后才生成下一轮 CUDA候选。
 7. 多机资源到位后完成真实 Gin/RDMA correctness、NIC counters和 matched基线。
 ```

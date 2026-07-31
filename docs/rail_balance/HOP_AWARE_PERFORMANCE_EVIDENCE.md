@@ -769,3 +769,42 @@ benchmark, Nsys, NCU or competitor run was launched.  `8c56939` therefore
 remains the last accepted clean matched checked-adapter Leader, while
 `286da0a` remains a functional candidate awaiting the same formal
 profiler-free comparison.
+
+## HA070-K: source-round authoring path; still no new performance evidence
+
+The CPU-only `prepare_rail_balance_source_round.py` now closes the gap between
+a human preregistration and the already-audited coordinator/executor.  From an
+owner-controlled strict JSON spec and already-existing clean worktrees, it
+derives the parent/candidate commits and trees, shared Git identity, independent
+one-commit binary diffs, frozen execution-contract hash, and 20 harness hashes.
+It then runs the coordinator preflight twice and no-clobber publishes the
+`NOT_RUN` plan before the manifest terminal marker.  It does not create or edit
+a candidate, compile code, launch CUDA, benchmark, profile, or choose a winner.
+
+CPU/static evidence for this authoring addition is:
+
+```text
+source-round preparer                            10/10 PASS
+source-round coordinator                           9/9 PASS
+whole-round executor                              16/16 PASS
+formal evaluator                                  19/19 PASS
+campaign supervisor                               20/20 PASS
+Ruff / py_compile / git diff --check                     PASS
+```
+
+The last clean finalized resource-gate artifact before this addition is
+`takeover-scaffold-20260801-02`, bound to clean commit
+`be4a69b9e363614373b1298d94e338a340fdcfa0`.  Its six CPU gates passed, all 19
+exclusive-eight-GPU stages were skipped, and no GPU process was started.  Its
+`result.json`, `SHA256SUMS`, and `FINALIZED.json` SHA256 values are respectively
+`b2c12aba...`, `4b51d963...`, and `aef4a7be...`; the full values are recorded
+in the experiment protocol and handoff.  `round_evaluation_allowed=false` is
+the required scaffold-only verdict.
+
+Qwen still occupied GPU 0--1, so this checkpoint adds no vnode, source-round,
+benchmark, Nsys, NCU, NIC/RDMA, or competitor sample.  It cannot alter the
+performance Leader.  A process crash between publishing the plan and manifest
+can leave a fail-closed orphan plan; a later failure can leave both names or a
+hidden stage file.  This is not a transactional claim: only strict executor
+check-only validation can accept a pair, and artifacts must not be manually
+repaired into evidence.

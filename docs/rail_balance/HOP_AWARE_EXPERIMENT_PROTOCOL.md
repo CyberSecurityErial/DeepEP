@@ -2,11 +2,12 @@
 
 状态：2026-08-01 bootstrap v3。单 worktree campaign 已能在 8 卡不满足时
 fail-close 为 `scaffold_only`，并保存固定命令、CPU gate、环境、失败与 artifact hash。
-另有 stdlib-only 的 formal source-round coordinator、evaluator和整轮 live executor：
-CUDA源码候选必须来自独立 clean worktree，只能在相同算法配置下与同一个 sealed parent
-比较，并由一把 lease覆盖整个 `4+4N` 顺序。executor默认 check-only，live必须显式双重
-确认。脚手架仍不自动生成/修改 CUDA候选；没有实际执行的计划始终是 `NOT_RUN`，任何
-组件都不会自动产生论文性能 Leader。
+另有 stdlib-only 的 formal source-round preparer、coordinator、evaluator和整轮 live
+executor：CUDA源码候选必须来自独立 clean worktree，只能在相同算法配置下与同一个
+sealed parent比较，并由一把 lease覆盖整个 `4+4N` 顺序。preparer把人工预注册信息与
+现场 Git身份冻结为 manifest/plan；executor默认 check-only，live必须显式双重确认。
+脚手架仍不自动生成/修改 CUDA候选；没有实际执行的计划始终是 `NOT_RUN`，任何组件都
+不会自动产生论文性能 Leader。
 
 ## 1. 一条命令
 
@@ -159,16 +160,72 @@ attempt 失败。命令中的绝对路径与 `{root}/..` 逃逸同样在 schema 
    最快版本。最快两者差异未越过统一噪声时，状态为 undecided 并追加 head-to-head；
    不得按相对改善百分比或候选 ID 决胜。
 
-coordinator 只 materialize 并审计上述执行计划，明确输出 `NOT_RUN`；它不调用 GPU。
-CPU evaluator能 fail-close验证完整 `4+4N` artifact及选择规则，但不会制造 artifact。
-live executor已经实现：默认 check-only；只有 `--live` 与完全匹配的
+preparer与 coordinator只冻结/materialize并审计上述执行计划，明确输出 `NOT_RUN`；
+它们都不调用 GPU。CPU evaluator能 fail-close验证完整 `4+4N` artifact及选择规则，但
+不会制造 artifact。live executor已经实现：默认 check-only；只有 `--live` 与完全匹配的
 `--confirm-round-id` 同时出现，才在中立 control worktree获取一把整轮 flock，依次调用
 固定 runner，并为每块写出绑定 plan/control/parent/executor身份的 terminal coordinator
 record。整轮结束后它生成 formal manifest、现场调用 evaluator、交叉核对晋升布尔值，
 最后写 `SOURCE_ROUND_FINALIZED.json`。任一候选失败会完整保留其失败 evidence，但不会
 阻塞 sibling 的块；全局证据异常则禁止晋升。
 
-真实候选存在后，先在 control worktree执行只读计划与 executor校验：
+### 6.1 从人工预注册到不可变 source round
+
+真实候选存在后，人工 spec只允许以下顶层字段：
+
+- `schema_version=1`、`round_id`、绝对且规范化的 `control_worktree` /
+  `artifact_root`；artifact root必须已存在、owner为当前 UID且权限恰为 `0700`；
+- `parent={id,worktree}`，以及按 ID排序的 2～4 个 candidate；每个 candidate只有
+  `id/worktree/primary_change/hypothesis/expected_profile_metrics/risks`，其中修改、假设、
+  预期 Profile指标和风险都必须在运行前写清；
+- 排序且唯一的 `allowed_candidate_files`；候选只能是共享 parent之上的一个独立
+  single-parent commit，不能堆叠 sibling，也不能修改冻结 harness；
+- `frozen_execution_contract={algorithm,shape,timing,toolchain,gpu_mapping}`；它是 formal
+  evaluator的窄合同，不是 campaign template中字段更多的 `frozen_contract`。`algorithm`
+  与 `shape` 必须是 evaluator定义的完整字段；`timing` 必须固定 10 warmup、100 steady
+  及统一 rank-max timer。`shape/timing` 应逐字段复制选定 C100 public report中 evaluator
+  接受的精确字段子集，并与预注册 campaign一致；不能从 prose手抄，
+  `logical_bytes_per_iteration` 等工作量事实也不能填占位值。`toolchain` 应从
+  clean campaign的 `environment/toolchain.json` 复制完整规范化对象（若有
+  `created_utc` 只删除该字段），不能手工简写。GPU mapping必须逐项复制冻结 campaign
+  template `resources.expected_gpu_index_uuid_mapping`，并在 live preflight与现场 0..7 的
+  八个唯一 UUID一致；不能因当前只有六张空闲卡而缩小正式合同。
+
+在中立 control worktree运行 preparer；它要求当前 CWD确实是 control顶层，且当前执行
+文件就是该 control tree中的冻结副本。它现场推导所有 HEAD/tree、共同 Git object
+store、候选 binary diff/hash和20个 harness hash，执行两次 preflight，然后以 no-clobber
+方式先发布 plan、最后发布 manifest作为终端标记：
+
+```bash
+PYTHONPATH="$PWD/tests/elastic:$PWD" \
+/home/chen/.cache/deepep-sjlgpt/bin/python -B \
+  tests/elastic/prepare_rail_balance_source_round.py \
+  --spec <absolute-human-spec.json> \
+  --manifest-output <absolute-artifact-root>/source-round.json \
+  --plan-output <absolute-artifact-root>/plan.json
+```
+
+成功输出仍是 `PREPARED_NOT_RUN`。preparer不创建、切换或修改 worktree，不生成 CUDA
+候选，不选择 winner，也不启动 build/GPU/benchmark。发布协议不是 filesystem pair
+transaction：它先发布 plan、最后才以 manifest作为“pair可消费”的 terminal marker，
+且绝不按 final pathname回删。任何异常、`SIGKILL` 或主机崩溃落在两次 link之间都可能
+留下没有 manifest的孤立 plan；该 plan故意不可执行且同路径 rerun会 no-clobber失败。
+manifest link之后的晚失败可能留下完整 final pair；不可捕获的进程死亡还可能留下隐藏
+stage文件。此时不能凭文件名猜成功，必须重新执行 strict manifest/plan/executor
+check-only审计。
+每轮必须使用全新的 artifact目录；同一路径并发 authoring、同 UID主动替换目录以及宿主
+崩溃都不在协作式原子性保证内。preparer不持有整轮 GPU flock；executor check/live会
+再次 preflight，以关闭 prepare到执行之间的 Git漂移。preparer在两轮 preflight期间持有
+artifact root与两个 output parent的 dirfd，并在 staging、两个 link前后复验
+dev/inode/owner/mode及路径重开身份；这仍不能替代 filesystem quota、调度器隔离或敌对
+同 UID进程的安全边界。
+
+human spec原文件及其 SHA不会写入派生 manifest；发布后 executor的权威输入只有 manifest
+和其绑定的 plan。如论文 provenance需要保留人工预注册原文，应在运行前另存只读副本与
+SHA，且不能事后把它补进已经发布的 pair。
+
+preparer会打印完整的 executor check-only/live命令。先执行 check-only；也可以直接用
+下面两条底层命令独立复核 coordinator与 executor绑定：
 
 ```bash
 PYTHONPATH="$PWD/tests/elastic:$PWD" \
@@ -198,6 +255,31 @@ PYTHONPATH="$PWD/tests/elastic:$PWD" \
 遭 `SIGKILL` 或宿主崩溃超出协作式实验威胁模型，终端记录会明确保留这些边界。
 
 ## 7. 2026-08-01 scaffold 记录
+
+当前 terminal合同下的 clean-tree finalized记录为：
+
+```text
+run_id: takeover-scaffold-20260801-02
+source: be4a69b9e363614373b1298d94e338a340fdcfa0, clean pre/post
+status/scope: scaffold_only/scaffold_only
+reasons: Qwen PID 3047501,3047502; explicit scaffold-only
+CPU gates: 6/6 PASS
+exclusive-8GPU stages: 19 skipped; GPU attempts/process starts: 0/0
+artifact bytes: 128,319
+/home pre/post: 271,565,897,728 / 271,567,323,136 bytes
+result.json sha256:
+b2c12aba2afa55a3aa734c55b2d4c3aab7c136902ceee78e089b555fd3424d04
+SHA256SUMS sha256:
+4b51d963430d63c756f45378f4105e8a4bc4e8df1e8faa4daca9e2ac05a2a755
+FINALIZED.json sha256:
+aef4a7bec4d2c343c49da6c28e7ba1ff853abc35cd57075f338f8561480f8db6
+```
+
+全部 `SHA256SUMS` 条目已重算一致。`FINALIZED.json` 的
+`round_evaluation_allowed=false` 是正确结果：它证明 clean source下 CPU与资源
+fail-close路径可复现，不包含 GPU样本，不能晋升或产生性能结论。
+
+更早的历史记录为：
 
 ```text
 run_id: takeover-scaffold-20260801-01

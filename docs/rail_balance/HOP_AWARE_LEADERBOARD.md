@@ -47,6 +47,8 @@
 | `takeover-scaffold-20260801-01` | historical dirty | 无8卡时仍能完成CPU证据与命令冻结且GPU启动数为0 | GPU compile skipped | CPU 6/6 PASS；GPU attempts 0 | not measured | legacy pre-terminal-contract：缺 `FINALIZED.json`，formal evaluator必须拒绝；仅保留 provenance |
 | `terminal-smoke-20260801-01` | terminal-schema smoke | 验证终端 record/hash链 | 全部 stage skipped | `--no-execute`，CPU gate未运行 | not measured | 有 `FINALIZED.json`，但 `round_evaluation_allowed=false`；不能替代 fresh scaffold |
 | `448a727-control-plane` | `0f38688` | 整轮 lease、路径/hash/时序绑定可防错误晋升 | Ruff、py_compile PASS | supervisor 20/20；coordinator 9/9；evaluator 19/19；executor 16/16 | not measured；GPU attempts 0 | 形式化执行控制面通过 CPU审计；没有 source manifest/live raw round，不改变性能 Leader |
+| `takeover-scaffold-20260801-02` | clean `be4a69b` | finalized合同在无独占八卡时保留CPU证据且启动0个GPU进程 | 19个exclusive-8GPU stage skipped | CPU 6/6 PASS；GPU attempts/starts 0/0；SHA tree verified | not measured | 合规 clean scaffold；`round_evaluation_allowed=false`，不能晋升 |
+| `source-round-preparer` | authoring commit atop `be4a69b` | 从human spec和clean sibling worktree客观冻结manifest/plan，消除手抄Git身份 | Ruff、py_compile PASS | preparer 10/10；coordinator 9/9；executor 16/16；evaluator 19/19 | not measured；无GPU启动 | 只完成authoring控制面；输出恒为`PREPARED_NOT_RUN`，没有候选或性能结论 |
 
 运行时所有新候选（包括 compile/correctness失败）追加到：
 

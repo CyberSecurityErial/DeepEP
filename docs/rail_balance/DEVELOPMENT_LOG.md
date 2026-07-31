@@ -7522,8 +7522,9 @@ round has been produced, so no source-version performance Leader changed.  The e
 `takeover-scaffold-20260801-01` artifact predates the terminal contract and
 lacks `FINALIZED.json`; its hash is historical provenance only.  A later
 `terminal-smoke-20260801-01` validates terminal hashing under `--no-execute`
-but runs no CPU stage.  A fresh clean-tree finalized 6/6 CPU scaffold is still
-required before claiming the current orchestration protocol was exercised.
+but runs no CPU stage.  At this checkpoint a fresh clean-tree finalized 6/6
+CPU scaffold was still required; `takeover-scaffold-20260801-02`, recorded in
+HA070-K below, later closed that resource-gate evidence gap for `be4a69b`.
 
 GPU 0--1 remained occupied by the user's Qwen training.  No GPU stage was
 launched and no user process was killed, paused or otherwise disturbed.
@@ -7574,3 +7575,46 @@ explicit: process closure assumes the frozen cooperative runner keeps stages
 inside the executor-created PGID; this host offers no writable cgroup-v2 kill
 scope; same-UID hostile replacement, active `setsid()` escape, `SIGKILL` and
 host failure cannot be made transactionally recoverable in userspace.
+
+## 2026-08-01 — HA070-K: formal source-round manifest freezer
+
+Added a stdlib-only authoring entrypoint,
+`tests/elastic/prepare_rail_balance_source_round.py`, plus ten CPU contracts.
+It accepts an exact eight-field human spec and existing clean control/parent/
+candidate worktrees, then derives rather than trusts the commit, tree, common
+Git store, one-commit patch, changed-file list, binary diff hash, shared frozen
+contract hash and 20 harness hashes.  Candidate IDs must be sorted; there must
+be 2--4 independent siblings above the same parent; dirty, stacked, forbidden,
+linked, nonfinite and duplicate-key inputs all fail before publication.
+
+The preparer must itself run from the declared neutral control worktree and
+must be that checkout's frozen file.  Its own code filename plus the loaded
+coordinator, executor, evaluator, schema, runner and key validator code
+filenames are all bound to that control tree.  It invokes the existing
+live-contract, coordinator preflight and plan validation, rechecks worktrees
+immediately before publication, and writes the plan first and manifest last with
+no-clobber links and fsync.  It never pathname-unlinks a published final name:
+any error, asynchronous interruption or host crash after the plan link may
+leave an unusable orphan plan.  Manifest presence is the terminal marker.
+This is an explicit fail-closed protocol, not pair/crash atomicity; every
+authoring attempt uses fresh output names.  A late failure after the manifest
+link can leave a complete final pair, while uncatchable death can leave hidden
+stage files; the executor's strict check-only validation, not filename
+presence alone, determines consumability.
+
+Regression results were preparer 10/10, coordinator 9/9, executor 16/16,
+evaluator 19/19 and campaign supervisor 20/20; all 12 source/test files passed
+Ruff and `py_compile`, and `git diff --check` passed.  `CUDA_VISIBLE_DEVICES`
+was empty for these tests.  The preparer suite copies the real 20 frozen
+harness files into clean fixture worktrees, runs the copied CLI for 2/3/4
+candidates, and then executes the printed executor check-only command.  Every
+fixture worktree's HEAD, porcelain status, refs and index SHA are identical
+before/after.  The fixture contract is synthetic and no live block runs; no
+production source manifest was fabricated.  Real candidates still require a
+measurement-derived hypothesis and independent CUDA commits.
+
+The existing clean finalized scaffold `takeover-scaffold-20260801-02` is bound
+to `be4a69b`, passed 6/6 CPU gates and started zero GPU processes.  GPU 0--1
+remained occupied by the user's Qwen training, so no 4x2 vnode, formal source
+round, benchmark, profiler or competitor result was collected.  The
+performance Leader remains unchanged.

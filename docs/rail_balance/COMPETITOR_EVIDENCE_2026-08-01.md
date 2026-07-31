@@ -121,7 +121,12 @@ UCCL-EP保持 DeepEP 风格 dispatch/combine API，以 GPU→CPU lock-free FIFO 
 - **R**：[官方 EP README 命令](https://github.com/uccl-project/uccl/blob/61ee42402819cabba3ac2a56dd4addec3363976c/ep/README.md)、[HT internode benchmark](https://github.com/uccl-project/uccl/blob/61ee42402819cabba3ac2a56dd4addec3363976c/ep/bench/test_internode.py)、[LL internode benchmark](https://github.com/uccl-project/uccl/blob/61ee42402819cabba3ac2a56dd4addec3363976c/ep/bench/test_low_latency.py)。
 - **A**：论文 Fig. 8–16 和官方 README 的硬件结果表。
 - **A-data**：未发现论文图/README表格的逐样本原始数据、CI或可校验 manifest。
-- **Local**：`/home/chen/workspace/source_code/uccl`，`f071f2e31239cd7d673bf2c9369b5cebe1b98457`，审计时 clean，但不是冻结上游 `61ee4240...`；正式复现前必须显式 checkout/独立 worktree 固定版本。
+- **Local**：开发 checkout仍是 `/home/chen/workspace/source_code/uccl` / `f071f2e...`；
+  另已从同一 object store建立 detached clean frozen worktree
+  `/home/chen/workspace/infra/uccl-ep-61ee4240`，精确 HEAD `61ee4240...`，按实验约定不
+  修改（文件系统并未强制只读），大小 15,930,322 bytes。`ep/` 子树内25个 tracked
+  Python文件通过 AST parse、34个 tracked shell文件通过 `bash -n`；这只是语法预检，
+  不是 import、依赖检查、build、correctness或 benchmark。
 - **Reproduced**：未复现；本机未构建或运行 UCCL-EP。
 
 ### 5.3 官方硬件、shape、计时与正确性
@@ -258,18 +263,25 @@ RailBalance存在可比较的数据路径成分，但实现和API边界并不相
   **论文当时**的边界，不能转述成后续 release 仍未优化 HT。
 - **C/R**：截止日官方 artifact 为
   [NVIDIA/nccl `nccl-ep-v0.1.0` / `63cf786...`](https://github.com/NVIDIA/nccl/tree/63cf786b015b2b6bff6cf263461621acf584bd18/contrib/nccl_ep)。tag 晚于论文，论文没有冻结生成图表的精确 commit，二者不能冒充同一 lineage。
-  v0.1 release 已列出 HT 优化及 `>8` nodes HT 修复，所以这两项必须与论文中的
-  future-work 描述分开记录。
+  [v0.1官方发布页](https://github.com/NVIDIA/nccl/releases/tag/nccl-ep-v0.1.0)已列出
+  HT优化及 `>8` nodes HT修复，所以这两项必须与论文中的 future-work描述分开记录。
 - **口径**：论文 LL 为 E256、H7168、K8、128 token/rank、BF16、8–64 GPU。论文用
   包含 launch 的 NCCL EP host C API 时间对比 DeepEP Kineto GPU kernel 时间；这不是
   共同计时。正式实验必须把 LL/HT 分开，改用同一 public API CUDA-event、逐 iteration
   rank-max，并保存 raw samples。
-- **release 与公开覆盖边界**：v0.1 可从源码在 CUDA 12 环境构建，官方预构建
-  wheel 是 CUDA 13 口径；不能把 wheel 的环境约束误写成源码的硬性 CUDA 13+
-  要求。release 当前不支持 quantization，但这不等于可以笼统声称
+- **release 与公开覆盖边界**：[v0.1官方发布页](https://github.com/NVIDIA/nccl/releases/tag/nccl-ep-v0.1.0)
+  指出 CUDA 12用户需要从源码构建；[同 tag EP README prerequisites](https://github.com/NVIDIA/nccl/blob/63cf786b015b2b6bff6cf263461621acf584bd18/contrib/nccl_ep/README.md)
+  则把当前 Python `nccl4py` 支持列为 CUDA 13。两份文本描述的分发/构建路径不同，因此
+  CUDA 12.8本机只能标为“source build待验证”：既不能把 wheel约束推广为源码绝对不
+  支持，也不能在真正编译前声称可用。
+  release 当前不支持 quantization，但这不等于可以笼统声称
   “BF16-only”。公开 reference/performance 表的实测覆盖至多到 8 nodes；即使 release
   修复了 `>8` nodes HT，也不能把该修复当成 `>8` nodes 公开性能证据。论文
   vLLM 结果同样不能改写成“NCCL EP 已胜出”。
+- **Local**：`/home/chen/workspace/infra/nccl-ep-v0.1.0` 是精确 tag
+  `nccl-ep-v0.1.0` / `63cf786...` 的 detached clean checkout，大小18,028,459 bytes。
+  本机 `mpicc`/`mpirun`可见，nvcc为 CUDA 12.8 / V12.8.61 / build 35404655；这只证明
+  前置工具可见，尚未证明 NCCL EP可构建，也未运行 correctness或启动任何 GPU。
 
 ## 11. SABRE
 
