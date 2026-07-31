@@ -339,11 +339,94 @@ void rail_balance_hop_record_impl(
     }
 }
 
+// Count and validate independent (owner, channel) token stripes before the
+// ordered endpoint decision. One warp owns one stripe; lanes own top-k slots.
+template <int kInstantiation = 0>
+__global__ __launch_bounds__(32, 1)
+void rail_balance_hop_precount_impl(
+        const HopCopyRecord* records,
+        HopCopyResolution* resolutions,
+        int* owner_remaining,
+        int* endpoint_count,
+        int* endpoint_owner_quota,
+        int* total_units,
+        int* status,
+        const int num_rails,
+        const int num_tokens,
+        const int num_topk,
+        const int num_channels,
+        const int num_destinations) {
+    const int lane = ptx::get_lane_idx();
+    if (records == nullptr or resolutions == nullptr or
+        owner_remaining == nullptr or endpoint_count == nullptr or
+        endpoint_owner_quota == nullptr or total_units == nullptr or
+        status == nullptr or num_rails < 1 or num_rails > 32 or
+        num_tokens < 0 or num_topk < 1 or num_topk > 32 or
+        num_channels < 1 or num_channels > kNumHybridMaxChannels or
+        num_destinations < 2 or num_destinations > 32) {
+        if (lane == 0)
+            hybrid_plan_detail::report_error(
+                status, HybridPlanError::InvalidSchedule);
+        return;
+    }
+
+    const int owner_channel = static_cast<int>(blockIdx.x);
+    const int owner = owner_channel / num_channels;
+    const int channel = owner_channel % num_channels;
+    if (owner >= num_rails)
+        return;
+
+    for (int token = channel; token < num_tokens; token += num_channels) {
+        const int64_t begin =
+            (static_cast<int64_t>(owner) * num_tokens + token) * num_topk;
+        const bool in_table = lane < num_topk;
+        const auto record = in_table ? records[begin + lane] :
+            HopCopyRecord{0u, -1};
+        if (in_table)
+            resolutions[begin + lane] = {-1, -1, -1, -1};
+
+        const bool active = in_table and record.target_mask != 0;
+        const uint32_t active_mask = ptx::gather(active);
+        const int active_count = __popc(active_mask);
+        const uint32_t packed_mask = active_count == 32 ? UINT32_MAX :
+            (uint32_t{1} << active_count) - 1;
+        const bool valid_padding = not in_table or active or
+            record.destination == -1;
+        const bool valid_active = not active or
+            (record.destination >= 0 and
+             record.destination < num_destinations and
+             (num_rails == 32 or (record.target_mask >> num_rails) == 0));
+        if (active_mask != packed_mask or
+            ptx::gather(not valid_padding or not valid_active) != 0) {
+            if (lane == 0)
+                hybrid_plan_detail::report_error(
+                    status, HybridPlanError::InvalidSchedule);
+            continue;
+        }
+        if (not active)
+            continue;
+
+        atomicAdd(owner_remaining + owner * num_destinations +
+                  record.destination, 1);
+        if (__popc(record.target_mask) == 1) {
+            const int target =
+                __ffs(static_cast<int>(record.target_mask)) - 1;
+            atomicAdd(endpoint_count + hybrid_plan_detail::odt_offset(
+                owner, record.destination, target,
+                num_destinations, num_rails), 1);
+        } else {
+            atomicExch(endpoint_owner_quota, 1);
+        }
+        if (lane == 0)
+            atomicAdd(total_units, active_count);
+    }
+}
+
 // Correctness-first deterministic hop planner. It always builds the endpoint
 // plan first, then optionally moves only profitable residual copies to a
 // third Rail. One lane keeps selection order reproducible; later profiling
 // decides whether this phase warrants parallelization.
-template <int kInstantiation = 0>
+template <int kInstantiation = 0, bool kPrecounted = false>
 __global__ __launch_bounds__(32, 1)
 void rail_balance_hop_plan_impl(
         const HopCopyRecord* records,
@@ -412,12 +495,14 @@ void rail_balance_hop_plan_impl(
     }
     for (int i = lane; i < num_rails * num_destinations; i += 32) {
         pair_load[i] = 0;
-        owner_remaining[i] = 0;
+        if constexpr (not kPrecounted)
+            owner_remaining[i] = 0;
     }
-    for (int i = lane; i < num_endpoint_groups; i += 32) {
-        endpoint_count[i] = 0;
-        endpoint_owner_quota[i] = 0;
-    }
+    if constexpr (not kPrecounted)
+        for (int i = lane; i < num_endpoint_groups; i += 32) {
+            endpoint_count[i] = 0;
+            endpoint_owner_quota[i] = 0;
+        }
     if (planner_chunk_size > 1)
         for (int64_t i = lane; i < num_owner_groups; i += 32)
             owner_group_cursor[i] = 0;
@@ -428,6 +513,7 @@ void rail_balance_hop_plan_impl(
     }
     for (int path = lane; path < 4; path += 32)
         path_units[path] = 0;
+    const int precounted_units = kPrecounted ? *moved_copies : 0;
     if (lane == 0)
         *moved_copies = 0;
     __syncwarp();
@@ -438,7 +524,9 @@ void rail_balance_hop_plan_impl(
     int lane_units = 0;
     const int64_t owner_records =
         static_cast<int64_t>(num_tokens) * num_topk;
-    if (planner_chunk_size == 1) {
+    if constexpr (kPrecounted) {
+        lane_units = lane == 0 ? precounted_units : 0;
+    } else if (planner_chunk_size == 1) {
         bool reached_padding = false;
         for (int64_t index = static_cast<int64_t>(lane) * owner_records;
              lane < num_rails and index < (lane + 1) * owner_records; ++index) {

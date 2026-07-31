@@ -156,6 +156,50 @@ static void __instantiate_kernel() {
     }
 };
 
+class RailBalanceHopPrecountRuntime final:
+    public jit::LaunchRuntime<RailBalanceHopPrecountRuntime> {
+public:
+    struct Args {
+        const rail_balance::HopCopyRecord* records;
+        rail_balance::HopCopyResolution* resolutions;
+        int* owner_remaining;
+        int* endpoint_count;
+        int* endpoint_owner_quota;
+        int* total_units;
+        int* status;
+        int num_rails;
+        int num_tokens;
+        int num_topk;
+        int num_channels;
+        int num_destinations;
+        jit::LaunchArgs launch_args;
+    };
+
+    static std::string generate_impl(const Args&) {
+        return R"(
+#include <deep_ep/impls/rail_balance_hybrid_plan.cuh>
+
+using namespace deep_ep::elastic;
+
+static void __instantiate_kernel() {
+    auto ptr = reinterpret_cast<void*>(
+        &rail_balance::rail_balance_hop_precount_impl<0>);
+}
+)";
+    }
+
+    static void launch_impl(const jit::KernelHandle& kernel,
+                            const jit::LaunchConfigHandle& config,
+                            Args args) {
+        EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(
+            kernel, config,
+            args.records, args.resolutions, args.owner_remaining,
+            args.endpoint_count, args.endpoint_owner_quota,
+            args.total_units, args.status, args.num_rails, args.num_tokens,
+            args.num_topk, args.num_channels, args.num_destinations));
+    }
+};
+
 class RailBalanceHopPlanRuntime final:
     public jit::LaunchRuntime<RailBalanceHopPlanRuntime> {
 public:
@@ -188,10 +232,22 @@ public:
         int two_hop_threshold_percent;
         int max_two_hop_percent;
         int hop_penalty_percent;
+        bool precounted;
         jit::LaunchArgs launch_args;
     };
 
-    static std::string generate_impl(const Args&) {
+    static std::string generate_impl(const Args& args) {
+        if (args.precounted)
+            return R"(
+#include <deep_ep/impls/rail_balance_hybrid_plan.cuh>
+
+using namespace deep_ep::elastic;
+
+static void __instantiate_kernel() {
+    auto ptr = reinterpret_cast<void*>(
+        &rail_balance::rail_balance_hop_plan_impl<0, true>);
+}
+)";
         return R"(
 #include <deep_ep/impls/rail_balance_hybrid_plan.cuh>
 
@@ -199,7 +255,7 @@ using namespace deep_ep::elastic;
 
 static void __instantiate_kernel() {
     auto ptr = reinterpret_cast<void*>(
-        &rail_balance::rail_balance_hop_plan_impl<0>);
+        &rail_balance::rail_balance_hop_plan_impl<0, false>);
 }
 )";
     }
@@ -281,6 +337,7 @@ static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
         .two_hop_threshold_percent = 0,
         .max_two_hop_percent = 0,
         .hop_penalty_percent = 0,
+        .precounted = false,
         .launch_args = jit::LaunchArgs(1, 32),
     };
     return {
@@ -391,6 +448,7 @@ static void launch_prepared_rail_balance_hop_plan(
             .two_hop_threshold_percent = two_hop_threshold_percent,
             .max_two_hop_percent = max_two_hop_percent,
             .hop_penalty_percent = hop_penalty_percent,
+            .precounted = false,
             .launch_args = prepared.plan_launch_args,
         },
         stream);
@@ -1708,6 +1766,34 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
         };
     }
 
+    const bool precounted = planner_chunk_size > 1;
+    if (precounted) {
+        const RailBalanceHopPrecountRuntime::Args count_args = {
+            .records = reinterpret_cast<const rail_balance::HopCopyRecord*>(
+                records.data_ptr<int64_t>()),
+            .resolutions =
+                reinterpret_cast<rail_balance::HopCopyResolution*>(
+                    resolutions.data_ptr<int>()),
+            .owner_remaining = owner_remaining.data_ptr<int>(),
+            .endpoint_count = endpoint_count.data_ptr<int>(),
+            .endpoint_owner_quota = endpoint_owner_quota.data_ptr<int>(),
+            .total_units = moved_copies.data_ptr<int>(),
+            .status = status.data_ptr<int>(),
+            .num_rails = num_rails,
+            .num_tokens = num_tokens,
+            .num_topk = num_topk,
+            .num_channels = num_channels,
+            .num_destinations = num_destinations,
+            .launch_args = jit::LaunchArgs(
+                num_rails * num_channels, 32),
+        };
+        const auto count_runtime = jit::compiler->build(
+            "rail_balance_hop_precount_v1",
+            RailBalanceHopPrecountRuntime::generate(count_args));
+        RailBalanceHopPrecountRuntime::launch(
+            count_runtime, count_args, stream);
+    }
+
     const RailBalanceHopPlanRuntime::Args prototype = {
         .records = nullptr,
         .resolutions = nullptr,
@@ -1737,10 +1823,12 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
         .two_hop_threshold_percent = 0,
         .max_two_hop_percent = 0,
         .hop_penalty_percent = 0,
+        .precounted = precounted,
         .launch_args = jit::LaunchArgs(1, 32),
     };
     const auto runtime = jit::compiler->build(
-        "rail_balance_hop_plan_v2",
+        precounted ? "rail_balance_hop_plan_precounted_v3" :
+                     "rail_balance_hop_plan_v2",
         RailBalanceHopPlanRuntime::generate(prototype));
     RailBalanceHopPlanRuntime::launch(
         runtime,
@@ -1776,6 +1864,7 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
             .two_hop_threshold_percent = two_hop_threshold_percent,
             .max_two_hop_percent = max_two_hop_percent,
             .hop_penalty_percent = hop_penalty_percent,
+            .precounted = precounted,
             .launch_args = prototype.launch_args,
         },
         stream);
