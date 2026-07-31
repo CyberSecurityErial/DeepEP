@@ -2412,3 +2412,9 @@ The patch adds no allocation or metadata. GPU exact tests pass 11/11 including
 explicit gap rejection, both full vnode round trips pass, and focused memcheck
 and initcheck report zero errors. Clean 10+100 distributions follow the code
 commit before the ratios are treated as accepted profiler-free evidence.
+
+Commit `eedcdad` passed clean 10+100 eligibility. One-hop `finish` is
+41.372 ms median (p95 41.523 ms), 7.4% below the clean 44.436 ms predecessor.
+Adaptive is 399.294 ms (p95 399.510 ms), 4.4% below 416.741 ms. Source-stage
+code did not change; its observed 134.296/671.194 us medians are recorded as
+run-to-run context rather than attributed to the planner edit.

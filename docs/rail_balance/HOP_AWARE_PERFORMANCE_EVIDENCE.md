@@ -374,3 +374,20 @@ c8ab370db013bafd1124ef175f0b63bd2c4b74ad84367d4406ab774b1b4ff83b  hop-plan-both-
 These three reports were collected from a dirty tree and are not the final
 profiler-free claim. Exact planner/vnode correctness and focused sanitizer
 evidence pass; public capability remains false.
+
+The clean `eedcdad` 10+100 reports pass eligibility and confirm the finish
+boundary:
+
+```text
+one-hop  median/p95 finish   41.372 / 41.523 ms
+adaptive median/p95 finish  399.294 / 399.510 ms
+```
+
+This is a 7.4% one-hop and 4.4% adaptive reduction relative to the clean O096
+reports. Source-stage code is identical, so its sample variation is not
+claimed as a planner effect. Report hashes are:
+
+```text
+1ddce1bff73604a740749b8d053c52c5d2fb3dede555ec82cb14dab604da0588  c100-onehop-packed-formal.json
+bcf6cc5c30df701a731e948338dc88d985c7fc01d8957be30a23e2de027a2ae6  c100-adaptive-packed-formal.json
+```

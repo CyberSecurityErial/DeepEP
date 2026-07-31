@@ -1230,3 +1230,6 @@ Out of scope until evidence expands the project:
   one-hop planner improves 1.82x, C100 finish improves about 7%/4% for
   one-hop/adaptive diagnostics, and no storage is added. Exact 11/11, both
   vnode round trips, and focused sanitizer checks pass.
+- Clean `eedcdad` 10+100 confirms packed-record skipping at 41.372 ms one-hop
+  finish (7.4% below O096) and 399.294 ms adaptive finish (4.4% below O096).
+  Both eligibility gates pass; source data-plane code is unchanged.

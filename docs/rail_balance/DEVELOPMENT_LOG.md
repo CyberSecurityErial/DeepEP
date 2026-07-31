@@ -6891,3 +6891,10 @@ planner memcheck/initcheck                               0 errors
 This optimization removes empty work without changing any valid assignment or
 adding workspace. It remains scoped to diagnostic evidence until a clean
 10+100 run is collected from the committed tree.
+
+### Clean HA060-H closeout
+
+Commit `eedcdad` passes clean-tree 10+100 eligibility. One-hop finish is
+41.372 ms median / 41.523 ms p95; adaptive is 399.294 / 399.510 ms. These are
+7.4% and 4.4% below the clean pre-edit boundaries. Source-stage code did not
+change and no source timing movement is assigned to this planner optimization.
