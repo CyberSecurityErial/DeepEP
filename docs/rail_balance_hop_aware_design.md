@@ -289,3 +289,26 @@ chunk is not a safe default.  The GPU fast path will aggregate by endpoint
 group, use a conservative configurable minimum chunk, and enlarge it only for
 large groups under a bounded decision budget.  `chunk_size=1` remains the
 exact oracle and comparison path.
+
+### 11.1 CUDA parallel ownership before implementation
+
+Every new GPU stage must define this map before code is written. The first
+multi-block prototype uses one warp per block so that one `(owner, channel)`
+has a single deterministic writer; the large grid, rather than atomics inside
+one group, supplies parallelism.
+
+| stage | grid | block / warp | lane work | work per block |
+|---|---:|---:|---|---|
+| endpoint record | `G*C` | 1 warp | one top-k lane | about `N/C` tokens |
+| endpoint decision | 1 | 1 warp | lane 0 preserves group order; other lanes help reductions | endpoint groups only, at most 32 chunk decisions per large group |
+| record assignment | `G*C` | 1 warp | one top-k lane | resolve about `N/C` tokens from group quota |
+| group count | `G*C` | 1 warp | one top-k lane | count final `(egress,C,D)` ownership for about `N/C` tokens |
+| slot prefix | `G` | 1 warp initially | lanes stripe channel/destination groups | one egress's compact counters |
+| slot finalize | `G*C` | 1 warp | one top-k lane | add static group bases to about `N/C` tokens |
+
+The serialized stage may decide only coarse endpoint chunks; it must not scan
+channels or allocate per-copy slots. With `G=8`, `C=256`, and `N=8192`, the
+dense stages expose 2,048 independent blocks and each block sees roughly 32
+tokens. Launch boundaries provide the only grid-wide ordering. A later fusion
+is allowed only after profiling proves launch cost material; correctness is
+not based on cooperative-launch residency or cross-block spin barriers.

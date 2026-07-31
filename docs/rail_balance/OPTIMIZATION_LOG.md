@@ -2591,3 +2591,34 @@ final A/B  f6e0e4bc6dd5de8b8357da44e3502c5018a01a23eca39eb86d81ec2e857ad954
 An initial Nsys command included a disallowed `rm -f` cleanup and was rejected
 before execution. The retry used a unique report name; this is a command-safety
 failure, not a profiler or kernel failure.
+
+## O105 — asynchronous record boundary and multi-block evidence
+
+The first production integration removes the eager status readback and stream
+synchronization after endpoint record extraction. This does not pretend that a
+fresh plan can finish after its dispatch: it moves the already-independent
+record work across Gate #1 and leaves one true dependency at `finish`/Gate #2.
+Full per-route CPU offload remains rejected because it adds D2H, CPU planning,
+H2D, and a required synchronization.
+
+Targeted NCU on the accepted chunk-8 planner records one block of 32 threads,
+2,035,063 executed instructions, 0.08 eligible and issued warps per scheduler,
+92.22% cycles with no eligible warp, and 57.3% long-scoreboard warp cycles.
+Memory throughput is only 266.87 MB/s (0.18% of peak), L2 hit rate is 98.18%,
+and NCU estimates only about 3.224% local opportunity from coalescing. The
+remaining 13--16 ms is therefore a latency-bound single-warp dependency chain,
+not HBM bandwidth pressure.
+
+A lane-private endpoint histogram was tested as a single-variable experiment.
+It passed all 12 GPU cases but measured 13.648 ms one-hop and 15.712 ms
+adaptive, versus 13.586/15.608 ms before; it was fully reverted. This falsifies
+another histogram-local tweak and commits the next experiment to the explicit
+multi-block assignment/count/prefix/finalize split documented in the design.
+
+Evidence:
+
+```text
+.cache/rail_balance/hop-aware/ha070-onehop-n8192-fast-targeted.ncu-rep
+/tmp/rail-hop-ha070-private-hist.json
+private-hist SHA256 246fdf215f9e08ff2b0367b90b6b94505298da002895fcf0dbc9e6176477ae
+```

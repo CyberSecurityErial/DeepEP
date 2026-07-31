@@ -7063,3 +7063,29 @@ pass. This checkpoint proves the data structure and parallel materializer but
 does not yet claim the planner is cheap enough or asynchronous: the next step
 is to fuse endpoint histograms into record production and expose only the
 small group plan to the serialized phase.
+
+## 2026-07-31 — HA070-A: overlap endpoint extraction with Gate #1
+
+Production Hybrid now uses the measured conservative chunk size 8 while the
+private exact oracle remains at chunk size 1. `dispatch_prepare` no longer
+copies the record status to the host and synchronizes immediately after the
+record kernel. The record kernel remains ordered on the communication stream,
+Python may run Gate #1 concurrently, and `finish` becomes the first host status
+consumer before Gate #2. Status values 2--4 are therefore retained until the
+existing cross-rank fail-closed gate instead of being rejected early.
+
+An existing host assertion required every egress proxy capacity to be at least
+the local token count. H3 intentionally uses `N=9, Pcap=5/4`; the actual moved
+traffic is smaller and the GPU planner owns the exact capacity decision. The
+host check now requires only positive capacity. EP8 LSA plan, WORLD-gate, and
+dispatch-prepare recovery tests pass, including zero-token ranks, non-default
+streams, Pcap overflow recovery, and 18 fixed MAX gates.
+
+The first build put the default chunk constant in a JIT-only plan header, so
+the host translation unit could not resolve it. The constant was moved to the
+shared Hybrid layout header and the rebuild passed. This failed build is kept
+as an ownership-boundary lesson rather than hidden.
+
+Before the next CUDA edit, the design now fixes grid/block/warp/lane ownership
+for every stage. The dense record and slot phases will use `G*C` one-warp
+blocks; only coarse endpoint decisions remain in one ordered warp.

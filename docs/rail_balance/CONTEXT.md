@@ -1278,3 +1278,12 @@ Out of scope until evidence expands the project:
   92.678/89.563 ms exact. GPU tests pass 12/12 and focused
   memcheck/initcheck/synccheck report zero errors. Next, fuse endpoint
   histograms into record production and keep per-token slot work off CPU.
+- HA070-A changes the production experimental path to conservative chunk 8 and
+  lets endpoint record extraction overlap Python Gate #1. Status is consumed
+  once at finish/Gate #2; EP8 LSA, WORLD gate, and dispatch prepare tests pass.
+  The private exact oracle stays chunk 1 and public capability stays false.
+- Targeted NCU proves the remaining 13--16 ms planner is a one-warp latency
+  chain (92.22% no-eligible cycles, 0.18% peak memory), while a lane-private
+  histogram was neutral and reverted. The next implementation must start from
+  the documented `grid -> block -> warp -> lane` map: coarse decisions in one
+  warp, dense assignment/count/finalization in `G*C` independent blocks.
