@@ -15,13 +15,21 @@ static constexpr int kNumHybridMaxDestinations = 32;
 static constexpr int64_t kNumHybridBufferAlignmentBytes = 2 * 1024 * 1024;
 static constexpr int kMaxHybridPolicyThresholdPercent = 3100;
 static constexpr int kDefaultHopPlannerChunkSize = 8;
+static constexpr int kNumMaxDenseTargetMaskRails = 8;
+
+__forceinline__ __device__ __host__ constexpr int
+get_num_dense_target_masks(const int num_rails) {
+    return num_rails > 0 and num_rails <= kNumMaxDenseTargetMaskRails ?
+        1 << num_rails : 1;
+}
 
 enum HopMaterializeStage : int {
     kHopEndpointPrefix = 0,
-    kHopEndpointAssign = 1,
-    kHopGroupCount = 2,
-    kHopGroupPrefix = 3,
-    kHopSlotFinalize = 4,
+    kHopMultiTargetAssign = 1,
+    kHopEndpointAssign = 2,
+    kHopGroupCount = 3,
+    kHopGroupPrefix = 4,
+    kHopSlotFinalize = 5,
 };
 
 // Planner-only policy ABI. Dispatch, shuffle, and combine consume only the

@@ -11,6 +11,7 @@ namespace deep_ep::elastic::rail_balance {
 
 static constexpr int kNumHybridSegmentFields = 5;
 static constexpr int kNumMaxEndpointChunks = 32;
+static constexpr int kNumMaxAdaptiveRoundsPerRail = 32;
 
 enum HybridSegmentField : int {
     kHybridSegmentOwner = 0,
@@ -69,6 +70,28 @@ __forceinline__ __device__ __host__ int64_t odte_offset(
         num_rails + target) * num_rails + egress;
 }
 
+__forceinline__ __device__ __host__ int64_t odme_offset(
+        const int owner,
+        const int destination,
+        const int target_mask,
+        const int egress,
+        const int num_destinations,
+        const int num_target_masks,
+        const int num_rails) {
+    return ((static_cast<int64_t>(owner) * num_destinations + destination) *
+        num_target_masks + target_mask) * num_rails + egress;
+}
+
+__forceinline__ __device__ __host__ int64_t odm_offset(
+        const int owner,
+        const int destination,
+        const int target_mask,
+        const int num_destinations,
+        const int num_target_masks) {
+    return (static_cast<int64_t>(owner) * num_destinations + destination) *
+        num_target_masks + target_mask;
+}
+
 __forceinline__ __device__ __host__ int64_t lgcd_offset(
         const int worker_lane,
         const int egress,
@@ -117,6 +140,8 @@ struct AdaptiveCandidate {
     int64_t index;
     int64_t net_gain;
     int egress;
+    int batch;
+    int meets_batch_floor;
     int pair_after;
     int source_after;
     int added_hops;
@@ -128,6 +153,15 @@ __forceinline__ __device__ bool better_candidate(
         const AdaptiveCandidate& current) {
     if (candidate.index < 0)
         return false;
+    if (current.index >= 0 and
+        candidate.meets_batch_floor != current.meets_batch_floor)
+        return candidate.meets_batch_floor > current.meets_batch_floor;
+    if (current.index >= 0 and not candidate.meets_batch_floor) {
+        const int64_t candidate_gain = candidate.net_gain * candidate.batch;
+        const int64_t current_gain = current.net_gain * current.batch;
+        if (candidate_gain != current_gain)
+            return candidate_gain > current_gain;
+    }
     if (current.index < 0 or candidate.net_gain != current.net_gain)
         return current.index < 0 or candidate.net_gain > current.net_gain;
     if (candidate.pair_after != current.pair_after)
@@ -170,6 +204,67 @@ __forceinline__ __device__ int peak_after_move(
     const int unchanged_peak = peaks.first_count > removed_first ?
         peaks.first : peaks.second;
     return max(unchanged_peak, max(old_load - 1, new_load + 1));
+}
+
+__forceinline__ __device__ int adaptive_batch_limit(
+        const int quota,
+        const int old_pair,
+        const int new_pair,
+        const int old_source,
+        const int new_source,
+        const LoadPeaks& pair_peaks,
+        const LoadPeaks& source_peaks,
+        const int remaining_cap,
+        const int pair_capacity,
+        const int proxy_capacity) {
+    int batch = min(quota, remaining_cap);
+    batch = min(batch, pair_capacity);
+    batch = min(batch, pair_peaks.first - new_pair);
+    batch = min(batch, source_peaks.first - new_source);
+    batch = min(batch, proxy_capacity);
+
+    const int pair_gap = old_pair - new_pair;
+    const int source_gap = old_source - new_source;
+    if (pair_gap <= 0 or source_gap <= 0) {
+        batch = min(batch, 1);
+    } else {
+        batch = min(batch, pair_gap / 2 + pair_gap % 2);
+        batch = min(batch, source_gap / 2 + source_gap % 2);
+    }
+
+    const int pair_other =
+        (pair_peaks.first_count >
+         static_cast<int>(old_pair == pair_peaks.first)) ?
+            pair_peaks.first : pair_peaks.second;
+    const int source_other =
+        (source_peaks.first_count >
+         static_cast<int>(old_source == source_peaks.first)) ?
+            source_peaks.first : source_peaks.second;
+    if (old_pair == pair_peaks.first and pair_peaks.first_count > 1)
+        batch = min(
+            batch,
+            remaining_cap / pair_peaks.first_count +
+                static_cast<int>(
+                    remaining_cap % pair_peaks.first_count != 0));
+    if (old_source == source_peaks.first and source_peaks.first_count > 1)
+        batch = min(
+            batch,
+            remaining_cap / source_peaks.first_count +
+                static_cast<int>(
+                    remaining_cap % source_peaks.first_count != 0));
+    int critical_batch = 0;
+    if (old_pair > pair_other) {
+        const int difference = old_pair - pair_other;
+        critical_batch = difference >= batch ? batch : difference + 1;
+    }
+    if (old_source > source_other) {
+        const int difference = old_source - source_other;
+        critical_batch = max(
+            critical_batch, difference >= batch ? batch : difference + 1);
+    }
+    if (critical_batch > 0)
+        batch = min(batch, critical_batch);
+    return max(batch, 0);
 }
 
 __forceinline__ __device__ int choose_endpoint(
@@ -241,10 +336,57 @@ __forceinline__ __device__ int choose_endpoint(
     return best_egress;
 }
 
-// Move endpoint-group quota, not individual records. One warp owns the small
-// [owner,destination,target,egress] table; later G*C blocks materialize it.
+__forceinline__ __device__ bool assign_endpoint_group(
+        int* egress_quota,
+        int* pair_load,
+        int* source_load,
+        int* owner_remaining,
+        int* proxy_required,
+        const int owner,
+        const int destination,
+        const uint32_t target_mask,
+        const int count,
+        const int64_t tie_group,
+        const int num_rails,
+        const int num_destinations,
+        const int num_tokens,
+        const int num_max_tokens_per_rank,
+        const int planner_seed,
+        const int planner_chunk_size) {
+    owner_remaining[owner * num_destinations + destination] -= count;
+    const int chunk_size = max(
+        planner_chunk_size,
+        count / kNumMaxEndpointChunks +
+            static_cast<int>(count % kNumMaxEndpointChunks != 0));
+    for (int begin = 0; begin < count;) {
+        const int amount = min(chunk_size, count - begin);
+        const int egress = choose_endpoint(
+            target_mask | (uint32_t{1} << owner), target_mask,
+            owner, destination, amount,
+            tie_group * static_cast<int64_t>(num_tokens) + begin,
+            pair_load, source_load, owner_remaining,
+            num_rails, num_destinations, num_max_tokens_per_rank,
+            planner_seed);
+        if (egress < 0)
+            return false;
+        pair_load[destination * num_rails + egress] += amount;
+        source_load[egress] += amount;
+        egress_quota[egress] += amount;
+        if (egress != owner)
+            proxy_required[egress] += amount;
+        begin += amount;
+    }
+    return true;
+}
+
+// Move group quota, not individual records. For G <= 8, active_groups
+// compacts singleton [o,d,t] and dense multi-target [o,d,mask] rows; later
+// G*C and G blocks materialize their egress quotas.
 __forceinline__ __device__ bool rebalance_endpoint_quotas(
         int* endpoint_egress_quota,
+        int* multi_target_egress_quota,
+        const int* active_groups,
+        const int num_active_groups,
         int* pair_load,
         int* source_load,
         int* peak_scratch,
@@ -252,6 +394,7 @@ __forceinline__ __device__ bool rebalance_endpoint_quotas(
         const int total_units,
         const int num_rails,
         const int num_destinations,
+        const int num_target_masks,
         const int num_max_tokens_per_rank,
         const int proxy_capacity_per_egress,
         const int planner_seed,
@@ -259,13 +402,30 @@ __forceinline__ __device__ bool rebalance_endpoint_quotas(
         const int max_two_hop_percent,
         const int hop_penalty_percent) {
     const int lane = ptx::get_lane_idx();
-    const int two_hop_cap = num_rails < 3 ? 0 : static_cast<int>(
+    const int two_hop_cap = num_rails < 2 ? 0 : static_cast<int>(
         static_cast<int64_t>(total_units) * max_two_hop_percent / 100);
-    const int64_t num_quotas = static_cast<int64_t>(num_rails) *
+    const int64_t num_endpoint_quotas = static_cast<int64_t>(num_rails) *
         num_destinations * num_rails * num_rails;
+    const int num_endpoint_groups =
+        num_rails * num_destinations * num_rails;
+    const int64_t num_multi_target_quotas =
+        num_target_masks > 1 ? static_cast<int64_t>(num_rails) *
+            num_destinations * num_target_masks * num_rails : 0;
+    const int64_t num_quotas =
+        num_endpoint_quotas + num_multi_target_quotas;
+    const int64_t num_scan_quotas = active_groups == nullptr ?
+        num_quotas :
+        static_cast<int64_t>(num_active_groups) * num_rails;
+    const int max_rounds = num_rails * kNumMaxAdaptiveRoundsPerRail;
     int selected = 0;
+    int round = 0;
+    int tiny_tail_rounds = 0;
 
-    while (selected < two_hop_cap) {
+    while (selected < two_hop_cap and round < max_rounds) {
+        const int remaining_cap = two_hop_cap - selected;
+        const int remaining_rounds = max_rounds - round;
+        const int required_batch = remaining_cap / remaining_rounds +
+            static_cast<int>(remaining_cap % remaining_rounds != 0);
         if (lane == 0)
             for (int destination = 0;
                  destination < num_destinations; ++destination) {
@@ -280,20 +440,44 @@ __forceinline__ __device__ bool rebalance_endpoint_quotas(
         const auto source_peaks = find_load_peaks(source_load, num_rails);
 
         AdaptiveCandidate best = {
-            -1, INT64_MIN, -1, INT_MAX, INT_MAX, INT_MAX, INT_MAX};
-        for (int64_t index = lane; index < num_quotas; index += 32) {
-            if (endpoint_egress_quota[index] <= 0)
+            -1, INT64_MIN, -1, 0, 0,
+            INT_MAX, INT_MAX, INT_MAX, INT_MAX};
+        for (int64_t scan_index = lane;
+             scan_index < num_scan_quotas; scan_index += 32) {
+            int64_t index = scan_index;
+            if (active_groups != nullptr) {
+                const int group =
+                    active_groups[scan_index / num_rails];
+                const int old_egress =
+                    static_cast<int>(scan_index % num_rails);
+                index = group < num_endpoint_groups ?
+                    static_cast<int64_t>(group) * num_rails + old_egress :
+                    num_endpoint_quotas +
+                        static_cast<int64_t>(
+                            group - num_endpoint_groups) * num_rails +
+                        old_egress;
+            }
+            const bool multi_target = index >= num_endpoint_quotas;
+            int64_t local_index = multi_target ?
+                index - num_endpoint_quotas : index;
+            const int quota = multi_target ?
+                multi_target_egress_quota[local_index] :
+                endpoint_egress_quota[local_index];
+            if (quota <= 0)
                 continue;
-            int64_t decoded = index;
+            int64_t decoded = local_index;
             const int old_egress = static_cast<int>(decoded % num_rails);
             decoded /= num_rails;
-            const int target = static_cast<int>(decoded % num_rails);
-            decoded /= num_rails;
+            const uint32_t target_mask = multi_target ?
+                static_cast<uint32_t>(decoded % num_target_masks) :
+                uint32_t{1} << static_cast<int>(decoded % num_rails);
+            decoded /= multi_target ? num_target_masks : num_rails;
             const int destination =
                 static_cast<int>(decoded % num_destinations);
             const int owner =
                 static_cast<int>(decoded / num_destinations);
-            if (old_egress != owner and old_egress != target)
+            if (old_egress != owner and
+                (target_mask & (uint32_t{1} << old_egress)) == 0)
                 continue;
 
             const LoadPeaks pair_peaks = {
@@ -308,12 +492,13 @@ __forceinline__ __device__ bool rebalance_endpoint_quotas(
             const int old_source = source_load[old_egress];
             if (old_pair < pair_before and old_source < source_before)
                 continue;
-            const int old_hops =
-                (old_egress != owner) + (old_egress != target);
-            const int added_hops = 2 - old_hops;
+            const int old_hops = (old_egress != owner) +
+                __popc(target_mask & ~(uint32_t{1} << old_egress));
+            const int added_hops = 1 + __popc(target_mask) - old_hops;
 
             for (int egress = 0; egress < num_rails; ++egress) {
-                if (egress == owner or egress == target or
+                if (egress == owner or
+                    (target_mask & (uint32_t{1} << egress)) != 0 or
                     pair_load[destination * num_rails + egress] >=
                         num_max_tokens_per_rank or
                     proxy_required[egress] >= proxy_capacity_per_egress)
@@ -337,8 +522,15 @@ __forceinline__ __device__ bool rebalance_endpoint_quotas(
                     static_cast<int64_t>(hop_penalty_percent) * added_hops;
                 const int64_t threshold =
                     static_cast<int64_t>(two_hop_threshold_percent) *
-                    (pair_before + source_before);
+                    (static_cast<int64_t>(pair_before) + source_before);
                 if (net_gain <= 0 or net_gain <= threshold)
+                    continue;
+                const int batch = adaptive_batch_limit(
+                    quota, old_pair, new_pair, old_source, new_source,
+                    pair_peaks, source_peaks, remaining_cap,
+                    num_max_tokens_per_rank - new_pair,
+                    proxy_capacity_per_egress - proxy_required[egress]);
+                if (batch <= 0)
                     continue;
                 const int origin = static_cast<int>(
                     (static_cast<int64_t>(planner_seed) + destination +
@@ -347,6 +539,8 @@ __forceinline__ __device__ bool rebalance_endpoint_quotas(
                     index,
                     net_gain,
                     egress,
+                    batch,
+                    static_cast<int>(batch >= required_batch),
                     pair_after,
                     source_after,
                     added_hops,
@@ -361,14 +555,21 @@ __forceinline__ __device__ bool rebalance_endpoint_quotas(
             if (better_candidate(candidate, best))
                 best = candidate;
         }
-        if (best.index < 0)
+        if (best.index < 0 or
+            (not best.meets_batch_floor and
+             tiny_tail_rounds >= num_rails))
             break;
 
-        int64_t decoded = best.index;
+        const bool multi_target = best.index >= num_endpoint_quotas;
+        const int64_t local_index = multi_target ?
+            best.index - num_endpoint_quotas : best.index;
+        int64_t decoded = local_index;
         const int old_egress = static_cast<int>(decoded % num_rails);
         decoded /= num_rails;
-        const int target = static_cast<int>(decoded % num_rails);
-        decoded /= num_rails;
+        const uint32_t target_mask = multi_target ?
+            static_cast<uint32_t>(decoded % num_target_masks) :
+            uint32_t{1} << static_cast<int>(decoded % num_rails);
+        decoded /= multi_target ? num_target_masks : num_rails;
         const int destination =
             static_cast<int>(decoded % num_destinations);
         const int owner = static_cast<int>(decoded / num_destinations);
@@ -384,50 +585,31 @@ __forceinline__ __device__ bool rebalance_endpoint_quotas(
             peak_scratch[num_destinations + destination],
             peak_scratch[2 * num_destinations + destination],
         };
-        int batch = min(
-            endpoint_egress_quota[best.index], two_hop_cap - selected);
-        batch = min(batch, num_max_tokens_per_rank - new_pair);
-        batch = min(batch, pair_peaks.first - new_pair);
-        batch = min(batch, source_peaks.first - new_source);
-        batch = min(
-            batch, proxy_capacity_per_egress - proxy_required[new_egress]);
-        const int pair_gap = old_pair - new_pair;
-        const int source_gap = old_source - new_source;
-        if (pair_gap <= 0 or source_gap <= 0) {
-            batch = min(batch, 1);
-        } else {
-            batch = min(batch, pair_gap / 2 + pair_gap % 2);
-            batch = min(batch, source_gap / 2 + source_gap % 2);
-        }
-
-        const int pair_other =
-            (pair_peaks.first_count >
-             static_cast<int>(old_pair == pair_peaks.first)) ?
-                pair_peaks.first : pair_peaks.second;
-        const int source_other =
-            (source_peaks.first_count >
-             static_cast<int>(old_source == source_peaks.first)) ?
-                source_peaks.first : source_peaks.second;
-        int critical_batch = 0;
-        if (old_pair >= pair_other) {
-            const int difference = old_pair - pair_other;
-            critical_batch = difference >= batch ? batch : difference + 1;
-        }
-        if (old_source >= source_other) {
-            const int difference = old_source - source_other;
-            critical_batch = max(
-                critical_batch, difference >= batch ? batch : difference + 1);
-        }
-        batch = min(batch, critical_batch);
-        if (batch <= 0)
+        const int batch = adaptive_batch_limit(
+            multi_target ?
+                multi_target_egress_quota[local_index] :
+                endpoint_egress_quota[local_index],
+            old_pair, new_pair, old_source, new_source,
+            pair_peaks, source_peaks, remaining_cap,
+            num_max_tokens_per_rank - new_pair,
+            proxy_capacity_per_egress - proxy_required[new_egress]);
+        if (batch <= 0 or
+            (best.meets_batch_floor and batch < required_batch))
             return false;
 
         if (lane == 0) {
-            const auto new_quota = odte_offset(
-                owner, destination, target, new_egress,
-                num_destinations, num_rails);
-            endpoint_egress_quota[best.index] -= batch;
-            endpoint_egress_quota[new_quota] += batch;
+            int* quotas = multi_target ?
+                multi_target_egress_quota : endpoint_egress_quota;
+            const auto new_quota = multi_target ?
+                odme_offset(
+                    owner, destination, target_mask, new_egress,
+                    num_destinations, num_target_masks, num_rails) :
+                odte_offset(
+                    owner, destination,
+                    __ffs(static_cast<int>(target_mask)) - 1, new_egress,
+                    num_destinations, num_rails);
+            quotas[local_index] -= batch;
+            quotas[new_quota] += batch;
             pair_load[destination * num_rails + old_egress] -= batch;
             pair_load[destination * num_rails + new_egress] += batch;
             source_load[old_egress] -= batch;
@@ -437,6 +619,8 @@ __forceinline__ __device__ bool rebalance_endpoint_quotas(
             proxy_required[new_egress] += batch;
         }
         selected += batch;
+        ++round;
+        tiny_tail_rounds += not best.meets_batch_floor;
         __syncwarp();
     }
     return true;
@@ -487,7 +671,7 @@ void rail_balance_hop_record_impl(
     const int lane = ptx::get_lane_idx();
     const int experts_per_destination = num_experts / num_destinations;
     const int experts_per_rank = experts_per_destination / num_rails;
-    for (int token = channel;
+    for (int64_t token = channel;
          token < record_token_capacity;
          token += num_channels) {
         const auto record_offset =
@@ -561,6 +745,7 @@ void rail_balance_hop_precount_impl(
         int* owner_remaining,
         int* endpoint_count,
         int* endpoint_egress_quota,
+        int* multi_target_egress_quota,
         int* owner_group_cursor,
         int* total_units,
         int* status,
@@ -572,7 +757,9 @@ void rail_balance_hop_precount_impl(
     const int lane = ptx::get_lane_idx();
     if (records == nullptr or resolutions == nullptr or
         owner_remaining == nullptr or endpoint_count == nullptr or
-        endpoint_egress_quota == nullptr or owner_group_cursor == nullptr or
+        endpoint_egress_quota == nullptr or
+        multi_target_egress_quota == nullptr or
+        owner_group_cursor == nullptr or
         total_units == nullptr or status == nullptr or
         num_rails < 1 or num_rails > 32 or
         num_tokens < 0 or num_topk < 1 or num_topk > 32 or
@@ -590,7 +777,7 @@ void rail_balance_hop_precount_impl(
     if (owner >= num_rails)
         return;
 
-    for (int token = channel; token < num_tokens; token += num_channels) {
+    for (int64_t token = channel; token < num_tokens; token += num_channels) {
         const int64_t begin =
             (static_cast<int64_t>(owner) * num_tokens + token) * num_topk;
         const bool in_table = lane < num_topk;
@@ -610,8 +797,13 @@ void rail_balance_hop_precount_impl(
             (record.destination >= 0 and
              record.destination < num_destinations and
              (num_rails == 32 or (record.target_mask >> num_rails) == 0));
+        const int previous_destination = __shfl_up_sync(
+            0xffffffff, record.destination, 1);
+        const bool valid_order = not active or lane == 0 or
+            record.destination > previous_destination;
         if (active_mask != packed_mask or
-            ptx::gather(not valid_padding or not valid_active) != 0) {
+            ptx::gather(
+                not valid_padding or not valid_active or not valid_order) != 0) {
             if (lane == 0)
                 hybrid_plan_detail::report_error(
                     status, HybridPlanError::InvalidSchedule);
@@ -633,6 +825,15 @@ void rail_balance_hop_precount_impl(
                 num_rails, num_channels, num_destinations), 1);
         } else {
             atomicExch(endpoint_egress_quota, 1);
+            const int num_target_masks = get_num_dense_target_masks(num_rails);
+            if (num_target_masks > 1)
+                atomicAdd(
+                    multi_target_egress_quota +
+                        hybrid_plan_detail::odme_offset(
+                            owner, record.destination,
+                            static_cast<int>(record.target_mask), 0,
+                            num_destinations, num_target_masks, num_rails),
+                    1);
         }
         if (lane == 0)
             atomicAdd(total_units, active_count);
@@ -647,6 +848,8 @@ void rail_balance_hop_materialize_impl(
         const HopCopyRecord* records,
         HopCopyResolution* resolutions,
         const int* endpoint_egress_quota,
+        const int* multi_target_egress_quota,
+        int* multi_target_cursor,
         int* owner_group_cursor,
         int* retained,
         int* moved,
@@ -664,7 +867,9 @@ void rail_balance_hop_materialize_impl(
         const int proxy_capacity_per_egress) {
     const int lane = ptx::get_lane_idx();
     if (records == nullptr or resolutions == nullptr or
-        endpoint_egress_quota == nullptr or owner_group_cursor == nullptr or
+        endpoint_egress_quota == nullptr or
+        multi_target_egress_quota == nullptr or
+        multi_target_cursor == nullptr or owner_group_cursor == nullptr or
         retained == nullptr or moved == nullptr or
         retained_prefix == nullptr or group_prefix == nullptr or
         proxy_required == nullptr or path_units == nullptr or
@@ -717,7 +922,8 @@ void rail_balance_hop_materialize_impl(
         const int channel = owner_channel % num_channels;
         if (owner >= num_rails)
             return;
-        for (int token = channel; token < num_tokens; token += num_channels) {
+        for (int64_t token = channel;
+             token < num_tokens; token += num_channels) {
             const int64_t begin =
                 (static_cast<int64_t>(owner) * num_tokens + token) * num_topk;
             if (lane >= num_topk)
@@ -760,6 +966,86 @@ void rail_balance_hop_materialize_impl(
         return;
     }
 
+    if constexpr (kStage == kHopMultiTargetAssign) {
+        const int owner = static_cast<int>(blockIdx.x);
+        const int num_target_masks = get_num_dense_target_masks(num_rails);
+        if (owner >= num_rails or num_target_masks == 1)
+            return;
+        const int64_t owner_begin =
+            static_cast<int64_t>(owner) * num_tokens * num_topk;
+        const int64_t owner_records =
+            static_cast<int64_t>(num_tokens) * num_topk;
+        for (int64_t base = 0; base < owner_records; base += 32) {
+            const int64_t record_offset = base + lane;
+            const bool in_range = record_offset < owner_records;
+            const auto record = in_range ?
+                records[owner_begin + record_offset] :
+                HopCopyRecord{0u, -1};
+            const bool active = in_range and
+                __popc(record.target_mask) > 1;
+            const unsigned peers = ptx::match(active ?
+                record.destination * num_target_masks +
+                    static_cast<int>(record.target_mask) : -1) &
+                ptx::gather(active);
+            if (active) {
+                const auto cursor = hybrid_plan_detail::odm_offset(
+                    owner, record.destination,
+                    static_cast<int>(record.target_mask),
+                    num_destinations, num_target_masks);
+                const int group_base = multi_target_cursor[cursor];
+                const int ordinal = group_base +
+                    __popc(peers & ((uint32_t{1} << lane) - 1));
+                int cumulative = 0;
+                int egress = -1;
+                for (int candidate = 0;
+                     candidate < num_rails; ++candidate) {
+                    cumulative += multi_target_egress_quota[
+                        hybrid_plan_detail::odme_offset(
+                            owner, record.destination,
+                            static_cast<int>(record.target_mask), candidate,
+                            num_destinations, num_target_masks, num_rails)];
+                    if (ordinal < cumulative) {
+                        egress = candidate;
+                        break;
+                    }
+                }
+                if (egress < 0)
+                    hybrid_plan_detail::report_error(
+                        status, HybridPlanError::InvalidSchedule);
+                else
+                    resolutions[owner_begin + record_offset].egress = egress;
+                if (lane == __ffs(static_cast<int>(peers)) - 1)
+                    multi_target_cursor[cursor] =
+                        group_base + __popc(peers);
+            }
+            __syncwarp();
+        }
+
+        const int64_t num_groups =
+            static_cast<int64_t>(num_destinations) * num_target_masks;
+        for (int64_t flat = lane; flat < num_groups; flat += 32) {
+            const int target_mask =
+                static_cast<int>(flat % num_target_masks);
+            if (__popc(static_cast<unsigned>(target_mask)) <= 1)
+                continue;
+            const int destination =
+                static_cast<int>(flat / num_target_masks);
+            int expected = 0;
+            for (int egress = 0; egress < num_rails; ++egress)
+                expected += multi_target_egress_quota[
+                    hybrid_plan_detail::odme_offset(
+                        owner, destination, target_mask, egress,
+                        num_destinations, num_target_masks, num_rails)];
+            if (multi_target_cursor[
+                    hybrid_plan_detail::odm_offset(
+                        owner, destination, target_mask,
+                        num_destinations, num_target_masks)] != expected)
+                hybrid_plan_detail::report_error(
+                    status, HybridPlanError::InvalidSchedule);
+        }
+        return;
+    }
+
     if constexpr (kStage == kHopGroupCount) {
         const int owner_source_channel = static_cast<int>(blockIdx.x);
         const int owner = owner_source_channel / num_channels;
@@ -777,7 +1063,7 @@ void rail_balance_hop_materialize_impl(
 
         int local_paths[4] = {};
         int local_moved = 0;
-        for (int token = source_channel;
+        for (int64_t token = source_channel;
              token < num_tokens; token += num_channels) {
             const int64_t begin =
                 (static_cast<int64_t>(owner) * num_tokens + token) * num_topk;
@@ -953,7 +1239,7 @@ void rail_balance_hop_materialize_impl(
         const int source_channel = owner_source_channel % num_channels;
         if (owner >= num_rails)
             return;
-        for (int token = source_channel;
+        for (int64_t token = source_channel;
              token < num_tokens; token += num_channels) {
             const int64_t begin =
                 (static_cast<int64_t>(owner) * num_tokens + token) * num_topk;
@@ -1004,6 +1290,8 @@ void rail_balance_hop_plan_impl(
         int* owner_remaining,
         int* endpoint_count,
         int* endpoint_egress_quota,
+        int* multi_target_egress_quota,
+        int* multi_target_cursor,
         int* owner_group_cursor,
         int* retained,
         int* moved,
@@ -1030,7 +1318,8 @@ void rail_balance_hop_plan_impl(
     if (records == nullptr or resolutions == nullptr or pair_load == nullptr or
         source_load == nullptr or owner_remaining == nullptr or
         endpoint_count == nullptr or endpoint_egress_quota == nullptr or
-        owner_group_cursor == nullptr or
+        multi_target_egress_quota == nullptr or
+        multi_target_cursor == nullptr or owner_group_cursor == nullptr or
         retained == nullptr or moved == nullptr or
         retained_prefix == nullptr or group_prefix == nullptr or
         proxy_required == nullptr or path_units == nullptr or
@@ -1059,8 +1348,25 @@ void rail_balance_hop_plan_impl(
         num_rails * num_destinations * num_rails;
     const int64_t num_endpoint_egress_groups =
         static_cast<int64_t>(num_endpoint_groups) * num_rails;
+    const int num_target_masks = get_num_dense_target_masks(num_rails);
+    const int64_t num_multi_target_groups =
+        static_cast<int64_t>(num_rails) * num_destinations *
+        num_target_masks;
+    // Precount stores a multi-target marker in endpoint quota[0], then turns
+    // each multi-target count row into per-egress quotas. The decision pass
+    // uses multi_target_cursor as its compact active-group list, clears that
+    // prefix, and the materializer reuses it as the consumed-record cursor.
     const bool has_multi_target =
         kPrecounted and endpoint_egress_quota[0] != 0;
+    const bool has_unaggregated_multi_target =
+        has_multi_target and num_target_masks == 1;
+    if constexpr (kAggregateAdaptive)
+        if (has_unaggregated_multi_target) {
+            if (lane == 0)
+                hybrid_plan_detail::report_error(
+                    status, HybridPlanError::InvalidSchedule);
+            return;
+        }
     __syncwarp();
     for (int rail = lane; rail < num_rails; rail += 32) {
         source_load[rail] = 0;
@@ -1077,6 +1383,11 @@ void rail_balance_hop_plan_impl(
         }
     for (int64_t i = lane; i < num_endpoint_egress_groups; i += 32)
         endpoint_egress_quota[i] = 0;
+    if constexpr (kPrecounted)
+        if (num_target_masks > 1)
+            for (int64_t i = lane;
+                 i < num_multi_target_groups; i += 32)
+                multi_target_cursor[i] = 0;
     for (int i = lane; i < num_groups; i += 32) {
         retained[i] = 0;
         moved[i] = 0;
@@ -1099,10 +1410,13 @@ void rail_balance_hop_plan_impl(
         lane_units = lane == 0 ? precounted_units : 0;
     } else {
         bool reached_padding = false;
+        int previous_destination = -1;
         for (int64_t index = static_cast<int64_t>(lane) * owner_records;
              lane < num_rails and index < (lane + 1) * owner_records; ++index) {
-            if (index % num_topk == 0)
+            if (index % num_topk == 0) {
                 reached_padding = false;
+                previous_destination = -1;
+            }
             resolutions[index] = {-1, -1, -1, -1};
             const auto record = records[index];
             if (record.target_mask == 0) {
@@ -1114,12 +1428,14 @@ void rail_balance_hop_plan_impl(
             }
             if (reached_padding or record.destination < 0 or
                     record.destination >= num_destinations or
+                    record.destination <= previous_destination or
                     (num_rails < 32 and
                      (record.target_mask >> num_rails) != 0)) {
                 hybrid_plan_detail::report_error(
                     status, HybridPlanError::InvalidSchedule);
                 continue;
             }
+            previous_destination = record.destination;
             ++owner_remaining[lane * num_destinations + record.destination];
             if (__popc(record.target_mask) == 1) {
                 const int target =
@@ -1135,98 +1451,163 @@ void rail_balance_hop_plan_impl(
     if (*status != static_cast<int>(HybridPlanError::Success))
         return;
 
-    if (lane == 0) {
-      if (not kPrecounted or has_multi_target)
-       for (int64_t index = 0; index < num_records; ++index) {
-        const auto record = records[index];
-        if (record.target_mask == 0) {
-          index += num_topk - 1 - index % num_topk;
-          continue;
-        }
-        if constexpr (kPrecounted)
-          if (__popc(record.target_mask) == 1)
-            continue;
-        const int owner = static_cast<int>(
-            index / (static_cast<int64_t>(num_tokens) * num_topk));
-        const int destination = record.destination;
-        --owner_remaining[owner * num_destinations + destination];
-
-        const int best_egress = hybrid_plan_detail::choose_endpoint(
-            record.target_mask | (uint32_t{1} << owner),
-            record.target_mask, owner, destination, 1, index,
-            pair_load, source_load, owner_remaining,
-            num_rails, num_destinations, num_max_tokens_per_rank,
-            planner_seed);
-        if (best_egress < 0) {
-          hybrid_plan_detail::report_error(
-              status, HybridPlanError::CapacityExceeded);
-          break;
-        }
-
-        resolutions[index] = {best_egress, -1, -1, -1};
-        ++pair_load[destination * num_rails + best_egress];
-        ++source_load[best_egress];
-        if (best_egress != owner)
-          ++proxy_required[best_egress];
-       }
-
-      if constexpr (kPrecounted) {
-        for (int owner = 0; owner < num_rails; ++owner) {
-          for (int destination = 0;
-               destination < num_destinations; ++destination) {
-            for (int target = 0; target < num_rails; ++target) {
-              const auto group = hybrid_plan_detail::odt_offset(
-                  owner, destination, target, num_destinations, num_rails);
-              const int count = endpoint_count[group];
-              if (count == 0)
+    int num_active_groups = 0;
+    if (lane == 0 and
+        (not kPrecounted or has_unaggregated_multi_target)) {
+        for (int64_t index = 0; index < num_records; ++index) {
+            const auto record = records[index];
+            if (record.target_mask == 0) {
+                index += num_topk - 1 - index % num_topk;
                 continue;
-              owner_remaining[owner * num_destinations + destination] -= count;
-              const int chunk_size = max(
-                  planner_chunk_size,
-                  (count + kNumMaxEndpointChunks - 1) /
-                      kNumMaxEndpointChunks);
-              for (int begin = 0; begin < count; begin += chunk_size) {
-                const int amount = min(chunk_size, count - begin);
-                const int64_t tie_index =
-                    group * static_cast<int64_t>(num_tokens) + begin;
-                const uint32_t target_mask = uint32_t{1} << target;
-                const int egress = hybrid_plan_detail::choose_endpoint(
-                    target_mask | (uint32_t{1} << owner), target_mask,
-                    owner, destination, amount, tie_index,
-                    pair_load, source_load, owner_remaining,
-                    num_rails, num_destinations, num_max_tokens_per_rank,
-                    planner_seed);
-                if (egress < 0) {
-                  hybrid_plan_detail::report_error(
-                      status, HybridPlanError::CapacityExceeded);
-                  break;
-                }
-                pair_load[destination * num_rails + egress] += amount;
-                source_load[egress] += amount;
-                endpoint_egress_quota[
-                    hybrid_plan_detail::odte_offset(
-                        owner, destination, target, egress,
-                        num_destinations, num_rails)] += amount;
-                if (egress != owner)
-                  proxy_required[egress] += amount;
-              }
             }
-          }
+            if constexpr (kPrecounted)
+                if (__popc(record.target_mask) == 1)
+                    continue;
+            const int owner = static_cast<int>(
+                index / (static_cast<int64_t>(num_tokens) * num_topk));
+            const int destination = record.destination;
+            --owner_remaining[owner * num_destinations + destination];
+            const int best_egress = hybrid_plan_detail::choose_endpoint(
+                record.target_mask | (uint32_t{1} << owner),
+                record.target_mask, owner, destination, 1, index,
+                pair_load, source_load, owner_remaining,
+                num_rails, num_destinations, num_max_tokens_per_rank,
+                planner_seed);
+            if (best_egress < 0) {
+                hybrid_plan_detail::report_error(
+                    status, HybridPlanError::CapacityExceeded);
+                break;
+            }
+            resolutions[index] = {best_egress, -1, -1, -1};
+            ++pair_load[destination * num_rails + best_egress];
+            ++source_load[best_egress];
+            if (best_egress != owner)
+                ++proxy_required[best_egress];
         }
-      }
+    }
+
+    if constexpr (kPrecounted) {
+        // Load dense counts in parallel, but apply non-empty groups in stable
+        // dense order because each choice updates the shared load state.
+        if (has_multi_target and num_target_masks > 1) {
+            for (int64_t base = 0;
+                 base < num_multi_target_groups; base += 32) {
+                const int64_t group = base + lane;
+                const int target_mask = group < num_multi_target_groups ?
+                    static_cast<int>(group % num_target_masks) : 0;
+                const auto count_offset = group < num_multi_target_groups ?
+                    group * num_rails : 0;
+                const int count =
+                    group < num_multi_target_groups and
+                    __popc(static_cast<unsigned>(target_mask)) > 1 ?
+                        multi_target_egress_quota[count_offset] : 0;
+                unsigned active = ptx::gather(count > 0);
+                if constexpr (kAggregateAdaptive) {
+                    if (count > 0)
+                        multi_target_cursor[
+                            num_active_groups +
+                            __popc(active &
+                                   ((uint32_t{1} << lane) - 1))] =
+                            num_endpoint_groups +
+                            static_cast<int>(group);
+                    num_active_groups += __popc(active);
+                }
+
+                while (active != 0) {
+                    const int source_lane =
+                        __ffs(static_cast<int>(active)) - 1;
+                    const int64_t selected_group = base + source_lane;
+                    const int selected_count =
+                        ptx::exchange(count, source_lane);
+                    if (lane == 0) {
+                        int64_t decoded = selected_group;
+                        const int selected_mask = static_cast<int>(
+                            decoded % num_target_masks);
+                        decoded /= num_target_masks;
+                        const int destination = static_cast<int>(
+                            decoded % num_destinations);
+                        const int owner = static_cast<int>(
+                            decoded / num_destinations);
+                        int* quota = multi_target_egress_quota +
+                            selected_group * num_rails;
+                        for (int egress = 0;
+                             egress < num_rails; ++egress)
+                            quota[egress] = 0;
+                        if (not hybrid_plan_detail::assign_endpoint_group(
+                                quota, pair_load, source_load,
+                                owner_remaining, proxy_required,
+                                owner, destination,
+                                static_cast<uint32_t>(selected_mask),
+                                selected_count, selected_group,
+                                num_rails, num_destinations, num_tokens,
+                                num_max_tokens_per_rank, planner_seed,
+                                planner_chunk_size))
+                            hybrid_plan_detail::report_error(
+                                status, HybridPlanError::CapacityExceeded);
+                    }
+                    active &= active - 1;
+                }
+            }
+        }
+
+        if (lane == 0) {
+            for (int owner = 0; owner < num_rails; ++owner) {
+                for (int destination = 0;
+                     destination < num_destinations; ++destination) {
+                    for (int target = 0; target < num_rails; ++target) {
+                        const auto group = hybrid_plan_detail::odt_offset(
+                            owner, destination, target,
+                            num_destinations, num_rails);
+                        const int count = endpoint_count[group];
+                        if (count == 0)
+                            continue;
+                        if constexpr (kAggregateAdaptive)
+                            if (num_target_masks > 1)
+                                multi_target_cursor[num_active_groups++] =
+                                    static_cast<int>(group);
+                        int* quota = endpoint_egress_quota +
+                            static_cast<int64_t>(group) * num_rails;
+                        if (not hybrid_plan_detail::assign_endpoint_group(
+                                quota, pair_load, source_load,
+                                owner_remaining, proxy_required,
+                                owner, destination, uint32_t{1} << target,
+                                count, group, num_rails, num_destinations,
+                                num_tokens, num_max_tokens_per_rank,
+                                planner_seed, planner_chunk_size))
+                            hybrid_plan_detail::report_error(
+                                status, HybridPlanError::CapacityExceeded);
+                    }
+                }
+            }
+        }
+        if constexpr (kAggregateAdaptive)
+            if (num_target_masks > 1)
+                num_active_groups =
+                    ptx::exchange(num_active_groups, 0);
     }
     __syncwarp();
     if (*status != static_cast<int>(HybridPlanError::Success))
         return;
     if constexpr (kPrecounted) {
         if constexpr (kAggregateAdaptive) {
-            if (not hybrid_plan_detail::rebalance_endpoint_quotas(
-                    endpoint_egress_quota, pair_load, source_load,
-                    owner_remaining, proxy_required, total_units,
-                    num_rails, num_destinations, num_max_tokens_per_rank,
+            const bool valid = hybrid_plan_detail::rebalance_endpoint_quotas(
+                    endpoint_egress_quota, multi_target_egress_quota,
+                    num_target_masks > 1 ? multi_target_cursor : nullptr,
+                    num_active_groups,
+                    pair_load, source_load, owner_remaining, proxy_required,
+                    total_units, num_rails, num_destinations,
+                    has_multi_target ? num_target_masks : 1,
+                    num_max_tokens_per_rank,
                     proxy_capacity_per_egress, planner_seed,
                     two_hop_threshold_percent, max_two_hop_percent,
-                    hop_penalty_percent)) {
+                    hop_penalty_percent);
+            if (num_target_masks > 1) {
+                for (int index = lane;
+                     index < num_active_groups; index += 32)
+                    multi_target_cursor[index] = 0;
+                __syncwarp();
+            }
+            if (not valid) {
                 if (lane == 0)
                     hybrid_plan_detail::report_error(
                         status, HybridPlanError::InvalidSchedule);
@@ -1235,7 +1616,7 @@ void rail_balance_hop_plan_impl(
         return;
     }
 
-    const int two_hop_cap = num_rails < 3 ? 0 : static_cast<int>(
+    const int two_hop_cap = num_rails < 2 ? 0 : static_cast<int>(
         static_cast<int64_t>(total_units) * max_two_hop_percent / 100);
     int selected_two_hop = 0;
     while (selected_two_hop < two_hop_cap) {
@@ -1254,7 +1635,8 @@ void rail_balance_hop_plan_impl(
             hybrid_plan_detail::find_load_peaks(source_load, num_rails);
 
         hybrid_plan_detail::AdaptiveCandidate best = {
-            -1, INT64_MIN, -1, INT_MAX, INT_MAX, INT_MAX, INT_MAX};
+            -1, INT64_MIN, -1, 1, 1,
+            INT_MAX, INT_MAX, INT_MAX, INT_MAX};
         const int64_t num_owner_tokens =
             static_cast<int64_t>(num_rails) * num_tokens;
         for (int64_t owner_token = lane;
@@ -1315,7 +1697,7 @@ void rail_balance_hop_plan_impl(
                         static_cast<int64_t>(hop_penalty_percent) * added_hops;
                     const int64_t threshold =
                         static_cast<int64_t>(two_hop_threshold_percent) *
-                        (pair_before + source_before);
+                        (static_cast<int64_t>(pair_before) + source_before);
                     if (net_gain <= 0 or net_gain <= threshold)
                         continue;
 
@@ -1326,6 +1708,8 @@ void rail_balance_hop_plan_impl(
                         index,
                         net_gain,
                         egress,
+                        1,
+                        1,
                         pair_after,
                         source_after,
                         added_hops,
@@ -1774,7 +2158,7 @@ void rail_balance_hybrid_count_impl(
     const int experts_per_destination = num_experts / num_destinations;
     int destination_count = 0;
 
-    for (int token = channel; token < num_tokens; token += num_channels) {
+    for (int64_t token = channel; token < num_tokens; token += num_channels) {
         const auto input_offset =
             (static_cast<int64_t>(owner) * num_tokens + token) * num_topk;
         const bool active = lane < num_topk;

@@ -329,12 +329,30 @@ public:
                 {num_destinations, num_rails}, int_options),
             .source_load = torch::zeros({num_rails}, int_options),
             .owner_remaining = torch::zeros(
-                {num_rails, num_destinations}, int_options),
+                {num_rails < 3 ? 3 : num_rails, num_destinations},
+                int_options),
             .endpoint_count = torch::zeros(
                 {num_rails, num_destinations, num_rails}, int_options),
             .endpoint_egress_quota = torch::zeros(
                 {num_rails, num_destinations, num_rails, num_rails},
                 int_options),
+            .multi_target_egress_quota = planner_chunk_size > 1 and
+                    num_rails <=
+                        rail_balance::kNumMaxDenseTargetMaskRails ?
+                torch::zeros(
+                    {num_rails, num_destinations,
+                     rail_balance::get_num_dense_target_masks(num_rails),
+                     num_rails},
+                    int_options) :
+                torch::zeros({1}, int_options),
+            .multi_target_cursor = planner_chunk_size > 1 and
+                    num_rails <=
+                        rail_balance::kNumMaxDenseTargetMaskRails ?
+                torch::zeros(
+                    {num_rails, num_destinations,
+                     rail_balance::get_num_dense_target_masks(num_rails)},
+                    int_options) :
+                torch::zeros({1}, int_options),
             .owner_group_cursor = planner_chunk_size > 1 ? torch::zeros(
                 {num_rails, num_rails, num_channels, num_destinations},
                 int_options) :
@@ -1210,6 +1228,8 @@ public:
                 hop.owner_remaining.data_ptr<int>(),
                 hop.endpoint_count.data_ptr<int>(),
                 hop.endpoint_egress_quota.data_ptr<int>(),
+                hop.multi_target_egress_quota.data_ptr<int>(),
+                hop.multi_target_cursor.data_ptr<int>(),
                 hop.owner_group_cursor.data_ptr<int>(),
                 pending.raw.retained, pending.raw.moved,
                 pending.raw.owner_channel_prefix,
@@ -2495,13 +2515,34 @@ public:
                 .source_load = torch::zeros(
                     {num_source_ranks}, int_options),
                 .owner_remaining = torch::zeros(
-                    {num_source_ranks, num_destinations}, int_options),
+                    {num_source_ranks < 3 ? 3 : num_source_ranks,
+                     num_destinations},
+                    int_options),
                 .endpoint_count = torch::zeros(
                     {num_source_ranks, num_destinations, num_source_ranks},
                     int_options),
                 .endpoint_egress_quota = torch::zeros(
                     {num_source_ranks, num_destinations, num_source_ranks,
                      num_source_ranks}, int_options),
+                .multi_target_egress_quota =
+                    num_source_ranks <=
+                            rail_balance::kNumMaxDenseTargetMaskRails ?
+                        torch::zeros(
+                            {num_source_ranks, num_destinations,
+                             rail_balance::get_num_dense_target_masks(
+                                 num_source_ranks),
+                             num_source_ranks},
+                            int_options) :
+                        torch::zeros({1}, int_options),
+                .multi_target_cursor =
+                    num_source_ranks <=
+                            rail_balance::kNumMaxDenseTargetMaskRails ?
+                        torch::zeros(
+                            {num_source_ranks, num_destinations,
+                             rail_balance::get_num_dense_target_masks(
+                                 num_source_ranks)},
+                            int_options) :
+                        torch::zeros({1}, int_options),
                 .owner_group_cursor = torch::zeros(
                     {num_source_ranks, num_source_ranks, num_channels,
                      num_destinations},
@@ -2586,6 +2627,8 @@ public:
                 hop->owner_remaining.data_ptr<int>(),
                 hop->endpoint_count.data_ptr<int>(),
                 hop->endpoint_egress_quota.data_ptr<int>(),
+                hop->multi_target_egress_quota.data_ptr<int>(),
+                hop->multi_target_cursor.data_ptr<int>(),
                 hop->owner_group_cursor.data_ptr<int>(),
                 plan.retained.data_ptr<int>(), plan.moved.data_ptr<int>(),
                 plan.owner_channel_prefix.data_ptr<int>(),

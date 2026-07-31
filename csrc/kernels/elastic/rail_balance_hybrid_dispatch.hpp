@@ -165,6 +165,7 @@ public:
         int* owner_remaining;
         int* endpoint_count;
         int* endpoint_egress_quota;
+        int* multi_target_egress_quota;
         int* owner_group_cursor;
         int* total_units;
         int* status;
@@ -196,7 +197,8 @@ static void __instantiate_kernel() {
             kernel, config,
             args.records, args.resolutions, args.owner_remaining,
             args.endpoint_count, args.endpoint_egress_quota,
-            args.owner_group_cursor, args.total_units, args.status,
+            args.multi_target_egress_quota, args.owner_group_cursor,
+            args.total_units, args.status,
             args.num_rails, args.num_tokens, args.num_topk,
             args.num_channels, args.num_destinations));
     }
@@ -209,6 +211,8 @@ public:
         const rail_balance::HopCopyRecord* records;
         rail_balance::HopCopyResolution* resolutions;
         const int* endpoint_egress_quota;
+        const int* multi_target_egress_quota;
+        int* multi_target_cursor;
         int* owner_group_cursor;
         int* retained;
         int* moved;
@@ -252,7 +256,8 @@ static void __instantiate_kernel() {{
                             Args args) {
         EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(
             kernel, config, args.records, args.resolutions,
-            args.endpoint_egress_quota, args.owner_group_cursor,
+            args.endpoint_egress_quota, args.multi_target_egress_quota,
+            args.multi_target_cursor, args.owner_group_cursor,
             args.retained, args.moved, args.retained_prefix,
             args.group_prefix, args.proxy_required, args.path_units,
             args.moved_copies, args.status, args.num_rails, args.num_tokens,
@@ -262,15 +267,16 @@ static void __instantiate_kernel() {{
 };
 
 using RailBalanceHopMaterializers =
-    std::array<std::shared_ptr<jit::KernelRuntime>, 5>;
+    std::array<std::shared_ptr<jit::KernelRuntime>, 6>;
 
 static RailBalanceHopMaterializers prepare_rail_balance_hop_materializers() {
-    static constexpr std::array<const char*, 5> names = {
-        "rail_balance_hop_endpoint_prefix_v1",
-        "rail_balance_hop_endpoint_assign_v2",
-        "rail_balance_hop_group_count_v1",
-        "rail_balance_hop_group_prefix_v1",
-        "rail_balance_hop_slot_finalize_v1",
+    static constexpr std::array<const char*, 6> names = {
+        "rail_balance_hop_endpoint_prefix_v2",
+        "rail_balance_hop_multi_target_assign_v1",
+        "rail_balance_hop_endpoint_assign_v3",
+        "rail_balance_hop_group_count_v2",
+        "rail_balance_hop_group_prefix_v2",
+        "rail_balance_hop_slot_finalize_v2",
     };
     RailBalanceHopMaterializers runtimes;
     for (int stage = 0; stage < static_cast<int>(runtimes.size()); ++stage) {
@@ -278,6 +284,8 @@ static RailBalanceHopMaterializers prepare_rail_balance_hop_materializers() {
             .records = nullptr,
             .resolutions = nullptr,
             .endpoint_egress_quota = nullptr,
+            .multi_target_egress_quota = nullptr,
+            .multi_target_cursor = nullptr,
             .owner_group_cursor = nullptr,
             .retained = nullptr,
             .moved = nullptr,
@@ -308,6 +316,8 @@ static void launch_prepared_rail_balance_hop_materializers(
     const rail_balance::HopCopyRecord* records,
     rail_balance::HopCopyResolution* resolutions,
     const int* endpoint_egress_quota,
+    const int* multi_target_egress_quota,
+    int* multi_target_cursor,
     int* owner_group_cursor,
     int* retained,
     int* moved,
@@ -326,6 +336,7 @@ static void launch_prepared_rail_balance_hop_materializers(
     const at::cuda::CUDAStream& stream) {
     const std::array grids = {
         num_rails * num_destinations * num_rails,
+        num_rails,
         num_rails * num_channels,
         num_rails * num_channels,
         num_rails,
@@ -338,6 +349,8 @@ static void launch_prepared_rail_balance_hop_materializers(
                 .records = records,
                 .resolutions = resolutions,
                 .endpoint_egress_quota = endpoint_egress_quota,
+                .multi_target_egress_quota = multi_target_egress_quota,
+                .multi_target_cursor = multi_target_cursor,
                 .owner_group_cursor = owner_group_cursor,
                 .retained = retained,
                 .moved = moved,
@@ -371,6 +384,8 @@ public:
         int* owner_remaining;
         int* endpoint_count;
         int* endpoint_egress_quota;
+        int* multi_target_egress_quota;
+        int* multi_target_cursor;
         int* owner_group_cursor;
         int* retained;
         int* moved;
@@ -440,6 +455,7 @@ static void __instantiate_kernel() {
             args.records, args.resolutions,
             args.pair_load, args.source_load, args.owner_remaining,
             args.endpoint_count, args.endpoint_egress_quota,
+            args.multi_target_egress_quota, args.multi_target_cursor,
             args.owner_group_cursor,
             args.retained, args.moved, args.retained_prefix,
             args.group_prefix,
@@ -495,6 +511,8 @@ static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
         .owner_remaining = nullptr,
         .endpoint_count = nullptr,
         .endpoint_egress_quota = nullptr,
+        .multi_target_egress_quota = nullptr,
+        .multi_target_cursor = nullptr,
         .owner_group_cursor = nullptr,
         .retained = nullptr,
         .moved = nullptr,
@@ -526,6 +544,7 @@ static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
         .owner_remaining = nullptr,
         .endpoint_count = nullptr,
         .endpoint_egress_quota = nullptr,
+        .multi_target_egress_quota = nullptr,
         .owner_group_cursor = nullptr,
         .total_units = nullptr,
         .status = nullptr,
@@ -541,12 +560,12 @@ static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
             "rail_balance_hop_record_v1",
             RailBalanceHopRecordRuntime::generate(record_args)),
         .plan = jit::compiler->build(
-            aggregate_adaptive ? "rail_balance_hop_adaptive_decision_v1" :
-            precounted ? "rail_balance_hop_decision_v5" :
-                         "rail_balance_hop_plan_v3",
+            aggregate_adaptive ? "rail_balance_hop_adaptive_decision_v7" :
+            precounted ? "rail_balance_hop_decision_v7" :
+                         "rail_balance_hop_plan_v4",
             RailBalanceHopPlanRuntime::generate(plan_args)),
         .precount = precounted ? jit::compiler->build(
-            "rail_balance_hop_precount_v1",
+            "rail_balance_hop_precount_v2",
             RailBalanceHopPrecountRuntime::generate(precount_args)) : nullptr,
         .materializers = precounted ?
             prepare_rail_balance_hop_materializers() :
@@ -601,6 +620,8 @@ static void launch_prepared_rail_balance_hop_plan(
     int* owner_remaining,
     int* endpoint_count,
     int* endpoint_egress_quota,
+    int* multi_target_egress_quota,
+    int* multi_target_cursor,
     int* owner_group_cursor,
     int* retained,
     int* moved,
@@ -634,6 +655,7 @@ static void launch_prepared_rail_balance_hop_plan(
                 .owner_remaining = owner_remaining,
                 .endpoint_count = endpoint_count,
                 .endpoint_egress_quota = endpoint_egress_quota,
+                .multi_target_egress_quota = multi_target_egress_quota,
                 .owner_group_cursor = owner_group_cursor,
                 .total_units = moved_copies,
                 .status = status,
@@ -657,6 +679,8 @@ static void launch_prepared_rail_balance_hop_plan(
             .owner_remaining = owner_remaining,
             .endpoint_count = endpoint_count,
             .endpoint_egress_quota = endpoint_egress_quota,
+            .multi_target_egress_quota = multi_target_egress_quota,
+            .multi_target_cursor = multi_target_cursor,
             .owner_group_cursor = owner_group_cursor,
             .retained = retained,
             .moved = moved,
@@ -686,7 +710,8 @@ static void launch_prepared_rail_balance_hop_plan(
     if (prepared.precounted)
         launch_prepared_rail_balance_hop_materializers(
             prepared.materializers, records, resolutions,
-            endpoint_egress_quota, owner_group_cursor, retained, moved,
+            endpoint_egress_quota, multi_target_egress_quota,
+            multi_target_cursor, owner_group_cursor, retained, moved,
             retained_prefix, group_prefix, proxy_required, path_units,
             moved_copies, status, num_rails, record_token_capacity, num_topk,
             num_channels, num_destinations, proxy_capacity_per_egress, stream);
@@ -1402,6 +1427,8 @@ struct RailBalanceHopPlanState {
     torch::Tensor owner_remaining;
     torch::Tensor endpoint_count;
     torch::Tensor endpoint_egress_quota;
+    torch::Tensor multi_target_egress_quota;
+    torch::Tensor multi_target_cursor;
     torch::Tensor owner_group_cursor;
     torch::Tensor path_units;
     rail_balance::HopCopyRecord* local_records;
@@ -1948,6 +1975,8 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
     const int num_rails = static_cast<int>(num_rails_i64);
     const int num_tokens = static_cast<int>(num_tokens_i64);
     const int num_topk = static_cast<int>(num_topk_i64);
+    EP_HOST_ASSERT(
+        num_rails_i64 * num_tokens_i64 * num_topk_i64 <= INT_MAX);
     EP_HOST_ASSERT(num_channels >= 1 and
                    num_channels <= rail_balance::kNumHybridMaxChannels);
     EP_HOST_ASSERT(num_destinations >= 2 and num_destinations <= 32);
@@ -1978,11 +2007,21 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
         {num_destinations, num_rails}, int_options);
     auto source_load = torch::zeros({num_rails}, int_options);
     auto owner_remaining = torch::zeros(
-        {num_rails, num_destinations}, int_options);
+        {num_rails < 3 ? 3 : num_rails, num_destinations}, int_options);
     auto endpoint_count = torch::zeros(
         {num_rails, num_destinations, num_rails}, int_options);
     auto endpoint_egress_quota = torch::zeros(
         {num_rails, num_destinations, num_rails, num_rails}, int_options);
+    const int num_target_masks =
+        rail_balance::get_num_dense_target_masks(num_rails);
+    auto multi_target_egress_quota =
+        planner_chunk_size > 1 and num_target_masks > 1 ? torch::zeros(
+            {num_rails, num_destinations, num_target_masks, num_rails},
+            int_options) : torch::zeros({1}, int_options);
+    auto multi_target_cursor =
+        planner_chunk_size > 1 and num_target_masks > 1 ? torch::zeros(
+            {num_rails, num_destinations, num_target_masks}, int_options) :
+            torch::zeros({1}, int_options);
     auto owner_group_cursor = planner_chunk_size > 1 ? torch::zeros(
         {num_rails, num_rails, num_channels, num_destinations}, int_options) :
         torch::zeros({1}, int_options);
@@ -2018,6 +2057,8 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
             .owner_remaining = owner_remaining.data_ptr<int>(),
             .endpoint_count = endpoint_count.data_ptr<int>(),
             .endpoint_egress_quota = endpoint_egress_quota.data_ptr<int>(),
+            .multi_target_egress_quota =
+                multi_target_egress_quota.data_ptr<int>(),
             .owner_group_cursor = owner_group_cursor.data_ptr<int>(),
             .total_units = moved_copies.data_ptr<int>(),
             .status = status.data_ptr<int>(),
@@ -2030,7 +2071,7 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
                 num_rails * num_channels, 32),
         };
         const auto count_runtime = jit::compiler->build(
-            "rail_balance_hop_precount_v1",
+            "rail_balance_hop_precount_v2",
             RailBalanceHopPrecountRuntime::generate(count_args));
         RailBalanceHopPrecountRuntime::launch(
             count_runtime, count_args, stream);
@@ -2044,6 +2085,8 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
         .owner_remaining = nullptr,
         .endpoint_count = nullptr,
         .endpoint_egress_quota = nullptr,
+        .multi_target_egress_quota = nullptr,
+        .multi_target_cursor = nullptr,
         .owner_group_cursor = nullptr,
         .retained = nullptr,
         .moved = nullptr,
@@ -2070,9 +2113,9 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
         .launch_args = jit::LaunchArgs(1, 32),
     };
     const auto runtime = jit::compiler->build(
-        aggregate_adaptive ? "rail_balance_hop_adaptive_decision_v1" :
-        precounted ? "rail_balance_hop_decision_v5" :
-                     "rail_balance_hop_plan_v3",
+        aggregate_adaptive ? "rail_balance_hop_adaptive_decision_v7" :
+        precounted ? "rail_balance_hop_decision_v7" :
+                     "rail_balance_hop_plan_v4",
         RailBalanceHopPlanRuntime::generate(prototype));
     RailBalanceHopPlanRuntime::launch(
         runtime,
@@ -2087,6 +2130,9 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
             .owner_remaining = owner_remaining.data_ptr<int>(),
             .endpoint_count = endpoint_count.data_ptr<int>(),
             .endpoint_egress_quota = endpoint_egress_quota.data_ptr<int>(),
+            .multi_target_egress_quota =
+                multi_target_egress_quota.data_ptr<int>(),
+            .multi_target_cursor = multi_target_cursor.data_ptr<int>(),
             .owner_group_cursor = owner_group_cursor.data_ptr<int>(),
             .retained = retained.data_ptr<int>(),
             .moved = moved.data_ptr<int>(),
@@ -2123,6 +2169,8 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
             reinterpret_cast<rail_balance::HopCopyResolution*>(
                 resolutions.data_ptr<int>()),
             endpoint_egress_quota.data_ptr<int>(),
+            multi_target_egress_quota.data_ptr<int>(),
+            multi_target_cursor.data_ptr<int>(),
             owner_group_cursor.data_ptr<int>(), retained.data_ptr<int>(),
             moved.data_ptr<int>(), retained_prefix.data_ptr<int>(),
             group_prefix.data_ptr<int>(), proxy_required.data_ptr<int>(),
