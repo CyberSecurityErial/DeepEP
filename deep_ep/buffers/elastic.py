@@ -2014,7 +2014,7 @@ class ElasticBuffer:
             if type(plan_outputs) is not tuple or len(plan_outputs) != 14:
                 raise ValueError('rail-balance plan result ABI is invalid')
             plan_status = plan_outputs[-1].item()
-            if type(plan_status) is not int or plan_status not in (0, 1):
+            if type(plan_status) is not int or plan_status not in range(5):
                 raise ValueError('rail-balance plan status is invalid')
             local_moved_copies = plan_outputs[12].item()
             if type(local_moved_copies) is not int or \

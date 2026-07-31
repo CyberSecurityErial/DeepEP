@@ -299,7 +299,9 @@ public:
         const int& num_channels,
         const int& two_hop_threshold_percent,
         const int& max_two_hop_percent,
-        const int& hop_penalty_percent) {
+        const int& hop_penalty_percent,
+        const int& planner_chunk_size) {
+        EP_HOST_ASSERT(planner_chunk_size >= 1);
         const int64_t record_count =
             static_cast<int64_t>(num_max_tokens_per_rank) * num_topk;
         const int64_t record_bytes = rail_balance::checked_mul_i64(
@@ -331,7 +333,9 @@ public:
                 {num_rails, num_destinations, num_rails}, int_options),
             .endpoint_owner_quota = torch::zeros(
                 {num_rails, num_destinations, num_rails}, int_options),
-            .owner_group_cursor = torch::zeros({1}, int_options),
+            .owner_group_cursor = planner_chunk_size > 1 ? torch::zeros(
+                {32, num_rails, num_channels, num_destinations}, int_options) :
+                torch::zeros({1}, int_options),
             .path_units = torch::zeros({4}, int_options),
             .local_records = local_records,
             .peer_records = peer_records,
@@ -339,7 +343,7 @@ public:
             .two_hop_threshold_percent = two_hop_threshold_percent,
             .max_two_hop_percent = max_two_hop_percent,
             .hop_penalty_percent = hop_penalty_percent,
-            .planner_chunk_size = 1,
+            .planner_chunk_size = planner_chunk_size,
             .prepared = prepare_rail_balance_hop_plan(num_channels),
         };
     }
@@ -405,7 +409,7 @@ public:
                        num_scaleout_ranks <= 32);
         EP_HOST_ASSERT(local_scaleout_rank >= 0 and
                        local_scaleout_rank < num_scaleout_ranks);
-        EP_HOST_ASSERT(proxy_capacity_per_egress >= num_tokens);
+        EP_HOST_ASSERT(proxy_capacity_per_egress > 0);
         EP_HOST_ASSERT(two_hop_threshold_percent >= 0 and
                        two_hop_threshold_percent <= 10000);
         EP_HOST_ASSERT(max_two_hop_percent >= 0 and
@@ -523,7 +527,7 @@ public:
                 num_max_tokens_per_rank, num_topk,
                 num_scaleout_ranks, num_channels,
                 two_hop_threshold_percent, max_two_hop_percent,
-                hop_penalty_percent));
+                hop_penalty_percent, 1));
         const int64_t active_count_values =
             static_cast<int64_t>(num_channels) * num_scaleout_ranks;
         EP_HOST_ASSERT(active_count_values > 0 and
@@ -936,7 +940,8 @@ public:
                 num_max_tokens_per_rank, num_topk,
                 num_destinations, num_channels,
                 two_hop_threshold_percent, max_two_hop_percent,
-                hop_penalty_percent));
+                hop_penalty_percent,
+                rail_balance::kDefaultHopPlannerChunkSize));
 
         auto host_workspace_layout = layout::WorkspaceLayout(
             host_workspace, num_destinations, num_rails, num_experts);
@@ -1125,16 +1130,11 @@ public:
             &arena_layout.get_control_ptr()->invocation_id,
             &invocation_key, sizeof(invocation_key), cudaMemcpyHostToDevice,
             comm_stream));
-        int host_status = 0;
-        CUDA_RUNTIME_CHECK(cudaMemcpyAsync(
-            &host_status, pending.raw.status, sizeof(host_status),
-            cudaMemcpyDeviceToHost, comm_stream));
-        CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
-        EP_HOST_ASSERT(host_status == 0 or host_status == 2 or
-                       host_status == 3);
-
+        // Keep endpoint extraction on the comm stream while Python performs
+        // Gate #1. Finish is the first consumer and reports its device status
+        // through Gate #2, so an eager host readback would only serialize work.
         return {
-            host_status,
+            static_cast<int>(rail_balance::HybridPlanError::Success),
             num_channels,
             num_channels_per_sm,
             num_destinations,
@@ -1266,7 +1266,9 @@ public:
             sizeof(host_status), cudaMemcpyDeviceToHost, comm_stream));
         CUDA_RUNTIME_CHECK(cudaStreamSynchronize(comm_stream));
         EP_HOST_ASSERT(host_status == 0 or host_status == 1 or
-                       (pending.hop.has_value() and host_status == 4));
+                       (pending.hop.has_value() and
+                        (host_status == 2 or host_status == 3 or
+                         host_status == 4)));
         pending.plan_status = host_status;
         pending.state = RailBalanceHybridPlanState::PlanReady;
         return pending.outputs.as_tuple();

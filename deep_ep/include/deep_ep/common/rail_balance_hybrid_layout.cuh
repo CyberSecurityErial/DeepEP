@@ -14,6 +14,7 @@ static constexpr int kNumHybridMaxChannels = deep_ep::kNumMaxChannels;
 static constexpr int kNumHybridMaxDestinations = 32;
 static constexpr int64_t kNumHybridBufferAlignmentBytes = 2 * 1024 * 1024;
 static constexpr int kMaxHybridPolicyThresholdPercent = 3100;
+static constexpr int kDefaultHopPlannerChunkSize = 8;
 
 // Planner-only policy ABI. Dispatch, shuffle, and combine consume only the
 // resulting quota/segments and therefore stay policy-free.

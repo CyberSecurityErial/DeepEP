@@ -231,7 +231,8 @@ def _assert_owning_bundle_contract() -> None:
 
     # All allocations, JIT builds and address extraction precede ownership.
     # PREPARING is installed before the first arena-writing count launch, so a
-    # launch/readback exception remains recoverable by invocation-scoped abort.
+    # launch exception remains recoverable by invocation-scoped abort. Device
+    # validation stays asynchronous until finish reads status for Gate #2.
     _assert_in_order(prepare, (
         "allocate_rail_balance_hybrid_plan_outputs(",
         "prepare_rail_balance_hybrid_plan(",
@@ -242,10 +243,11 @@ def _assert_owning_bundle_contract() -> None:
         "std::make_shared<RailBalanceHybridDispatchBundle>",
         "rail_balance_hybrid_plan_pending.emplace(",
         "launch_prepared_rail_balance_hybrid_count(",
-        "cudaMemcpyAsync(",
-        "cudaStreamSynchronize(",
         "return {",
     ))
+    asynchronous_tail = prepare[
+        prepare.index("rail_balance_hybrid_plan_pending.emplace("):]
+    assert "cudaStreamSynchronize(comm_stream)" not in asynchronous_tail
     ownership = prepare.index("rail_balance_hybrid_plan_pending.emplace(")
     pre_gate1_suffix = prepare[ownership:]
     for forbidden in (
@@ -264,7 +266,7 @@ def _assert_owning_bundle_contract() -> None:
     result_begin = prepare.rindex("return {")
     result = prepare[result_begin:]
     _assert_in_order(result, (
-        "host_status",
+        "HybridPlanError::Success",
         "num_channels",
         "num_channels_per_sm",
         "num_destinations",
