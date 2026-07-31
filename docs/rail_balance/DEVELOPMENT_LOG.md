@@ -7189,3 +7189,48 @@ chunk-8 resolutions. Stages 0--4 completed, then return demux rejected the
 mismatched base descriptor (`stage=5`, code 36). Vnode now prepares the same
 default chunk planner and cursor workspace as the source transaction; it does
 not receive or trust a second host-side plan.
+
+## 2026-07-31 — HA070-E: aggregate adaptive quotas and measured multi-target boundary
+
+Adaptive now shares the five-stage parallel materializer used by one-hop.
+The coarse planner stores deterministic
+`endpoint_egress_quota[owner,destination,target,egress]`, performs bounded
+third-Rail moves on that small quota table, and leaves record assignment,
+channel counts, prefixes, and final static slots to the existing `G*C`
+workers. No public tensor, CPU round trip, per-copy tail atomic, or capability
+change was added. The obsolete precounted monolithic materializer and its
+unused launch axis were deleted, leaving only exact chunk-1, fast one-hop, and
+fast adaptive specializations.
+
+Two implementation failures are retained:
+
+- an early quota batch could reduce the selected pair while increasing the
+  source-Rail peak; candidate and batch bounds now require both peaks to be
+  non-increasing;
+- the first rebuild referenced `pair_peaks` before its declaration; moving the
+  declaration before the batch bounds fixed compilation without changing the
+  algorithm.
+
+The production C100 benchmark initially selected the adaptive JIT identity for
+`one_hop` because the CLI's default two-hop cap was nonzero. Kernel selection
+now follows the requested mode; `one_hop` ignores an otherwise irrelevant
+adaptive cap. Vnode also needed `EP_DISABLE_GIN=1` on this single-node host.
+These were launcher/environment failures, not data-path fallbacks.
+
+At clean commit `8c56939`, 15 GPU planner tests, true EP8 LSA payload/metadata
+and static slots, one-hop/adaptive 4x2 dispatch/combine round trips, API and
+codegen contracts, and focused memcheck/initcheck/synccheck all pass. The
+clean C100 checked-adapter 10+100 medians are 24.001 ms one-hop and 23.116 ms
+adaptive; measured source stages are 115.401 and 126.176 us. Claim scope
+remains `checked_adapter_only`.
+
+The first single-process Nsys trace measured aggregate adaptive decision at
+38.176 us and suggested that the quota phase was no longer dominant. That
+workload contained only singleton target masks and was not representative.
+An eight-rank C100 trace falsified the tentative host-gate hypothesis:
+`rail_balance_hop_plan_impl<...,true,true>` is 17.387 ms median and 68.1% of
+captured kernel time. C100 records carry the four-bit target mask `0b1111`;
+the fast quota table currently accepts only singleton masks, so lane 0 still
+chooses an egress for every multi-target payload. The next checkpoint is
+therefore sparse `(owner,destination,target_mask)` aggregation, not NCU or host
+gate tuning.

@@ -2727,3 +2727,59 @@ After the oracle was aligned, vnode reached return demux and reported
 resolutions, which cannot consume proxy payload laid out by the chunk-8 source
 plan. The adapter now uses the shared production chunk and parallel workspace.
 This is a correctness alignment, not a claimed speedup.
+
+## O109 — aggregate adaptive quota materialization
+
+Hypothesis: after O107, adaptive remained slow because it performed residual
+selection and final record/slot materialization in the old monolithic kernel.
+Only the adaptive representation changed: one warp mutates the small
+`[owner,destination,target,egress]` quota table and the accepted one-hop
+materializer consumes it.
+
+Profiler-free N8192/C256 chunk-8 medians:
+
+```text
+O106 adaptive predecessor             11.177 ms
+O109 adaptive                          0.253 ms
+speedup                                44.2x
+O109 one-hop control                   0.463 ms
+```
+
+Clean C100 checked-adapter 10+100:
+
+```text
+                            finish median / p95   source median / p95
+one-hop                     24.001 / 24.100 ms    115.401 / 160.635 us
+adaptive                    23.116 / 23.221 ms    126.176 / 146.244 us
+```
+
+The private result is accepted only for its singleton-target workload. A
+matched eight-rank C100 Nsys run contradicts extrapolation to shared
+multi-target payloads:
+
+```text
+aggregate adaptive decision median      17.387 ms
+aggregate adaptive decision share         68.1 %
+source shuffle median                    25.344 us
+```
+
+C100's repeated destination experts become one payload record with target mask
+`0b1111`. The aggregate quota path represents one target bit, so multi-target
+records deliberately remain on the exact lane-0 path. This proves the next
+single variable: aggregate equal `(owner,destination,target_mask)` payload
+groups while preserving endpoint candidates and static-slot materialization.
+NCU is deferred until Nsys shows a smaller kernel remains materially exposed.
+
+Artifacts:
+
+```text
+ac866ee5f255d3a6c57a6a70096336254ac2091536918bf8b39102a44d01b882  c100-onehop-10x100.json
+c064162bfac9f720f2a5b8065905a998611e486fc5c14c4998149ed2241c483a  c100-adaptive-10x100.json
+80c991b7394938193324cf983f1bbfb64790db676f2c1bfe18ff1471fd7f6bd8  planner-adaptive.nsys-rep
+cf22fd3fedf550c5cdeaa0b9b039bef00fe03d91df597530c4cb546e4eddf309  planner-adaptive.sqlite
+e264a1352b856b8248a7173cfa763990840a8c993abf57798f87efe841bc38bf  c100-adaptive-0x3.nsys-rep
+3ff92e73c7565881379e4fca9be5cb9b8400542690dfa0e26e84a56dcd5f3bb7  c100-adaptive-0x3.sqlite
+```
+
+The earlier explanation that C100 `finish` was probably host-gate dominated is
+rejected and retained here. Nsys locates the exposed cost in the GPU planner.

@@ -1312,3 +1312,12 @@ Out of scope until evidence expands the project:
   matches production chunk 8. A second rerun found vnode itself re-planning
   chunk 1 and rejecting chunk-8 proxy descriptors at return demux; vnode now
   shares the production chunk/workspace. Clean 10+100 evidence remains pending.
+- HA070-E moves adaptive residual decisions onto the same endpoint quota and
+  five-stage static-slot materializer as one-hop, deletes the dead
+  precounted-monolithic launch axis, and closes on clean commit `8c56939`.
+  Planner/vnode/EP8 LSA/sanitizer/codegen gates pass. Clean C100 10+100 finish
+  medians are 24.001 ms one-hop and 23.116 ms adaptive. An eight-rank Nsys run
+  falsifies the tentative host-gate explanation: the aggregate planner itself
+  is 17.387 ms median because C100 uses shared `0b1111` target masks and only
+  singleton masks are aggregated. The next optimization is a minimal sparse
+  multi-target group plan; capability remains false.

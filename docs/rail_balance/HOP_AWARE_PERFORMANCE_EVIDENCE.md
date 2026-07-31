@@ -543,3 +543,35 @@ eligibility and hashes to:
 ```
 
 This accepts O103 but falsifies the serial planner as a viable final hot path.
+
+### HA070-E aggregate adaptive quotas
+
+Commit `8c56939` uses the same parallel static-slot materializer for one-hop
+and adaptive. Its clean checked-adapter 10+100 distributions are:
+
+| Mode | finish median / p95 (ms) | source median / p95 (us) |
+| --- | ---: | ---: |
+| one-hop | 24.001 / 24.100 | 115.401 / 160.635 |
+| adaptive | 23.116 / 23.221 | 126.176 / 146.244 |
+
+The reports pass eligibility and hash to:
+
+```text
+ac866ee5f255d3a6c57a6a70096336254ac2091536918bf8b39102a44d01b882  c100-onehop-10x100.json
+c064162bfac9f720f2a5b8065905a998611e486fc5c14c4998149ed2241c483a  c100-adaptive-10x100.json
+```
+
+The corresponding eight-rank Nsys trace is the important falsification
+experiment. Unlike the singleton-target private planner, C100 produces
+four-target records. The aggregate adaptive kernel is 17.387 ms median
+(32 invocations) and 68.1% of captured GPU kernel time, while source shuffle
+is 25.344 us median. Therefore the current critical path remains the lane-0
+multi-target decision loop, not source shuffle and not an inferred host gate.
+
+```text
+e264a1352b856b8248a7173cfa763990840a8c993abf57798f87efe841bc38bf  c100-adaptive-0x3.nsys-rep
+3ff92e73c7565881379e4fca9be5cb9b8400542690dfa0e26e84a56dcd5f3bb7  c100-adaptive-0x3.sqlite
+```
+
+These remain single-node checked-adapter results. They do not establish
+Gin/RDMA/NIC speedup or unlock capability.
