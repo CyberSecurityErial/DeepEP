@@ -2358,3 +2358,21 @@ is 44.436 ms median (p95 44.550 ms), confirming the 4.59x reduction from the
 `finish` falls from 575.660 to 416.741 ms (1.38x), while its source stage is
 681.248 us. The adaptive residual search is therefore a separate dominant
 algorithmic cost and is not hidden by calling O096 complete for all modes.
+
+## O097 — rejected warp-parallel endpoint scoring
+
+NCU basic on one stable N=1024/K=8/C=256 invocation used kernel replay for ten
+passes. It reported grid 1, block 32, 80 registers/thread, 27.97 ms replay
+duration, 1.56% achieved occupancy, and about 0.01% SM and memory throughput.
+The report hash is
+`e21ea258d194135e33d99133b2a994a2a6c9f9b433047a8fd765a7b6000a002c`.
+NCU duration is not compared with the profiler-free result.
+
+The tested single variable kept record order but assigned one candidate Rail
+to each warp lane and reduced the existing five-field lexicographic score.
+GPU planner 11/11 stayed exact. The private API median improved only from
+22.167 to 20.950 ms (5.8%), while the more representative C100 `finish`
+boundary regressed from 44.445 to 48.860 ms (9.9%). Twenty-five shuffle/reduce
+operations per record cost more than evaluating at most eight Rails serially.
+The production edit was fully reverted; only the reusable benchmark channel
+parameter and these negative results remain.

@@ -1215,3 +1215,8 @@ Out of scope until evidence expands the project:
   before O096 (4.59x), and adaptive at 416.741 ms versus 575.660 ms (1.38x).
   Both reports pass eligibility. Adaptive residual search remains a separate
   hotspot; source-stage medians are 113.268 and 681.248 us respectively.
+- HA060-F rejects warp-parallel endpoint score reduction. Although NCU shows a
+  one-block/one-warp planner with low device utilization, lane-parallel score
+  reduction improves the private microbenchmark only 5.8% and regresses C100
+  finish 9.9%. The production edit was removed; low occupancy alone is not a
+  reason to keep extra hot-path code.

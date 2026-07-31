@@ -6833,3 +6833,25 @@ the next planner investigation keeps one-hop and adaptive evidence separate.
 Keep this as a separate exact planner optimization. The planner remains 92.3%
 of captured kernel time, so the next evidence target is sequential endpoint
 assignment rather than source shuffle, TMA, or SM tuning.
+
+## 2026-07-31 — HA060-F: reject warp-parallel endpoint scoring
+
+The installed NCU 2025.1.1 basic set profiled one stable C=256 planner launch
+with kernel replay, cache control `all`, base clocks, three launch skips and one
+capture. The grid is one 32-thread block; the report confirms that only one SM
+is active and the sequential section leaves most resources idle.
+
+A minimal candidate parallelized the endpoint score across warp lanes while
+retaining record order and exact tuple tie-breaking. All 11 GPU oracle tests
+passed, but performance did not justify the added code:
+
+```text
+private N=1024/C=256 median       22.167 -> 20.950 ms  (1.058x)
+C100 one-hop finish median        44.445 -> 48.860 ms  (0.910x)
+```
+
+The full production change was reverted before commit. This falsifies the
+naive interpretation of NCU's low-occupancy advice: the state is sequential,
+the candidate set is only eight Rails, and warp reduction overhead worsens the
+actual transaction boundary. The NCU report and both raw JSON files remain
+under `.cache/rail_balance/hop-aware/ha060/`.
