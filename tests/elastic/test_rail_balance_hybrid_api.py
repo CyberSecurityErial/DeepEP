@@ -93,8 +93,11 @@ def _run_force_constructor(legacy_helper=None, layout_helper=None,
     original_layout = elastic_module._C._get_rail_balance_hybrid_layout
     original_force_size = elastic_module._C._calculate_rail_balance_hybrid_buffer_size
     original_runtime = elastic_module._C.ElasticBuffer
+    original_empty = elastic_module.torch.empty
     original_synchronize = elastic_module.torch.cuda.synchronize
     original_world_gate = elastic_module._run_rail_balance_world_gate
+    original_gate_storage = \
+        elastic_module._validate_rail_balance_world_gate_storage
     old_host_capability = elastic_module._RAIL_BALANCE_FORCE_HOST_AVAILABLE
     had_capability = hasattr(elastic_module._C, capability_name)
     old_capability = getattr(elastic_module._C, capability_name, None)
@@ -111,7 +114,17 @@ def _run_force_constructor(legacy_helper=None, layout_helper=None,
         elastic_module._C._get_rail_balance_hybrid_layout = fake_layout
         elastic_module._C._calculate_rail_balance_hybrid_buffer_size = fake_force_size
         elastic_module._C.ElasticBuffer = FakeRuntime
+        def fake_empty(*args, **kwargs):
+            if kwargs.get('device') == 'cuda':
+                kwargs = {**kwargs, 'device': 'cpu'}
+            if kwargs.get('pin_memory'):
+                kwargs = {**kwargs, 'pin_memory': False}
+            return original_empty(*args, **kwargs)
+
+        elastic_module.torch.empty = fake_empty
         elastic_module.torch.cuda.synchronize = lambda: None
+        elastic_module._validate_rail_balance_world_gate_storage = \
+            lambda _device, _host: None
 
         def fake_world_gate(device_words, host_words, group):
             calls['order'].append('constructor_gate')
@@ -138,8 +151,11 @@ def _run_force_constructor(legacy_helper=None, layout_helper=None,
         elastic_module._C._get_rail_balance_hybrid_layout = original_layout
         elastic_module._C._calculate_rail_balance_hybrid_buffer_size = original_force_size
         elastic_module._C.ElasticBuffer = original_runtime
+        elastic_module.torch.empty = original_empty
         elastic_module.torch.cuda.synchronize = original_synchronize
         elastic_module._run_rail_balance_world_gate = original_world_gate
+        elastic_module._validate_rail_balance_world_gate_storage = \
+            original_gate_storage
         elastic_module._RAIL_BALANCE_FORCE_HOST_AVAILABLE = old_host_capability
         if had_capability:
             setattr(elastic_module._C, capability_name, old_capability)

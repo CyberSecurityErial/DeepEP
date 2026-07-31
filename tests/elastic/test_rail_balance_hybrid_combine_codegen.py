@@ -22,6 +22,7 @@ from deep_ep import _C
 
 
 _ROOT = Path(__file__).resolve().parents[2]
+_CAMPAIGN_SUPERVISED_ENV = "DEEP_EP_CAMPAIGN_SUPERVISED"
 _FORCE_HEADER = (
     _ROOT / "deep_ep/include/deep_ep/impls/rail_balance_hybrid_combine.cuh"
 )
@@ -54,6 +55,36 @@ _EXPECTED_RANK_LAYOUTS = {
 assert {
     _EXPECTED_RANK_LAYOUTS[name] for name in tuple(_CASES)[:4]
 } == {(True, True), (False, True), (True, False), (False, False)}
+
+
+def _nested_start_new_session(
+    environment: dict[str, str] | None = None,
+) -> bool:
+    values = os.environ if environment is None else environment
+    return values.get(_CAMPAIGN_SUPERVISED_ENV) != "1"
+
+
+def _terminate_watchdog(
+    process: subprocess.Popen, owns_process_group: bool
+) -> None:
+    try:
+        if owns_process_group:
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            if owns_process_group:
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except ProcessLookupError:
+            pass
+        process.wait()
 
 
 def _sha256(path: Path) -> str:
@@ -409,18 +440,17 @@ def _run_watchdog(case: str, watchdog_seconds: int) -> None:
         "--case", case,
         "--watchdog-seconds", str(watchdog_seconds),
     ]
-    # NVCC and cuobjdump inherit this process group. Kill the full compile tree
-    # on timeout so no orphan can race a later JIT cache rename.
-    process = subprocess.Popen(command, start_new_session=True)
+    # Standalone invocations own a fresh compile process group.  A campaign
+    # invocation inherits the already isolated stage group so every CUDA/NVCC
+    # descendant remains visible as owned by the campaign supervisor.
+    start_new_session = _nested_start_new_session()
+    process = subprocess.Popen(
+        command, start_new_session=start_new_session
+    )
     try:
         return_code = process.wait(timeout=watchdog_seconds)
     except subprocess.TimeoutExpired as error:
-        os.killpg(process.pid, signal.SIGTERM)
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+        _terminate_watchdog(process, start_new_session)
         raise RuntimeError(
             "C080-F combine codegen watchdog expired after "
             f"{watchdog_seconds}s for {case}") from error

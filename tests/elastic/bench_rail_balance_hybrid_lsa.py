@@ -98,8 +98,10 @@ _ALL_PHASES = (
     "abort",
     "transaction",
 )
+_CAMPAIGN_SUPERVISED_ENV = "DEEP_EP_CAMPAIGN_SUPERVISED"
 _ENV_EXACT = {
     "CUDA_VISIBLE_DEVICES",
+    _CAMPAIGN_SUPERVISED_ENV,
     "EP_DISABLE_GIN",
     "EP_BUFFER_DEBUG",
     "OMP_NUM_THREADS",
@@ -172,6 +174,13 @@ _INTERFERENCE_MODES = ("none", "compute-only", "concurrent")
 _HOP_MODES = ("legacy", "one_hop", "adaptive")
 _INTERFERENCE_COMPUTE_SHAPE = (1024, 7168, 7168)
 _TYPE = TypeVar("_TYPE")
+
+
+def _nested_start_new_session(
+    environment: dict[str, str] | None = None,
+) -> bool:
+    values = os.environ if environment is None else environment
+    return values.get(_CAMPAIGN_SUPERVISED_ENV) != "1"
 
 
 class ComputeInterferenceState(NamedTuple):
@@ -2089,6 +2098,7 @@ def _run_watchdog(
         command.append("--nvtx")
     child_environment = os.environ.copy()
     child_environment[_WATCHDOG_CHILD_ENV] = "1"
+    start_new_session = _nested_start_new_session(child_environment)
     process: subprocess.Popen[bytes] | None = None
     process_group_id: int | None = None
     cleanup_signals = (
@@ -2110,31 +2120,47 @@ def _run_watchdog(
             signal.SIG_BLOCK, cleanup_signals)
         cleanup_failure = None
         try:
-            if process_group_exists():
-                try:
-                    assert process_group_id is not None
-                    os.killpg(process_group_id, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-            deadline = time.monotonic() + 10
-            while process_group_exists() and time.monotonic() < deadline:
-                process.poll()
-                time.sleep(0.1)
-            if process_group_exists():
-                try:
-                    assert process_group_id is not None
-                    os.killpg(process_group_id, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+            if process_group_id is None:
+                # The campaign owns the inherited stage group.  Never signal
+                # that shared group from this nested watchdog; best-effort
+                # reap the direct child while the campaign retains whole-stage
+                # cleanup authority.
+                if process.poll() is None:
+                    try:
+                        process.terminate()
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            process.kill()
+                        except ProcessLookupError:
+                            pass
+            else:
+                if process_group_exists():
+                    try:
+                        os.killpg(process_group_id, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
                 deadline = time.monotonic() + 10
-                while (process_group_exists() and
-                       time.monotonic() < deadline):
+                while process_group_exists() and time.monotonic() < deadline:
                     process.poll()
                     time.sleep(0.1)
+                if process_group_exists():
+                    try:
+                        os.killpg(process_group_id, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    deadline = time.monotonic() + 10
+                    while (process_group_exists() and
+                           time.monotonic() < deadline):
+                        process.poll()
+                        time.sleep(0.1)
             try:
                 process.wait(timeout=1)
             except subprocess.TimeoutExpired:
-                cleanup_failure = "watchdog group leader was not reaped"
+                cleanup_failure = "watchdog child was not reaped"
             if process_group_exists():
                 cleanup_failure = (
                     "watchdog process group survived SIGTERM and SIGKILL")
@@ -2156,8 +2182,11 @@ def _run_watchdog(
                 signum, interrupt_parent)
         try:
             process = subprocess.Popen(
-                command, start_new_session=True, env=child_environment)
-            process_group_id = process.pid
+                command,
+                start_new_session=start_new_session,
+                env=child_environment,
+            )
+            process_group_id = process.pid if start_new_session else None
             signals_unblocked = True
             signal.pthread_sigmask(signal.SIG_SETMASK, spawn_mask)
             return_code = process.wait(timeout=args.watchdog_seconds)
@@ -2172,8 +2201,9 @@ def _run_watchdog(
         if return_code:
             stop_process_group()
             raise SystemExit(return_code)
-        # A successful group leader should have reaped every worker. Probe the
-        # PGID anyway so an unexpected orphan cannot silently retain a GPU.
+        # A standalone group leader should have reaped every worker, so probe
+        # its PGID. In supervised mode the child inherited the campaign-owned
+        # stage group and a successful torch spawn has already joined workers.
         stop_process_group()
     finally:
         for signum, handler in previous_handlers.items():

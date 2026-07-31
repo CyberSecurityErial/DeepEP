@@ -26,6 +26,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _LABEL = "HYBRID_CODEGEN_WARMUP_ONLY"
 _DISPATCH_CASE = "8x2_h7168_k8"
 _COMBINE_CASE = "8x2_h7168_k8_rank_tt"
+_CAMPAIGN_SUPERVISED_ENV = "DEEP_EP_CAMPAIGN_SUPERVISED"
 
 
 def _require(condition: bool, message: str) -> None:
@@ -67,15 +68,36 @@ def _require_safe_output(output_dir: Path) -> None:
     )
 
 
-def _terminate_process_group(
-    process: subprocess.Popen, grace_seconds: int = 10
+def _nested_start_new_session(
+    environment: dict[str, str] | None = None,
+) -> bool:
+    values = os.environ if environment is None else environment
+    return values.get(_CAMPAIGN_SUPERVISED_ENV) != "1"
+
+
+def _terminate_nested_process(
+    process: subprocess.Popen,
+    owns_process_group: bool,
+    grace_seconds: int = 10,
 ) -> None:
-    with suppress(ProcessLookupError):
-        os.killpg(process.pid, signal.SIGTERM)
+    if owns_process_group:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+    else:
+        # The campaign supervisor owns the inherited stage process group.  An
+        # inner harness must never signal that group because it contains this
+        # process too; terminate its direct child and let the outer supervisor
+        # retain authority over the complete stage group.
+        with suppress(ProcessLookupError):
+            process.terminate()
     with suppress(subprocess.TimeoutExpired):
         process.wait(timeout=grace_seconds)
-    with suppress(ProcessLookupError):
-        os.killpg(process.pid, signal.SIGKILL)
+    if owns_process_group:
+        with suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+    else:
+        with suppress(ProcessLookupError):
+            process.kill()
     process.wait(timeout=10)
 
 
@@ -87,6 +109,7 @@ def _run_stage(
     timeout: int,
 ) -> dict[str, Any]:
     print(f"C105 prepare: {name}", flush=True)
+    start_new_session = _nested_start_new_session(environment)
     with log_path.open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
             command,
@@ -94,21 +117,23 @@ def _run_stage(
             env=environment,
             stdout=log,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            start_new_session=start_new_session,
             text=True,
         )
         try:
             return_code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired as error:
-            _terminate_process_group(process)
+            _terminate_nested_process(process, start_new_session)
             raise RuntimeError(
                 f"{name} timed out after {timeout}s; see {log_path}"
             ) from error
         except BaseException:
-            _terminate_process_group(process)
+            _terminate_nested_process(process, start_new_session)
             raise
     if return_code:
-        _terminate_process_group(process, grace_seconds=0)
+        _terminate_nested_process(
+            process, start_new_session, grace_seconds=0
+        )
         raise RuntimeError(f"{name} exited {return_code}; see {log_path}")
     return {"name": name, "command": command, "log": log_path.name}
 

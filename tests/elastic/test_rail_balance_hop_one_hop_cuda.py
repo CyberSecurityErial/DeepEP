@@ -987,12 +987,26 @@ def test_zero_tokens() -> None:
 def _main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", type=int, default=0)
+    parser.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        help="Run only the named test; repeat to select multiple focused cases.",
+    )
     args = parser.parse_args()
     torch.cuda.set_device(args.device)
-    tests = sorted(
+    available = dict(
         (name, function)
         for name, function in globals().items()
         if name.startswith("test_") and callable(function)
+    )
+    unknown = sorted(set(args.only) - set(available))
+    if unknown:
+        parser.error(f"unknown --only tests: {unknown}")
+    tests = sorted(
+        (name, function)
+        for name, function in available.items()
+        if not args.only or name in args.only
     )
     for name, function in tests:
         function()

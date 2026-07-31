@@ -40,6 +40,7 @@ from test_rail_balance_hybrid_vnode import (
 
 
 _WORLD_SIZE = 8
+_CAMPAIGN_SUPERVISED_ENV = "DEEP_EP_CAMPAIGN_SUPERVISED"
 _G = 4
 _D = 2
 _HIDDEN = 256
@@ -49,6 +50,36 @@ _CHANNELS = 2
 _PROXY_CAPACITY = 16
 _GENERATION = 1201
 _PLANNER_CHUNK_SIZE = 8
+
+
+def _nested_start_new_session(
+    environment: dict[str, str] | None = None,
+) -> bool:
+    values = os.environ if environment is None else environment
+    return values.get(_CAMPAIGN_SUPERVISED_ENV) != "1"
+
+
+def _terminate_watchdog(
+    process: subprocess.Popen, owns_process_group: bool
+) -> None:
+    try:
+        if owns_process_group:
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            if owns_process_group:
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+        except ProcessLookupError:
+            pass
+        process.wait()
 
 
 def _case(case_name: str, workload_json: Path | None = None) -> VnodeRoundTripCase:
@@ -396,16 +427,14 @@ def main() -> None:
     ]
     if args.workload_json is not None:
         command.extend(("--workload-json", str(args.workload_json)))
-    process = subprocess.Popen(command, start_new_session=True)
+    start_new_session = _nested_start_new_session()
+    process = subprocess.Popen(
+        command, start_new_session=start_new_session
+    )
     try:
         return_code = process.wait(timeout=args.watchdog_seconds)
     except subprocess.TimeoutExpired as error:
-        os.killpg(process.pid, signal.SIGTERM)
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
+        _terminate_watchdog(process, start_new_session)
         raise RuntimeError("hop-aware vnode watchdog expired") from error
     if return_code:
         raise SystemExit(return_code)
