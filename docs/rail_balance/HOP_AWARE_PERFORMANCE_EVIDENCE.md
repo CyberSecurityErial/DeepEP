@@ -54,13 +54,30 @@ Raw files:
 /tmp/ha060-planner-final-guarded-matched.json
 ```
 
-Reproduce the profiler-free current-tree probe with:
+#### 2026-08-01 workload-matching correction
+
+The historical private-planner runner selected different records implicitly:
+`one_hop` used the rotating-target pattern, while `adaptive` used the
+singleton-target pattern.  Therefore historical rows from the two modes are
+**not a matched-workload A/B** and cannot support a one-hop-versus-adaptive
+performance conclusion.  Their within-mode before/after comparisons remain
+diagnostic evidence only when both revisions used the same implicit pattern.
+
+The current runner makes the pattern explicit and uses one pattern for every
+requested mode.  Reproduce the old per-mode inputs, if provenance requires it,
+with two separate commands using `--mode one_hop --pattern rotating` and
+`--mode adaptive --pattern singleton`.  New matched comparisons must use one
+command with `--mode both --pattern <rotating|singleton>` and must not be
+joined to the old JSONs as a continuous performance series.
+
+Reproduce a matched profiler-free current-tree probe with:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 PYTHONPATH=$PWD:$PWD/tests/elastic \
 /home/chen/.cache/deepep-sjlgpt/bin/python -B \
   tests/elastic/bench_rail_balance_hop_plan.py \
-  --mode both --tokens 8 32 128 512 --warmup 3 --steady 20 \
+  --mode both --pattern rotating --tokens 8 32 128 512 \
+  --warmup 3 --steady 20 \
   --device 0 --output-json /tmp/rail-hop-plan.json
 ```
 
@@ -73,8 +90,9 @@ CUDA_VISIBLE_DEVICES=0 PYTHONPATH=$PWD:$PWD/tests/elastic \
 | adaptive | 128 | 33829.91 / 33892.16 / 33896.09 | 3502.81 / 3523.76 / 3539.51 | 9.658x |
 | adaptive | 512 | 642349.08 / 642437.54 / 642464.62 | 18885.64 / 18916.24 / 18921.26 | 34.013x |
 
-One-hop is the unchanged control. Its stable result falsifies a global clock or
-allocator explanation for the adaptive improvement.
+Within each historical mode, one-hop is the unchanged control. Its stable
+before/after result weakens a global clock or allocator explanation for the
+adaptive within-mode improvement; it is not a matched cross-mode comparison.
 
 ### Nsys critical path
 
@@ -575,3 +593,179 @@ e264a1352b856b8248a7173cfa763990840a8c993abf57798f87efe841bc38bf  c100-adaptive-
 
 These remain single-node checked-adapter results. They do not establish
 Gin/RDMA/NIC speedup or unlock capability.
+
+## HA070-F: sparse groups, fair batches, and bounded adaptive rounds
+
+Scope: uncommitted dirty tree after `ee80a16`; all values in this section are
+diagnostic only. They are not eligible formal speedups.
+
+| C100 diagnostic | Adaptive finish |
+| --- | ---: |
+| dense padded multi-target scan | ~1.586 s |
+| sparse active-group scan | ~30.08 ms |
+| sparse + tied-hot fair batch | ~12.05 ms |
+| singleton `rot1` counterexample to fair batching | ~500.27 ms |
+| bounded-round budget, four-target `volume` | ~5.87 ms |
+| bounded-round budget, singleton `rot1` | ~6.05 ms |
+
+The sparse version stores only real `(owner,destination,target-mask)` groups,
+so the decision loop no longer scans empty padding. Fair batching avoids one
+of several tied hot Rails consuming the entire two-hop budget. It was not
+general enough: on singleton traffic, more than 95% of selection rounds moved
+one unit. The current bounded-round rule derives a required batch from the
+remaining two-hop allowance and decision budget, while clipping at real load
+and capacity boundaries.
+
+Failures preserved:
+
+- removing one apparent batch-one `gap` condition left singleton latency at
+  roughly 500 ms and was reverted;
+- using `planner_chunk_size` as the adaptive minimum batch caused a valid
+  capacity-edge test to fail; planner materialization granularity is not an
+  admissible lower bound for adaptive movement.
+
+Correctness evidence on this tree is 18/18 focused GPU tests, including 81
+realizable Top-k structures spanning `G=2..8`, `K=1/2/4/8`, and every target
+width from one through `min(K,G)`. One-hop off-diagonal and adaptive diagonal vnode round trips
+also pass. The C100 `mesh` checked adapter reports status zero and these rank-0
+counters:
+
+| Mode | Path units `(direct,dst,src,2-hop)` | Moved | Source peak |
+| --- | ---: | ---: | ---: |
+| one-hop | `(1024,3584,3584,0)` | 3584 | 4608 |
+| adaptive | `(1024,3104,2016,2048)` | 4064 | 3040 |
+
+The checked hop-aware runtime allocates 4096 proxy slots per egress for
+`volume` and 8192 for `rot1`/`mesh`. A separate private call with the legacy
+896 moved-copy count as total capacity correctly returned
+`CapacityExceeded`; it omitted retained staging and is excluded from all
+claims.
+
+Artifacts:
+
+```text
+.cache/rail_balance/hop-aware/multi-target/smoke-c100-volume-adaptive-budget-v7.json
+.cache/rail_balance/hop-aware/multi-target/smoke-c100-rot1-adaptive-budget-v7.json
+.cache/rail_balance/hop-aware/multi-target/smoke-c100-mesh-onehop-diag-v7.json
+.cache/rail_balance/hop-aware/multi-target/smoke-c100-mesh-adaptive-diag-v7.json
+.cache/rail_balance/hop-aware/multi-target/vnode-onehop-offdiag-budget-v7.json
+.cache/rail_balance/hop-aware/multi-target/vnode-adaptive-diag-budget-v7.json
+```
+
+The four C100 JSONs above record a dirty Git tree and
+`baseline_collection_eligible=false`. The two vnode JSONs record only
+`single_node_diagnostic` scope and do not carry the C100 Git/baseline fields.
+No Gin/RDMA, NIC, or multinode performance conclusion follows from them;
+clean 10+100 collection is pending.
+
+## HA070-G: bounded tiny tail and measured local-forward work
+
+Scope remains an uncommitted, dirty single-node diagnostic. The unrestricted
+small-group fallback fixes a real cap-as-target counterexample but is not
+acceptable on the main path:
+
+| Adaptive variant | C100 `rot1` finish | Source peak |
+| --- | ---: | ---: |
+| batch floor only | ~6.05 ms | ~7,305 |
+| unrestricted small fallback | 20.77 ms | 7,170 |
+| at most G tiny-tail rounds | 7.24 ms | 7,194 |
+
+The bounded tail also passes the minimal G8 regression: equal background load
+of 129 units per Rail plus two quota-one diagonal groups starts with source
+loads `(131,129,...,129)` and ends with a peak of 130. The 25% two-hop setting
+is treated as a limit; the planner does not try to consume its full allowance.
+CPU falsification covered 960 broader states and 1,080 ratio/seed cases
+without cap, determinism, or single-step peak violations. It also found a
+separate full-batch-versus-granular quality counterexample; that remains a
+future single-variable experiment and is not hidden by this change.
+
+The cold C100 volume snapshot now measures the shared-payload forwarding
+semantics:
+
+```text
+path units (direct,dst,src,third) = (0,1687,4457,2048)
+source-forward units             = 6505
+destination-forward units        = 27287
+minimum local-forward units      = 28672
+extra local-forward units        = 5120
+```
+
+A 2026-08-01 review found that the original dirty diagnostic helper counted
+only owner bit zero; its emitted minimum/extra values were 31,744/2,048. The
+corrected minimum is 28,672 units; source and destination forwarding remain
+6,505 and 27,287 units. The corrected extra work is 5,120 units, or 2,949,120
+bytes at 576 bytes per unit. The listed JSON is retained for provenance but
+must not be used as corrected accounting evidence.
+
+This makes the claim boundary explicit: `path_units` classify a
+`target_mask` payload's egress, while the new counters measure actual local
+forwarding to every final target. The corresponding JSON artifacts are:
+
+```text
+.cache/rail_balance/hop-aware/multi-target/smoke-c100-volume-adaptive-tinytail-localhops-v8.json
+.cache/rail_balance/hop-aware/multi-target/diag-c100-rot1-adaptive-tinytail-v8.json
+.cache/rail_balance/hop-aware/multi-target/vnode-onehop-offdiag-tinytail-v8.json
+.cache/rail_balance/hop-aware/multi-target/vnode-adaptive-diag-tinytail-v8.json
+```
+
+The C100 reports have `baseline_collection_eligible=false`, and the vnode
+reports are single-node diagnostics. None establishes real NIC/RDMA speedup
+or a clean-tree before/after claim.
+
+## HA070-I: committed functional candidate; no new performance Leader
+
+The sparse multi-target/G2/tiny-tail implementation was committed as
+`286da0a`; evidence hardening and supervised CUDA harnesses followed in
+`771fcc6` and `0f38688`.  The core source is therefore recoverable and clean,
+but source cleanliness alone is not a performance result.  The last accepted
+matched profiler-free Leader remains `8c56939`:
+
+| Source | Evidence available | Performance verdict |
+| --- | --- | --- |
+| `8c56939` | clean checked-adapter 10+100 and matched Nsys | retained Leader for checked single-node adapter only |
+| `286da0a` | force build; 20/20 planner; CPU/API/codegen; G2/tiny-tail four-sanitizer gate | functional candidate; no clean matched timing |
+| `0f38688` | same core plus benchmark/harness supervision | no source-version performance comparison |
+
+The formal source-round control plane now fixes four shared parent blocks plus
+four blocks per each of 2--4 candidates, a global non-overlapping schedule,
+paired robust-noise qualification and absolute-latency winner selection.  Its
+coordinator remains check-only, while the whole-round executor is now
+implemented but defaults to check-only and has no real candidate source
+manifest or live raw round.  All planned source rounds therefore remain
+`NOT_RUN` and promotion is impossible.  The old
+`takeover-scaffold-20260801-01` lacks `FINALIZED.json`; the terminal schema
+smoke used `--no-execute`.  Neither is timing evidence.
+
+The machine did not offer eight exclusive GPUs: Qwen occupied GPU 0--1.  No
+vnode, benchmark, Nsys or NCU result was collected, and no competitor result
+was produced.  This section intentionally records **no speedup** and makes no
+claim about NIC/RDMA or any external system.
+
+## HA070-J: committed formal executor; still no new performance evidence
+
+Commit `448a727` adds the fail-closed whole-round source executor that was
+missing at HA070-I.  It holds one lease across the exact `4+4N` block order,
+executes the frozen campaign runner through an opened and hash-bound file
+descriptor, preserves failed-candidate evidence, seals per-block coordinator
+records, constructs the formal round manifest, and accepts an evaluator result
+only after its source binding and promotion fields agree.  Default invocation
+is check-only; live execution additionally requires an exact round-id
+confirmation.
+
+This is infrastructure evidence only:
+
+```text
+campaign supervisor                              20/20 PASS
+source-round coordinator                           9/9 PASS
+formal evaluator                                  19/19 PASS
+whole-round executor                              16/16 PASS
+Ruff / py_compile / independent static audit             PASS
+```
+
+There is no fabricated source manifest and no live executor artifact because
+new CUDA candidates must come from measured hypotheses, not from a
+control-plane smoke.  Qwen occupied GPU 0--1, so no eight-GPU vnode,
+benchmark, Nsys, NCU or competitor run was launched.  `8c56939` therefore
+remains the last accepted clean matched checked-adapter Leader, while
+`286da0a` remains a functional candidate awaiting the same formal
+profiler-free comparison.

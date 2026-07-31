@@ -1,5 +1,9 @@
 # Rail Balance Session Handoff
 
+> **当前 hop-aware 工作请先读**
+> [`HANDOFF_HOP_AWARE_2026-08-01.md`](HANDOFF_HOP_AWARE_2026-08-01.md)。
+> 本文件最后更新于 2026-07-26，只保留 prototype 历史，不能代表当前分支或工作树。
+
 Last updated: 2026-07-26 UTC
 Branch: `feat/rail-balance-prototype`
 Repository: `/home/chen/workspace/source_code/DeepEP`

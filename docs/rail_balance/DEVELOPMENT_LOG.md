@@ -7234,3 +7234,343 @@ the fast quota table currently accepts only singleton masks, so lane 0 still
 chooses an egress for every multi-target payload. The next checkpoint is
 therefore sparse `(owner,destination,target_mask)` aggregation, not NCU or host
 gate tuning.
+
+## 2026-07-31 — HA070-F: sparse multi-target planner and bounded adaptive rounds
+
+This is an uncommitted dirty-tree checkpoint based on `ee80a16`; every timing
+below is diagnostic. It is not a formal before/after result and does not change
+the real-Rail capability gate.
+
+The first multi-target implementation scanned the dense padded group space and
+took about 1.586 s at the C100 `volume` finish boundary. Reusing planner
+workspace as an active-group list reduced the same diagnostic to 30.08 ms:
+the decision warp visits only groups produced by the record pass. Fairly
+sharing one batch among tied hot Rails reduced it again to about 12.05 ms.
+
+A different, realizable singleton-target `rot1` control then falsified the
+generality of that batching rule: adaptive finish was about 500.27 ms.
+The residual loop made roughly 8,000 decisions, mostly one unit at a time,
+while chasing the last one-unit load gaps. Two failed attempts are retained:
+
+- merely suppressing a `gap <= 0` batch-one path did not change the roughly
+  500 ms result and was reverted;
+- forcing the adaptive minimum batch to `planner_chunk_size` rejected a valid
+  capacity-bound plan. Adaptive batch size must remain independent of record
+  materialization chunk size.
+
+The current candidate uses a fixed `G * 32` decision budget. Each round derives
+a minimum batch from remaining two-hop allowance and remaining rounds, then
+clips it at the next pair/source peak boundary and available quota/capacity.
+This keeps selection sparse and load-aware without special-casing a 4-hot/4-idle
+matrix. Dirty-tree C100 smokes now measure about 5.87 ms for four-target
+`volume` and 6.05 ms for singleton `rot1`; these are provisional diagnostics.
+
+Generality and data-path checks currently pass:
+
+```text
+focused CUDA planner suite                                  18/18
+realizable Top-k structures: G=2..8, K=1/2/4/8               81
+4x2 vnode one-hop off-diagonal round trip                   PASS
+4x2 vnode adaptive diagonal round trip                      PASS
+```
+
+The realistic cases construct Top-k expert indices first, materialize their
+target-mask records with the Python reference, then exercise the production
+CUDA planner on those records. They cover variable Rail count and target width
+rather than only the 4-hot C100 fixture. The separate vnode/C100 paths exercise
+the production GPU record materializer; the older arbitrary-record fuzz remains
+protocol coverage, not proof that every generated mask is Top-k-realizable.
+
+The checked C100 `mesh` runtime reports status zero and exposes these rank-0
+path counters (`direct,dst-forward,src-forward,two-hop`):
+
+```text
+one-hop: [1024, 3584, 3584,    0], moved=3584, source_peak=4608
+adaptive:[1024, 3104, 2016, 2048], moved=4064, source_peak=3040
+```
+
+Its actual hop-aware buffer capacity is 8192 slots per egress; the `volume`
+runtime uses 4096. A private diagnostic that passed only 896—the legacy moved
+count—returned `CapacityExceeded`, because hop-aware capacity must cover the
+combined retained and moved staging layout. That invalid private result is not
+used as correctness or performance evidence.
+
+Next: commit the coherent checkpoint, rerun clean 10+100 distributions, then
+use matched Nsys evidence before considering another kernel optimization.
+
+## 2026-07-31 — HA070-G: cap-is-a-limit tail and fanout-aware accounting
+
+The bounded-round batch floor exposed a semantic edge: `max_two_hop_percent`
+is an upper bound, not a target that the planner must spend. A realizable G8
+case has 129 direct records on every Rail plus two singleton diagonal records
+on Rail 0. Its two useful groups each have quota one, below the computed batch
+floor of two, so the previous planner moved nothing and left the source peak
+at 131.
+
+The main large-batch loop is unchanged. Once no candidate reaches its batch
+floor, the planner may now run at most `G` tiny-tail rounds. This reduces the
+counterexample peak from 131 to 130 while proving that the extra full sparse
+scans are bounded by the Rail count. An unrestricted fallback was rejected:
+it consumed all 256 rounds on `rot1`, increasing dirty diagnostic finish time
+from about 6.05 ms to 20.77 ms for only a small source-peak improvement. The
+bounded G8 tail measures about 7.24 ms on the same 3+20 diagnostic and keeps
+the C100 volume result near 6.09 ms. These are dirty-tree diagnostics, not
+formal performance claims.
+
+The shared-payload planner is explicitly `(owner,destination,target_mask,
+egress)`, rather than materializing a duplicate payload for every target.
+Consequently the four `path_units` classes describe the chosen egress for one
+shared record; they are not literal local-hop totals. Cold diagnostics now
+derive source-forward, destination-forward, minimum unavoidable forwarding,
+and extra forwarding directly from records and resolutions. For the C100
+volume smoke they report 6,505 source-forward units and 27,287
+destination-forward units. A 2026-08-01 review found that the first reporting
+helper counted only owner bit zero when deriving the minimum: the corrected
+minimum is 28,672 units and the corrected extra work is 5,120 units. The
+planner and path counters were unaffected; the original diagnostic JSON is
+retained only as a superseded dirty-tree artifact.
+
+Failures retained:
+
+- after JIT identities were renamed, the first benchmark still loaded the
+  old host extension and correctly rejected the report identity; a forced
+  extension rebuild fixed it;
+- the first cold diagnostic created its owner index on each rank's default
+  CUDA device while records were already copied to CPU, so the checked WORLD
+  gate aborted all ranks. Explicit `device="cpu"` fixed only the reporting
+  path;
+- running Ruff format on the two legacy-style test files produced a large
+  review-only diff. The formatting-only changes were removed while preserving
+  the semantic edits. Ruff check still reports the benchmark's existing E731
+  lambda assignments and SIM105 cleanup suggestions; they are not mixed into
+  this kernel checkpoint.
+
+The focused GPU suite now passes 20/20, including the new cap-as-limit
+regression. Adaptive multi-target planning above the dense G8 target-mask
+limit fails closed with `InvalidSchedule`; one-hop remains available. The
+private records oracle also rejects `G*N*K > INT_MAX` before allocating
+int32-backed counters. The one-hop/off-diagonal and adaptive/diagonal 4x2
+vnode round trips pass after this change. Focused memcheck, synccheck,
+initcheck, and racecheck report zero errors or hazards on the new tiny-tail
+regression.
+
+## 2026-08-01 — HA070-H: takeover audit, G2 safety and fail-closed campaign bootstrap
+
+This checkpoint remains an uncommitted tree on `ee80a16`; no new performance
+claim is accepted. The takeover first audited the implementation and evidence
+path rather than generating another kernel candidate.
+
+### Correctness and accounting fixes
+
+Independent review found and closed the following evidence or edge-case gaps:
+
+- fanout accounting previously converted the owner target bit to boolean
+  before applying the owner mask, losing owner bits 1–7. It now performs the
+  integer bitwise operation first. The corrected C100 values are source 6,505,
+  destination 27,287, unavoidable minimum 28,672 and extra 5,120 units; the
+  old JSON remains a superseded dirty artifact;
+- benchmark Git identity is now resolved from the DeepEP repository even when
+  launched from `/`, and cold rank rows are copied before report enrichment;
+- hop traffic reporting consumes the measured owner→egress matrix. Legacy
+  schedule values are separately qualified, and an unsupported stage or
+  negative byte size fails closed;
+- the private planner microbenchmark compares both modes on one explicit
+  `rotating` or `singleton` input and validates the returned device status.
+  The C++ binding itself performs status D2H plus stream synchronization before
+  returning, so the existing wall timer already covers completion;
+- old private-planner results used rotating records for one-hop but singleton
+  records for adaptive. They remain within-mode diagnostics and are explicitly
+  rejected as cross-mode A/B evidence;
+- batch ceil divisions avoid `a+b-1` overflow, token stripes use `int64_t`,
+  threshold sums are int64, and endpoint assignment advances by the actual
+  accepted amount;
+- G2 adaptive semantics are enabled only after all planner scratch allocations
+  reserve at least `3*D`. A new exact test proves the other Rail can be used as
+  the bounded two-hop escape for chunk 1 and chunk 8;
+- both precounted and direct record paths now reject duplicate or out-of-order
+  destinations. Corrupt metadata, like capacity failure, cannot reach timing;
+- automatic C100 baseline eligibility rejects observed `nsys`, `ncu`,
+  `nvprof` or `compute-sanitizer` processes in the pre/post snapshots;
+- JIT key `rail_balance_hop_plan_v4` records the new planner identity. Recursive
+  include hashing already protected the binary from a stale header; the key
+  bump is version clarity, not a claim that the old cache was unsafe.
+
+Static CUDA/C++ review found no remaining S0–S2 issue in scratch sizing,
+one-hop endpoint restriction, adaptive cap, target-mask payload sharing,
+int32/int64 bounds, cursor ownership, synchronization, or off/legacy behavior.
+Public host and compiled capability remain false. `R>8` adaptive multi-target
+continues to fail closed by design.
+
+### Final-tree gates available without eight exclusive GPUs
+
+```text
+forced extension build                                  PASS
+focused CUDA planner                                    20/20 PASS
+hop reference                                            12/12 PASS
+unified benchmark CPU contracts                           8/8 PASS
+C080-A Hybrid API                                         9/9 PASS
+dispatch codegen matrix                                   PASS
+combine codegen matrix                                    PASS
+Hybrid layout                                             5/5 PASS
+Hybrid policy                                             8/8 PASS
+public lifecycle                                          PASS
+tiny-tail + G2 memcheck/synccheck/initcheck              0 errors
+tiny-tail + G2 racecheck                                 0 errors/warnings/hazards
+campaign safety contracts                                11/11 PASS
+new campaign files Ruff                                  PASS
+py_compile / git diff --check                            PASS
+```
+
+Two explicit-pattern, three-sample private planner smokes passed schema and
+status validation. Their hashes are:
+
+```text
+e1310876a27a5ef68054ad9df498f35ecd7132c1e1f19b493902878259a2bd99
+  .cache/rail_balance/hop-aware/takeover-2026-08-01/plan-rotating-smoke.json
+8afd1c10b684e0f10e795a5ec46714cfdc0aadae30bdd3acb85efb4cc909b231
+  .cache/rail_balance/hop-aware/takeover-2026-08-01/plan-singleton-smoke.json
+```
+
+They are runner smokes only: three samples, dirty source and a co-tenant on
+the node. Their latency numbers are excluded from the Leaderboard.
+
+The latest takeover tree did not rerun 4x2 vnode because Qwen occupied GPU0–1
+and the user's short-operator runner briefly occupied all eight GPUs. A 2x2
+test-only parameterization was attempted once. The pre-command snapshot
+already exposed those co-tenants, and the vnode prepare then rejected the
+four-rank group at `buffer.hpp`'s fixed
+`nccl_context->num_ranks == kWorldRanks` assertion. No vnode data movement or
+JSON occurred. The parameterization was removed. This failure is retained and
+does not weaken the required 4x2 gate.
+
+### Campaign scaffold
+
+The initial stdlib-only supervisor validated a frozen 21-stage manifest before any
+PyTorch/DeepEP import. It rejects arbitrary executables, inline Python,
+dangerous environment overrides, path traversal, weakened compile lineage,
+tracked runtime Leaderboards and a home limit other than decimal 300 GB. It
+records Git tracked diff plus untracked content identity, samples all eight
+GPUs, repeats source/GPU gates before every GPU stage, monitors foreign process
+groups and disk/artifact growth, and appends every outcome to an ignored JSONL
+Leaderboard.
+
+The first real execution was deliberately `scaffold_only`:
+
+```text
+run_id                                      takeover-scaffold-20260801-01
+preflight reasons                           Qwen PID 2753622,2753623; dirty tree
+CPU gates                                   6/6 PASS
+GPU/benchmark/profile attempts              0
+artifact bytes                              72,207
+/home pre/post bytes                        271249965056 / 271250386944
+SHA256SUMS sha256
+f03a48ad989ec98cea33488805296bd95ea153f195df18bb484f70607c99ad38
+```
+
+This historical run proves only that the resource gate launched no GPU work
+while preserving CPU evidence.  It predates the later terminal-commit contract
+and has no `FINALIZED.json`; its Leaderboard row and hash are provenance, not
+formal evidence.  The current manifest has 25 stages.  The supervisor always
+publishes `performance_claim_allowed=false`; a clean matched source round and
+new Nsys attribution are still required before any candidate can become the
+performance Leader.
+
+### Related-system evidence
+
+Primary-source audit now distinguishes paper, pinned code, public command,
+author figure/table, raw data, local checkout and actual reproduction for
+UltraEP, MoonEP, UCCL-EP, DeepEP v2, ECHO, EPLB and LPLB. No competitor GPU run
+was performed. UltraEP acts at the expert-replication layer and its interaction
+with RailBalance still needs a 2x2 experiment; as of the evidence cutoff the
+audited MoonEP public path is single-node only, and UCCL-EP is one direct P0-R
+transport competitor that needs a same-hardware reproduction. See
+`COMPETITOR_EVIDENCE_2026-08-01.md`; author figures are not local results.
+
+## 2026-08-01 — HA070-I: committed implementation, terminal evidence and formal-round control plane
+
+The takeover's CUDA/C++ implementation is no longer an uncommitted checkpoint.
+It was split into reviewable commits:
+
+```text
+286da0a  Optimize sparse hop-aware rail planner
+771fcc6  Harden hop benchmark evidence gates
+0f38688  Make CUDA harnesses campaign-supervisable
+```
+
+There are no current uncommitted `csrc/` or public-header changes.  The final
+implementation tree passed a forced extension build, 20/20 focused planner
+tests, 12/12 reference tests, 8/8 report contracts, 9/9 API tests, both full
+codegen matrices, 5/5 layout, 8/8 policy, public lifecycle, and the four
+focused sanitizer tools.  These gates establish implementation correctness;
+they do not replace the still-pending 4x2 vnode rerun or matched performance
+round on the committed source.
+
+The campaign manifest now has 25 stages.  The stdlib-only supervisor rejects
+linked, oversized, hard-linked or group/world-writable manifests and unsafe
+existing Leaderboards in addition to its source, GPU, process-group, disk and
+artifact gates.  Its CPU contracts pass 20/20.  The source-round coordinator
+passes 9/9 contracts and emits one check-only global `4+4N` plan with four
+shared parent blocks and four blocks per candidate.  The formal CPU evaluator
+passes 19/19 contracts; it binds the plan/preflight/source/terminal records,
+audits every block including failed candidates, enforces global non-overlap,
+and only selects an absolute-latency winner after the fixed paired-noise gate.
+
+The whole-round live executor is now committed in `448a727` and passes 16/16
+CPU contracts.  It remains check-only unless both `--live` and the exact
+frozen round ID are provided.  No real candidate source manifest or formal raw
+round has been produced, so no source-version performance Leader changed.  The earlier
+`takeover-scaffold-20260801-01` artifact predates the terminal contract and
+lacks `FINALIZED.json`; its hash is historical provenance only.  A later
+`terminal-smoke-20260801-01` validates terminal hashing under `--no-execute`
+but runs no CPU stage.  A fresh clean-tree finalized 6/6 CPU scaffold is still
+required before claiming the current orchestration protocol was exercised.
+
+GPU 0--1 remained occupied by the user's Qwen training.  No GPU stage was
+launched and no user process was killed, paused or otherwise disturbed.
+
+The paper evidence ledger now preregisters direct transport competitors
+separately from composition systems.  No competitor was run locally and every
+new experiment remains `NOT_RUN`; author numbers are never mixed with local
+same-hardware results.  The safe novelty boundary is limited to hop/cost-aware
+rail/vnode selection and bounded local forwarding inside the DeepEP/NVIDIA
+multi-NIC RDMA data plane while preserving final expert endpoints.
+
+## 2026-08-01 — HA070-J: whole-round lease executor committed and CPU-audited
+
+Commit `448a727` closes the formal execution-control path without claiming a
+GPU result.  It contains the 25-stage campaign manifest/supervisor,
+source-round coordinator, formal evaluator, whole-round executor and their CPU
+contract suites.  The executor is check-only by default; live launch requires
+both `--live` and the exact frozen `--confirm-round-id`.  One flock lease is
+retained across every runner descendant, coordinator record, formal-manifest
+evaluation and terminal fsync.
+
+The frozen source round is exactly `4+4N` blocks with 2--4 candidates.  Every
+candidate projects to `P C C P C P P C`; every passed stage must have passed
+dependencies, every report/JIT/coordinator path is plan-bound, all files in the
+artifact tree are fully hashed, and raw warm/steady intervals must be unique,
+ordered, non-overlapping and inside their coordinator window.  Complete-report
+copy and raw-sample reseal attacks are both rejected.  Executor identity is
+bound through the source manifest, plan/round binding, coordinator records and
+the current file, with metadata and hash rechecks before promotion.
+
+Final CPU/static evidence on the committed control plane is:
+
+```text
+campaign supervisor contracts                 20/20 PASS
+source-round coordinator contracts              9/9 PASS
+formal evaluator contracts                     19/19 PASS
+whole-round executor contracts                  16/16 PASS
+Ruff (all nine infrastructure/test files)            PASS
+py_compile (all nine infrastructure/test files)      PASS
+independent control-plane audit                  no S0-S2
+```
+
+No GPU was used for this checkpoint.  Qwen continued to occupy GPU 0--1, so
+the current code still has no post-`286da0a` 4x2 vnode rerun and no formal raw
+source-version round.  The executor has not been live-launched, and no
+candidate or performance Leader changed.  Its residual trust boundary is
+explicit: process closure assumes the frozen cooperative runner keeps stages
+inside the executor-created PGID; this host offers no writable cgroup-v2 kill
+scope; same-UID hostile replacement, active `setsid()` escape, `SIGKILL` and
+host failure cannot be made transactionally recoverable in userspace.

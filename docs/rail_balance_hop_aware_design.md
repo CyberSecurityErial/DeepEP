@@ -233,13 +233,16 @@ PYTHONPATH=$PWD/tests/elastic:$PWD \
   --output-json /tmp/rail-hop-vnode.json
 ```
 
-Real multinode execution uses the same entry under `torchrun`; it delegates to
-the existing strict profiler-free A/B runner and always compares the candidate
-against native DeepEP V2 `off`:
+Real multinode execution uses the same entry once on each node.  The delegated
+runner spawns the local GPU workers itself and always compares the candidate
+against native DeepEP V2 `off`; wrapping it in per-GPU `torchrun` would spawn a
+second worker tree and corrupt node-rank/world semantics:
 
 ```bash
-torchrun --nnodes=2 --nproc-per-node=4 \
-  --node-rank=$NODE_RANK --master-addr=$MASTER_ADDR --master-port=$MASTER_PORT \
+CUDA_VISIBLE_DEVICES=0,1,2,3 WORLD_SIZE=2 RANK=$NODE_RANK \
+MASTER_ADDR=$MASTER_ADDR MASTER_PORT=$MASTER_PORT OMP_NUM_THREADS=1 \
+EP_DISABLE_GIN=0 PYTHONPATH=$PWD/tests/elastic:$PWD \
+/home/chen/.cache/deepep-sjlgpt/bin/python -B \
   tests/elastic/bench_rail_balance_hop.py \
   --backend multinode --mode one_hop --case offdiag_hot \
   --num-nodes 2 --gpus-per-node 4 --tokens-per-rank 4096 \
@@ -250,6 +253,11 @@ torchrun --nnodes=2 --nproc-per-node=4 \
 
 The result marks `planner_only`, `single_node_diagnostic`, or
 `real_multinode`. Reference and vnode output are never network-speed claims.
+In the current multinode report, path distribution and Rail-load fields still
+come from the Python expected-plan oracle; the executed data path supplies
+correctness and latency, but those fields do not prove physical NIC/QP byte
+distribution.  A physical Rail-balance claim additionally requires runtime
+path counters plus per-NIC/QP counters collected over the same timed window.
 Endpoint-count traces use the JSON files under
 `tests/elastic/workloads/rail_balance/` with `--case trace --workload-json`.
 
