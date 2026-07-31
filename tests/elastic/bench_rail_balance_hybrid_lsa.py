@@ -31,6 +31,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shlex
 import signal
 import statistics
@@ -141,23 +142,24 @@ _LEGACY_SOURCE_JIT_KERNEL_PREFIX = (
     "kernel.rail_balance_hybrid_source_shuffle.",
 )
 _HOP_MATERIALIZER_JIT_KERNEL_PREFIXES = (
-    "kernel.rail_balance_hop_endpoint_prefix_v1.",
-    "kernel.rail_balance_hop_endpoint_assign_v2.",
-    "kernel.rail_balance_hop_group_count_v1.",
-    "kernel.rail_balance_hop_group_prefix_v1.",
-    "kernel.rail_balance_hop_slot_finalize_v1.",
+    "kernel.rail_balance_hop_endpoint_prefix_v2.",
+    "kernel.rail_balance_hop_multi_target_assign_v1.",
+    "kernel.rail_balance_hop_endpoint_assign_v3.",
+    "kernel.rail_balance_hop_group_count_v2.",
+    "kernel.rail_balance_hop_group_prefix_v2.",
+    "kernel.rail_balance_hop_slot_finalize_v2.",
 )
 _HOP_ONE_HOP_JIT_KERNEL_PREFIXES = (
     "kernel.rail_balance_hop_record_v1.",
-    "kernel.rail_balance_hop_precount_v1.",
-    "kernel.rail_balance_hop_decision_v5.",
+    "kernel.rail_balance_hop_precount_v2.",
+    "kernel.rail_balance_hop_decision_v7.",
     *_HOP_MATERIALIZER_JIT_KERNEL_PREFIXES,
     "kernel.rail_balance_hop_source_shuffle.",
 )
 _HOP_ADAPTIVE_JIT_KERNEL_PREFIXES = (
     "kernel.rail_balance_hop_record_v1.",
-    "kernel.rail_balance_hop_precount_v1.",
-    "kernel.rail_balance_hop_adaptive_decision_v1.",
+    "kernel.rail_balance_hop_precount_v2.",
+    "kernel.rail_balance_hop_adaptive_decision_v7.",
     *_HOP_MATERIALIZER_JIT_KERNEL_PREFIXES,
     "kernel.rail_balance_hop_source_shuffle.",
 )
@@ -389,8 +391,89 @@ def _finish_checked(
     outputs, status, error = _finish(runtime, invocation_id, None)
     if error is not None:
         raise RuntimeError(error)
-    assert outputs is not None and status == 0
+    if outputs is None or status != 0:
+        raise RuntimeError(f"hop planner finish failed with status {status}")
     return outputs
+
+
+def _hop_plan_diagnostics(
+    runtime: object,
+    invocation_id: int,
+    max_two_hop_percent: int,
+) -> dict[str, object]:
+    values = tuple(
+        runtime._rail_balance_hop_plan_snapshot(  # type: ignore[attr-defined]
+            invocation_id
+        )
+    )
+    if len(values) != 11:
+        raise RuntimeError(f"unexpected hop snapshot size {len(values)}")
+    records = values[0].cpu()
+    resolutions = values[1].cpu()
+    pair_load = values[2].cpu()
+    source_load = values[3].cpu()
+    moved = values[5].cpu()
+    proxy_required = values[7].cpu()
+    path_units = values[8].cpu()
+    moved_copies = int(values[9].item())
+    status = int(values[10].item())
+    total_units = int(path_units.sum())
+    if status != 0:
+        raise RuntimeError(f"hop snapshot failed with status {status}")
+    if moved_copies != int(moved.sum()) or moved_copies != int(proxy_required.sum()):
+        raise RuntimeError("hop snapshot violates moved-copy conservation")
+    if int(path_units[3]) > total_units * max_two_hop_percent // 100:
+        raise RuntimeError("hop snapshot violates the two-hop cap")
+    target_masks = records.bitwise_and(0xFFFFFFFF)
+    active = target_masks != 0
+    egress = resolutions[..., 0]
+    num_rails = records.shape[0]
+    owner = torch.arange(num_rails, device="cpu").view(num_rails, 1, 1)
+    source_forward_units = int(((egress != owner) & active).sum())
+    target_units = 0
+    destination_forward_units = 0
+    for rail in range(num_rails):
+        targets_rail = active & target_masks.bitwise_and(1 << rail).ne(0)
+        target_units += int(targets_rail.sum())
+        destination_forward_units += int((targets_rail & egress.ne(rail)).sum())
+    owner_is_target = active & target_masks.bitwise_and(
+        torch.ones_like(owner, dtype=target_masks.dtype).bitwise_left_shift(owner)
+    ).ne(0)
+    minimum_local_forward_units = target_units - int(owner_is_target.sum())
+    local_forward_units = source_forward_units + destination_forward_units
+    extra_local_forward_units = local_forward_units - minimum_local_forward_units
+    if source_forward_units != int(path_units[2] + path_units[3]):
+        raise RuntimeError("hop snapshot source-forward accounting disagrees")
+    if extra_local_forward_units < 0:
+        raise RuntimeError("hop snapshot local-forward accounting is negative")
+    owner_to_egress_moved_copies = [
+        [
+            0
+            if owner_index == rail
+            else int(
+                (active[owner_index] & egress[owner_index].eq(rail)).sum()
+            )
+            for rail in range(num_rails)
+        ]
+        for owner_index in range(num_rails)
+    ]
+    if sum(map(sum, owner_to_egress_moved_copies)) != moved_copies:
+        raise RuntimeError("hop snapshot owner/egress movement disagrees")
+    return {
+        "status": status,
+        "path_units": path_units.tolist(),
+        "source_forward_units": source_forward_units,
+        "destination_forward_units": destination_forward_units,
+        "minimum_local_forward_units": minimum_local_forward_units,
+        "extra_local_forward_units": extra_local_forward_units,
+        "moved_copies": moved_copies,
+        "owner_to_egress_moved_copies": owner_to_egress_moved_copies,
+        "proxy_required": proxy_required.tolist(),
+        "pair_load": pair_load.tolist(),
+        "pair_peak": pair_load.amax(dim=1).tolist(),
+        "source_load": source_load.tolist(),
+        "source_peak": int(source_load.max()),
+    }
 
 
 def _prepare_checked(
@@ -422,7 +505,8 @@ def _prepare_checked(
     )
     if error is not None:
         raise RuntimeError(error)
-    assert status == 0
+    if status != 0:
+        raise RuntimeError(f"hop planner prepare failed with status {status}")
     return status
 
 
@@ -484,6 +568,7 @@ def _run_iteration(
     timings = {name: 0 for name in _ALL_PHASES}
     world_gate_ns: dict[str, int] = {}
     outputs: tuple[torch.Tensor, ...] | None = None
+    hop_diagnostics: dict[str, object] | None = None
     stage_result: torch.Tensor | None = None
     phase_failure = None
 
@@ -544,6 +629,26 @@ def _run_iteration(
             },
             control_group,
         )
+        if category == "cold" and hop_mode != "legacy":
+            hop_diagnostics, _, error = _timed(
+                lambda: _hop_plan_diagnostics(
+                    runtime,
+                    invocation_id,
+                    max_two_hop_percent if hop_mode == "adaptive" else 0,
+                )
+            )
+            _, world_gate_ns["hop_snapshot"] = _world_gate(
+                "hop snapshot WORLD gate",
+                {
+                    "error": error,
+                    "status": (
+                        -1
+                        if hop_diagnostics is None
+                        else int(hop_diagnostics["status"])
+                    ),
+                },
+                control_group,
+            )
         if stage == "return" and interference_mode != "compute-only":
             prerequisite_function = lambda: _source_shuffle(
                 runtime, x, topk_weights, invocation_id, None)
@@ -691,6 +796,7 @@ def _run_iteration(
         "logical_bytes": int(logical_bytes_by_rank[rank]),
         "logical_bytes_per_second": (
             int(logical_bytes_by_rank[rank]) * 1e9 / timings["stage"]),
+        "hop_diagnostics": hop_diagnostics,
     }
     rank_rows = _gather_objects(local, control_group)
     rank_raw = sorted(
@@ -787,15 +893,42 @@ def _movement_accounting(
         for segment in bucket:
             owner_to_egress[int(segment.owner)][int(segment.egress)] += \
                 int(segment.count)
+    movement = _movement_from_owner_to_egress(
+        owner_to_egress,
+        logical_token_bytes=logical_token_bytes,
+        stage=stage,
+    )
+    assert tuple(movement["incoming_moved_copies_per_egress"]) == tuple(
+        int(value) for value in schedule.proxy_required
+    )
+    assert sum(movement["outgoing_moved_copies_per_rank"]) == \
+        int(schedule.moved_copies)
+    return movement
+
+
+def _movement_from_owner_to_egress(
+    owner_to_egress: Sequence[Sequence[int]],
+    *,
+    logical_token_bytes: int,
+    stage: str,
+) -> dict[str, object]:
+    if stage not in ("source", "return"):
+        raise ValueError(f"unsupported movement accounting stage: {stage!r}")
+    if logical_token_bytes < 0:
+        raise ValueError("logical_token_bytes must be nonnegative")
+    if len(owner_to_egress) != _WORLD_SIZE or any(
+        len(row) != _WORLD_SIZE for row in owner_to_egress
+    ):
+        raise RuntimeError("owner/egress movement shape differs from WORLD")
+    owner_to_egress = [list(map(int, row)) for row in owner_to_egress]
+    if any(value < 0 for row in owner_to_egress for value in row):
+        raise ValueError("owner/egress movement counts must be nonnegative")
     outgoing_counts = [sum(row) for row in owner_to_egress]
     incoming_counts = [
         sum(owner_to_egress[owner][egress] for owner in range(_WORLD_SIZE))
         for egress in range(_WORLD_SIZE)
     ]
-    assert tuple(incoming_counts) == tuple(int(value)
-                                           for value in schedule.proxy_required)
-    assert sum(outgoing_counts) == sum(incoming_counts) == \
-        int(schedule.moved_copies)
+    assert sum(outgoing_counts) == sum(incoming_counts)
     selected_counts = outgoing_counts if stage == "source" else incoming_counts
     return {
         "owner_to_egress_moved_copies": owner_to_egress,
@@ -852,15 +985,21 @@ def _git_manifest() -> dict[str, object]:
             stderr=subprocess.PIPE,
             text=True,
             timeout=10,
+            cwd=_REPOSITORY_ROOT,
         )
         return result.stdout.strip()
 
     try:
         commit = run("git", "rev-parse", "HEAD")
+        top_level = Path(run("git", "rev-parse", "--show-toplevel")).resolve()
+        if top_level != _REPOSITORY_ROOT:
+            raise RuntimeError(
+                f"git top-level {top_level} differs from {_REPOSITORY_ROOT}"
+            )
         status = run("git", "status", "--porcelain=v1",
                      "--untracked-files=all").splitlines()
         return {"commit": commit, "dirty": bool(status), "status": status}
-    except (OSError, subprocess.CalledProcessError,
+    except (OSError, RuntimeError, subprocess.CalledProcessError,
             subprocess.TimeoutExpired) as error:
         return {
             "commit": None,
@@ -972,6 +1111,11 @@ def _system_snapshot() -> dict[str, object]:
         if ("nvidia-cuda-mps-control" in line or
             "nvidia-cuda-mps-server" in line)
     ]
+    profiler_rows = [
+        line
+        for line in str(process_table["stdout"]).splitlines()
+        if re.search(r"\b(?:nsys|ncu|nvprof|compute-sanitizer)\b", line)
+    ]
     return {
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "cuda_home": cuda_home,
@@ -1000,6 +1144,7 @@ def _system_snapshot() -> dict[str, object]:
         )),
         "process_table": process_table,
         "mps_process_rows": mps_rows,
+        "profiler_process_rows": profiler_rows,
     }
 
 
@@ -1137,6 +1282,14 @@ def _build_report(
     assert len(cold) == 1
     assert len(warm) == args.warmup_iters
     assert len(steady) == args.steady_iters
+    hop_diagnostics = None
+    if args.hop_mode != "legacy":
+        rank_diagnostics = [row["hop_diagnostics"] for row in cold[0]["rank_raw"]]
+        if any(value is None for value in rank_diagnostics):
+            raise RuntimeError("cold hop snapshot is missing")
+        if any(value != rank_diagnostics[0] for value in rank_diagnostics[1:]):
+            raise RuntimeError("hop snapshots differ across ranks")
+        hop_diagnostics = dict(rank_diagnostics[0])
     schedule = _schedule(spec.plan)
     if args.launch_command_json is None:
         command = [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]
@@ -1154,11 +1307,36 @@ def _build_report(
     )
     logical_token_bytes = int(
         layout[5] if args.stage == "source" else layout[7])
-    movement = _movement_accounting(
+    if hop_diagnostics is not None:
+        hop_diagnostics["local_forward_unit_bytes"] = logical_token_bytes
+        for name in (
+            "source_forward",
+            "destination_forward",
+            "minimum_local_forward",
+            "extra_local_forward",
+        ):
+            hop_diagnostics[f"{name}_bytes"] = (
+                int(hop_diagnostics[f"{name}_units"]) * logical_token_bytes)
+    legacy_movement = _movement_accounting(
         schedule,
         logical_token_bytes=logical_token_bytes,
         stage=args.stage,
     )
+    movement = legacy_movement
+    if hop_diagnostics is not None:
+        movement = _movement_from_owner_to_egress(
+            hop_diagnostics["owner_to_egress_moved_copies"],
+            logical_token_bytes=logical_token_bytes,
+            stage=args.stage,
+        )
+        if sum(movement["outgoing_moved_copies_per_rank"]) != int(
+            hop_diagnostics["moved_copies"]
+        ):
+            raise RuntimeError("measured hop movement total disagrees")
+        if movement["incoming_moved_copies_per_egress"] != list(
+            hop_diagnostics["proxy_required"]
+        ):
+            raise RuntimeError("measured hop proxy movement disagrees")
     created = datetime.now(timezone.utc)
     for key in ("git", "extension", "loaded_libraries", "sources"):
         assert pre_identity[key] == post_identity[key], key
@@ -1220,14 +1398,25 @@ def _build_report(
             args.max_two_hop_percent if args.hop_mode == "adaptive" else 0
         ),
         "hop_penalty_percent": args.hop_penalty_percent,
-        "moved_copies_global": schedule.moved_copies,
-        "proxy_required_per_egress": list(schedule.proxy_required),
+        "moved_copies_global": (
+            schedule.moved_copies
+            if hop_diagnostics is None
+            else int(hop_diagnostics["moved_copies"])
+        ),
+        "proxy_required_per_egress": (
+            list(schedule.proxy_required)
+            if hop_diagnostics is None
+            else list(hop_diagnostics["proxy_required"])
+        ),
         "owner_to_egress_moved_copies":
             movement["owner_to_egress_moved_copies"],
         "outgoing_moved_copies_per_rank":
             movement["outgoing_moved_copies_per_rank"],
         "incoming_moved_copies_per_egress":
             movement["incoming_moved_copies_per_egress"],
+        "legacy_reference_moved_copies_global": schedule.moved_copies,
+        "legacy_reference_proxy_required_per_egress":
+            list(schedule.proxy_required),
         "dtype": "bfloat16",
         "interference_mode": args.interference_mode,
         "interference_compute_shape": list(_INTERFERENCE_COMPUTE_SHAPE),
@@ -1287,6 +1476,8 @@ def _build_report(
     ) and bool(gpu_state_validation["valid"])
     no_mps = not pre_system["mps_process_rows"] and \
         not post_system["mps_process_rows"]
+    no_profiler = not pre_system["profiler_process_rows"] and \
+        not post_system["profiler_process_rows"]
     git_clean = post_identity["git"].get("dirty") is False
     measurement_depth_ok = (
         args.warmup_iters >= _FORMAL_MIN_WARMUP_ITERATIONS and
@@ -1294,7 +1485,7 @@ def _build_report(
     )
     persistent_report_requested = args.json_out is not None
     baseline_collection_eligible = (
-        git_clean and system_commands_ok and no_mps and
+        git_clean and system_commands_ok and no_mps and no_profiler and
         not unexpected_app_pids and measurement_depth_ok and
         persistent_report_requested and not args.nvtx and
         args.interference_mode == "none"
@@ -1314,13 +1505,15 @@ def _build_report(
         assert logical_bytes == selected_logical_bytes_aggregate
     traffic_accounting: dict[str, object] = {
         "path_accounting_scope": (
-            "measured legacy plan" if args.hop_mode == "legacy" else
-            "legacy reference only; hop counters are not retained"
+            "measured legacy plan"
+            if args.hop_mode == "legacy"
+            else "cold measured hop plan; outside steady timing"
         ),
         "logical_numerator_scope": (
             "no moved-record numerator; target window is the fixed BF16 GEMM"
             if args.interference_mode == "compute-only" else
-            "unavailable until measured hop-plan path counters are retained"
+            "measured hop counters are retained outside steady timing; the "
+            "hop-mode stage numerator remains intentionally disabled"
             if args.hop_mode != "legacy" else
             "moved TokenLayout record bytes counted once, aggregated across "
             "all 8 ranks; not physical link or memory-controller traffic"),
@@ -1330,9 +1523,11 @@ def _build_report(
         "stage_logical_bytes_per_rank": logical_bytes_by_rank,
         "stage_logical_bytes_aggregate": logical_bytes,
         "legacy_reference_logical_bytes_per_rank":
-            selected_logical_bytes_by_rank,
+            legacy_movement["selected_logical_bytes_per_rank"],
         "legacy_reference_logical_bytes_aggregate":
-            selected_logical_bytes_aggregate,
+            legacy_movement["selected_logical_bytes_aggregate"],
+        "legacy_reference_owner_to_egress_moved_copies":
+            legacy_movement["owner_to_egress_moved_copies"],
         "owner_to_egress_moved_copies":
             movement["owner_to_egress_moved_copies"],
         "outgoing_moved_copies_per_rank":
@@ -1346,6 +1541,8 @@ def _build_report(
         "incoming_logical_bytes_per_egress":
             movement["incoming_logical_bytes_per_egress"],
     }
+    if hop_diagnostics is not None:
+        traffic_accounting["measured_hop_plan"] = hop_diagnostics
     if args.stage == "return":
         num_reduce_rows = min(
             spec.plan.num_scaleout_ranks, spec.plan.num_topk)
@@ -1413,6 +1610,7 @@ def _build_report(
                 "unexpected_compute_app_pids": unexpected_app_pids,
                 "system_commands_ok": system_commands_ok,
                 "mps_processes_absent": no_mps,
+                "profiler_processes_absent": no_profiler,
                 "gpu_state_validation": gpu_state_validation,
                 "sampling_limit": (
                     "pre/post snapshots can miss a transient mid-run process, "
@@ -1432,8 +1630,8 @@ def _build_report(
             "profiler_detection": (
                 "explicit --nvtx diagnostic mode; never baseline eligible"
                 if args.nvtx else
-                "not auto-detected; only a direct unwrapped invocation may "
-                "be accepted as a profiler-free baseline"),
+                "pre/post process tables must contain no nsys, ncu, nvprof, "
+                "or compute-sanitizer process"),
             "cold_iterations": 1,
             "cold_definition": (
                 "first transaction after CUDA context, ElasticBuffer, input "

@@ -27,9 +27,9 @@ def _percentile(values: list[float], percentile: float) -> float:
     return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
 
 
-def _records(tokens: int, mode: str) -> torch.Tensor:
+def _records(tokens: int, pattern: str) -> torch.Tensor:
     records = torch.full((8, tokens, 8), _UNUSED, dtype=torch.int64, device="cuda")
-    if mode == "adaptive":
+    if pattern == "singleton":
         records[0, :, 0] = (1 << 32) | 1
     else:
         for token in range(tokens):
@@ -39,26 +39,37 @@ def _records(tokens: int, mode: str) -> torch.Tensor:
 
 def _run(
     records: torch.Tensor, mode: str, channels: int, planner_chunk_size: int
-) -> None:
+) -> tuple[torch.Tensor, ...]:
     tokens = records.size(1)
-    _C._build_rail_balance_hop_one_hop_plan(
-        records,
-        channels,
-        2,
-        tokens,
-        8 * tokens,
-        0,
-        0,
-        25 if mode == "adaptive" else 0,
-        0,
-        planner_chunk_size,
+    return tuple(
+        _C._build_rail_balance_hop_one_hop_plan(
+            records,
+            channels,
+            2,
+            tokens,
+            8 * tokens,
+            0,
+            0,
+            25 if mode == "adaptive" else 0,
+            0,
+            planner_chunk_size,
+        )
     )
+
+
+def _check_status(outputs: tuple[torch.Tensor, ...]) -> None:
+    if not outputs or int(outputs[-1].item()) != 0:
+        status = None if not outputs else int(outputs[-1].item())
+        raise RuntimeError(f"hop planner failed with status {status}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--mode", choices=("one_hop", "adaptive", "both"), default="both"
+    )
+    parser.add_argument(
+        "--pattern", choices=("rotating", "singleton"), default="rotating"
     )
     parser.add_argument("--tokens", type=int, nargs="+", default=(8, 32, 128, 512))
     parser.add_argument("--channels", type=int, default=8)
@@ -83,11 +94,13 @@ def main() -> None:
     torch.cuda.set_device(args.device)
     modes = ("one_hop", "adaptive") if args.mode == "both" else (args.mode,)
     rows = []
-    for mode in modes:
-        for tokens in args.tokens:
-            records = _records(tokens, mode)
+    for tokens in args.tokens:
+        records = _records(tokens, args.pattern)
+        for mode in modes:
             for _ in range(args.warmup):
-                _run(records, mode, args.channels, args.planner_chunk_size)
+                _check_status(
+                    _run(records, mode, args.channels, args.planner_chunk_size)
+                )
             samples = []
             for sample in range(args.steady):
                 if args.nvtx:
@@ -95,8 +108,11 @@ def main() -> None:
                         f"rail_balance_hop_plan/{mode}/N{tokens}_sample{sample}"
                     )
                 started = time.perf_counter_ns()
-                _run(records, mode, args.channels, args.planner_chunk_size)
+                outputs = _run(
+                    records, mode, args.channels, args.planner_chunk_size
+                )
                 samples.append((time.perf_counter_ns() - started) / 1000)
+                _check_status(outputs)
                 if args.nvtx:
                     torch.cuda.nvtx.range_pop()
             rows.append(
@@ -107,6 +123,7 @@ def main() -> None:
                     "K": 8,
                     "C": args.channels,
                     "D": 2,
+                    "workload_pattern": args.pattern,
                     "planner_chunk_size": args.planner_chunk_size,
                     "samples_us": samples,
                     "median_us": statistics.median(samples),
@@ -123,6 +140,7 @@ def main() -> None:
         "device": args.device,
         "warmup": args.warmup,
         "steady": args.steady,
+        "status_checked": True,
         "nvtx": args.nvtx,
         "rows": rows,
     }
