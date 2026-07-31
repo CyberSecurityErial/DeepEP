@@ -327,6 +327,11 @@ public:
             .source_load = torch::zeros({num_rails}, int_options),
             .owner_remaining = torch::zeros(
                 {num_rails, num_destinations}, int_options),
+            .endpoint_count = torch::zeros(
+                {num_rails, num_destinations, num_rails}, int_options),
+            .endpoint_owner_quota = torch::zeros(
+                {num_rails, num_destinations, num_rails}, int_options),
+            .owner_group_cursor = torch::zeros({1}, int_options),
             .path_units = torch::zeros({4}, int_options),
             .local_records = local_records,
             .peer_records = peer_records,
@@ -334,6 +339,7 @@ public:
             .two_hop_threshold_percent = two_hop_threshold_percent,
             .max_two_hop_percent = max_two_hop_percent,
             .hop_penalty_percent = hop_penalty_percent,
+            .planner_chunk_size = 1,
             .prepared = prepare_rail_balance_hop_plan(num_channels),
         };
     }
@@ -1196,6 +1202,9 @@ public:
                 hop.pair_load.data_ptr<int>(),
                 hop.source_load.data_ptr<int>(),
                 hop.owner_remaining.data_ptr<int>(),
+                hop.endpoint_count.data_ptr<int>(),
+                hop.endpoint_owner_quota.data_ptr<int>(),
+                hop.owner_group_cursor.data_ptr<int>(),
                 pending.raw.retained, pending.raw.moved,
                 pending.raw.owner_channel_prefix,
                 pending.raw.group_prefix, pending.raw.proxy_required,
@@ -1206,6 +1215,7 @@ public:
                 pending.num_max_tokens_per_rank,
                 pending.proxy_capacity_per_egress,
                 pending.normalized_remainder_seed,
+                hop.planner_chunk_size,
                 hop.two_hop_threshold_percent,
                 hop.max_two_hop_percent,
                 hop.hop_penalty_percent, comm_stream);
@@ -2476,6 +2486,13 @@ public:
                     {num_source_ranks}, int_options),
                 .owner_remaining = torch::zeros(
                     {num_source_ranks, num_destinations}, int_options),
+                .endpoint_count = torch::zeros(
+                    {num_source_ranks, num_destinations, num_source_ranks},
+                    int_options),
+                .endpoint_owner_quota = torch::zeros(
+                    {num_source_ranks, num_destinations, num_source_ranks},
+                    int_options),
+                .owner_group_cursor = torch::zeros({1}, int_options),
                 .path_units = torch::zeros({4}, int_options),
                 .local_records = nullptr,
                 .peer_records = {},
@@ -2483,6 +2500,7 @@ public:
                 .two_hop_threshold_percent = two_hop_threshold_percent,
                 .max_two_hop_percent = max_two_hop_percent,
                 .hop_penalty_percent = hop_penalty_percent,
+                .planner_chunk_size = 1,
                 .prepared = prepare_rail_balance_hop_plan(num_channels),
             });
         }
@@ -2552,6 +2570,9 @@ public:
                 hop->pair_load.data_ptr<int>(),
                 hop->source_load.data_ptr<int>(),
                 hop->owner_remaining.data_ptr<int>(),
+                hop->endpoint_count.data_ptr<int>(),
+                hop->endpoint_owner_quota.data_ptr<int>(),
+                hop->owner_group_cursor.data_ptr<int>(),
                 plan.retained.data_ptr<int>(), plan.moved.data_ptr<int>(),
                 plan.owner_channel_prefix.data_ptr<int>(),
                 plan.group_prefix.data_ptr<int>(),
@@ -2561,6 +2582,7 @@ public:
                 num_source_ranks, num_max_tokens_per_rank, num_topk,
                 num_channels, num_destinations, num_max_tokens_per_rank,
                 proxy_capacity, normalized_remainder_seed,
+                hop->planner_chunk_size,
                 hop->two_hop_threshold_percent,
                 hop->max_two_hop_percent,
                 hop->hop_penalty_percent, comm_stream);

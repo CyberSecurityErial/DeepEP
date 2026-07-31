@@ -165,6 +165,9 @@ public:
         int* pair_load;
         int* source_load;
         int* owner_remaining;
+        int* endpoint_count;
+        int* endpoint_owner_quota;
+        int* owner_group_cursor;
         int* retained;
         int* moved;
         int* retained_prefix;
@@ -181,6 +184,7 @@ public:
         int num_max_tokens_per_rank;
         int proxy_capacity_per_egress;
         int planner_seed;
+        int planner_chunk_size;
         int two_hop_threshold_percent;
         int max_two_hop_percent;
         int hop_penalty_percent;
@@ -207,6 +211,8 @@ static void __instantiate_kernel() {
             kernel, config,
             args.records, args.resolutions,
             args.pair_load, args.source_load, args.owner_remaining,
+            args.endpoint_count, args.endpoint_owner_quota,
+            args.owner_group_cursor,
             args.retained, args.moved, args.retained_prefix,
             args.group_prefix,
             args.proxy_required, args.path_units, args.moved_copies,
@@ -214,6 +220,7 @@ static void __instantiate_kernel() {
             args.num_channels, args.num_destinations,
             args.num_max_tokens_per_rank,
             args.proxy_capacity_per_egress, args.planner_seed,
+            args.planner_chunk_size,
             args.two_hop_threshold_percent, args.max_two_hop_percent,
             args.hop_penalty_percent));
     }
@@ -251,6 +258,9 @@ static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
         .pair_load = nullptr,
         .source_load = nullptr,
         .owner_remaining = nullptr,
+        .endpoint_count = nullptr,
+        .endpoint_owner_quota = nullptr,
+        .owner_group_cursor = nullptr,
         .retained = nullptr,
         .moved = nullptr,
         .retained_prefix = nullptr,
@@ -267,6 +277,7 @@ static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
         .num_max_tokens_per_rank = 0,
         .proxy_capacity_per_egress = 0,
         .planner_seed = 0,
+        .planner_chunk_size = 1,
         .two_hop_threshold_percent = 0,
         .max_two_hop_percent = 0,
         .hop_penalty_percent = 0,
@@ -325,6 +336,9 @@ static void launch_prepared_rail_balance_hop_plan(
     int* pair_load,
     int* source_load,
     int* owner_remaining,
+    int* endpoint_count,
+    int* endpoint_owner_quota,
+    int* owner_group_cursor,
     int* retained,
     int* moved,
     int* retained_prefix,
@@ -341,6 +355,7 @@ static void launch_prepared_rail_balance_hop_plan(
     const int& num_max_tokens_per_rank,
     const int& proxy_capacity_per_egress,
     const int& planner_seed,
+    const int& planner_chunk_size,
     const int& two_hop_threshold_percent,
     const int& max_two_hop_percent,
     const int& hop_penalty_percent,
@@ -353,6 +368,9 @@ static void launch_prepared_rail_balance_hop_plan(
             .pair_load = pair_load,
             .source_load = source_load,
             .owner_remaining = owner_remaining,
+            .endpoint_count = endpoint_count,
+            .endpoint_owner_quota = endpoint_owner_quota,
+            .owner_group_cursor = owner_group_cursor,
             .retained = retained,
             .moved = moved,
             .retained_prefix = retained_prefix,
@@ -369,6 +387,7 @@ static void launch_prepared_rail_balance_hop_plan(
             .num_max_tokens_per_rank = num_max_tokens_per_rank,
             .proxy_capacity_per_egress = proxy_capacity_per_egress,
             .planner_seed = planner_seed,
+            .planner_chunk_size = planner_chunk_size,
             .two_hop_threshold_percent = two_hop_threshold_percent,
             .max_two_hop_percent = max_two_hop_percent,
             .hop_penalty_percent = hop_penalty_percent,
@@ -1085,6 +1104,9 @@ struct RailBalanceHopPlanState {
     torch::Tensor pair_load;
     torch::Tensor source_load;
     torch::Tensor owner_remaining;
+    torch::Tensor endpoint_count;
+    torch::Tensor endpoint_owner_quota;
+    torch::Tensor owner_group_cursor;
     torch::Tensor path_units;
     rail_balance::HopCopyRecord* local_records;
     std::array<const rail_balance::HopCopyRecord*, 32> peer_records;
@@ -1092,6 +1114,7 @@ struct RailBalanceHopPlanState {
     int two_hop_threshold_percent;
     int max_two_hop_percent;
     int hop_penalty_percent;
+    int planner_chunk_size;
     PreparedRailBalanceHopPlan prepared;
 };
 
@@ -1615,7 +1638,8 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
     const int& planner_seed,
     const int& two_hop_threshold_percent,
     const int& max_two_hop_percent,
-    const int& hop_penalty_percent) {
+    const int& hop_penalty_percent,
+    const int& planner_chunk_size) {
     EP_HOST_ASSERT(records.dim() == 3);
     EP_HOST_ASSERT(records.is_cuda() and records.is_contiguous());
     EP_HOST_ASSERT(records.scalar_type() == torch::kLong);
@@ -1640,6 +1664,7 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
                    max_two_hop_percent <= 100);
     EP_HOST_ASSERT(hop_penalty_percent >= 0 and
                    hop_penalty_percent <= 10000);
+    EP_HOST_ASSERT(planner_chunk_size >= 1);
 
     c10::cuda::CUDAGuard device_guard(records.device());
     const int device_index = records.get_device();
@@ -1658,6 +1683,12 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
     auto source_load = torch::zeros({num_rails}, int_options);
     auto owner_remaining = torch::zeros(
         {num_rails, num_destinations}, int_options);
+    auto endpoint_count = torch::zeros(
+        {num_rails, num_destinations, num_rails}, int_options);
+    auto endpoint_owner_quota = torch::zeros_like(endpoint_count);
+    auto owner_group_cursor = planner_chunk_size > 1 ? torch::zeros(
+        {32, num_rails, num_channels, num_destinations}, int_options) :
+        torch::zeros({1}, int_options);
     auto retained = torch::zeros(
         {num_rails, num_channels, num_destinations}, int_options);
     auto moved = torch::zeros(
@@ -1683,6 +1714,9 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
         .pair_load = nullptr,
         .source_load = nullptr,
         .owner_remaining = nullptr,
+        .endpoint_count = nullptr,
+        .endpoint_owner_quota = nullptr,
+        .owner_group_cursor = nullptr,
         .retained = nullptr,
         .moved = nullptr,
         .retained_prefix = nullptr,
@@ -1699,6 +1733,7 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
         .num_max_tokens_per_rank = 0,
         .proxy_capacity_per_egress = 0,
         .planner_seed = 0,
+        .planner_chunk_size = 1,
         .two_hop_threshold_percent = 0,
         .max_two_hop_percent = 0,
         .hop_penalty_percent = 0,
@@ -1718,6 +1753,9 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
             .pair_load = pair_load.data_ptr<int>(),
             .source_load = source_load.data_ptr<int>(),
             .owner_remaining = owner_remaining.data_ptr<int>(),
+            .endpoint_count = endpoint_count.data_ptr<int>(),
+            .endpoint_owner_quota = endpoint_owner_quota.data_ptr<int>(),
+            .owner_group_cursor = owner_group_cursor.data_ptr<int>(),
             .retained = retained.data_ptr<int>(),
             .moved = moved.data_ptr<int>(),
             .retained_prefix = retained_prefix.data_ptr<int>(),
@@ -1734,6 +1772,7 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
             .num_max_tokens_per_rank = num_max_tokens_per_rank,
             .proxy_capacity_per_egress = proxy_capacity_per_egress,
             .planner_seed = planner_seed,
+            .planner_chunk_size = planner_chunk_size,
             .two_hop_threshold_percent = two_hop_threshold_percent,
             .max_two_hop_percent = max_two_hop_percent,
             .hop_penalty_percent = hop_penalty_percent,
@@ -1931,7 +1970,8 @@ static void register_rail_balance_hybrid_plan_apis(pybind11::module_& m) {
         pybind11::arg("planner_seed") = 0,
         pybind11::arg("two_hop_threshold_percent") = 0,
         pybind11::arg("max_two_hop_percent") = 0,
-        pybind11::arg("hop_penalty_percent") = 0);
+        pybind11::arg("hop_penalty_percent") = 0,
+        pybind11::arg("planner_chunk_size") = 1);
     m.def(
         "_build_rail_balance_hybrid_plan",
         &build_rail_balance_hybrid_plan,
