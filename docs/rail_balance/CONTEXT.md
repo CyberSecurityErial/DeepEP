@@ -1250,3 +1250,7 @@ Out of scope until evidence expands the project:
   the one-hop microbenchmark is unchanged. GPU 11/11, both vnode round trips,
   and focused memcheck/initcheck/synccheck pass. Clean committed-tree evidence
   is still required.
+- Clean `7b98f83` 10+100 accepts HA060-J: adaptive finish is 59.493 ms median /
+  59.689 ms p95, 5.19x below O100's 308.736 ms. The one-hop control is stable
+  at 41.510 ms versus 41.372 ms. Both eligibility gates pass; capability and
+  claim scope remain unchanged.

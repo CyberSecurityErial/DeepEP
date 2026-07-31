@@ -6959,3 +6959,20 @@ The first vnode command incorrectly supplied an unsupported `--master-port`
 and stopped in argparse before GPU execution. It is retained as a command-line
 failure, not a kernel failure; the corrected commands passed. Capability
 remains false, and the C100 speedup is provisional until a clean 10+100 run.
+
+### Clean HA060-J closeout
+
+Commit `7b98f83` passes both clean-tree 10+100 controls:
+
+```text
+one-hop finish median / p95       41.510 / 41.758 ms
+one-hop source median / p95        0.120 / 0.153 ms
+adaptive finish median / p95      59.493 / 59.689 ms
+adaptive source median / p95       0.642 / 0.717 ms
+adaptive finish speedup vs O100                  5.19x
+```
+
+The one-hop finish changes only +0.33% from 41.372 ms, while adaptive falls
+from 308.736 ms. Population CV is 0.250%/0.122%, and both reports pass baseline
+eligibility. HA060-J is accepted for the experimental planner; real Gin/RDMA
+capability remains closed.

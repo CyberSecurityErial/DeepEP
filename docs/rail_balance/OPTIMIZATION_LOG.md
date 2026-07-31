@@ -2479,3 +2479,9 @@ GPU/vnode/sanitizer gates                              PASS
 
 This is preliminary dirty-tree evidence. A clean 10+100 run after the code
 checkpoint decides acceptance.
+
+Clean commit `7b98f83` accepts O101. One-hop is a stable control at 41.510 ms
+median versus 41.372 ms before the edit. Adaptive `finish` is 59.493 ms median
+/ 59.689 ms p95 versus 308.736 / 308.977 ms at O100, a 5.19x median speedup.
+Source-stage medians are 119.918 us and 642.279 us respectively and remain a
+separate data-plane boundary. Both eligibility gates pass.

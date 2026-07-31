@@ -455,3 +455,21 @@ median from 17.199 to 11.791 ms. A C100 3+20 diagnostic reduces `finish` from
 
 Correctness and sanitizer gates pass. These are diagnostic results pending a
 clean distribution and do not expand claim scope.
+
+Clean commit `7b98f83` 10+100 distributions accept the optimization:
+
+| Mode | finish median / p95 (ms) | source median / p95 (us) |
+| --- | ---: | ---: |
+| one-hop | 41.510 / 41.758 | 119.918 / 152.539 |
+| adaptive | 59.493 / 59.689 | 642.279 / 717.373 |
+
+Adaptive finish is 5.19x below the O100 308.736 ms boundary; one-hop changes
+only +0.33% from 41.372 ms. Both reports pass baseline eligibility and hash to:
+
+```text
+2e92c80f019977837927682e2f9b3ed9a0ef652bb91d09370aa32ba265a1d3e2  c100-onehop-warp-records-formal.json
+0de35c1bb93412c15c3df2133dcfd548a75d56e13e6099571333554ad43967f8  c100-adaptive-warp-records-formal.json
+```
+
+The evidence remains a checked single-node adapter result, not real Rail/NIC
+performance.
