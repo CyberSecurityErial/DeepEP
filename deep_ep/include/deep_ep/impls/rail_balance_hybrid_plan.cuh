@@ -392,7 +392,12 @@ void rail_balance_hop_plan_impl(
                     best_egress * num_destinations + destination] >
                     num_max_tokens_per_rank)
                 best_egress = -1;
-        } else for (int egress = 0; egress < num_rails; ++egress) {
+        } else {
+          const auto pair_peaks = hybrid_plan_detail::find_load_peaks(
+              pair_load + destination * num_rails, num_rails);
+          const auto source_peaks =
+              hybrid_plan_detail::find_load_peaks(source_load, num_rails);
+          for (int egress = 0; egress < num_rails; ++egress) {
             if ((candidates & (uint32_t{1} << egress)) == 0)
                 continue;
             const int pair_offset = destination * num_rails + egress;
@@ -401,16 +406,10 @@ void rail_balance_hop_plan_impl(
                     num_max_tokens_per_rank)
                 continue;
 
-            int pair_peak = 0;
-            int source_peak = 0;
-            for (int rail = 0; rail < num_rails; ++rail) {
-                pair_peak = max(
-                    pair_peak,
-                    pair_load[destination * num_rails + rail] +
-                        (rail == egress));
-                source_peak = max(
-                    source_peak, source_load[rail] + (rail == egress));
-            }
+            const int pair_peak = max(
+                pair_peaks.first, pair_load[pair_offset] + 1);
+            const int source_peak = max(
+                source_peaks.first, source_load[egress] + 1);
             const int local_forwards = (egress != owner) +
                 __popc(record.target_mask & ~(uint32_t{1} << egress));
             const int origin = static_cast<int>(
@@ -433,6 +432,7 @@ void rail_balance_hop_plan_impl(
                 best_local_forwards = local_forwards;
                 best_tie = tie;
             }
+          }
         }
         if (best_egress < 0) {
           hybrid_plan_detail::report_error(

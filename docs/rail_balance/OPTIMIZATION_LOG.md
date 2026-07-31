@@ -2508,3 +2508,20 @@ Clean commit `7b0466f` accepts O102. One-hop `finish` is 34.701 ms median /
 34.898 ms p95 (1.196x below O101); adaptive is 52.919 / 52.989 ms (1.124x).
 Source-stage medians remain separate at 116.921/665.269 us. Both reports pass
 baseline eligibility.
+
+## O103 — reuse pair/source peaks per multi-candidate record
+
+For a fixed record, current pair/source loads do not change while its endpoint
+candidates are compared. O103 scans each load vector once and evaluates each
+candidate as `max(current_peak, candidate_load + 1)`. This is algebraically
+identical to rescanning all Rails per candidate.
+
+```text
+C100 rot1 one-hop diagnostic    179.096 -> 173.004 ms (1.035x)
+private one-hop control          12.177 -> 12.078 ms
+```
+
+Exact, vnode, and focused sanitizer gates pass. The modest result is retained
+because the code is smaller and exact. It also closes this line of tuning: the
+remaining rot1 cost is sequential per-copy assignment and requires chunk/group
+planning, not another local score cache.

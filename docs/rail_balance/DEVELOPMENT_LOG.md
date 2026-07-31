@@ -7010,3 +7010,17 @@ Commit `7b0466f` passes clean-tree 10+100 collection. One-hop `finish` is
 52.919 / 52.989 ms, down from 59.493 / 59.689 ms. Source-stage medians are
 116.921 and 665.269 us. Both reports pass eligibility; HA060-K is accepted for
 the experimental planner without changing capability.
+
+## 2026-07-31 — HA060-L: reuse initial assignment peaks
+
+The diagonal fanout cannot measure the generic two-endpoint score. A rot1
+C100 3+20 control measures one-hop `finish` at 179.096 ms. In that path each
+candidate recomputed the same current pair/source maxima. Computing both once
+per record and scoring each candidate with one load gives 173.004 ms (3.5%).
+The N1024/C256 private control moves from 12.177 to 12.078 ms.
+
+GPU exact tests pass 11/11, the off-diagonal vnode round trip passes, and
+focused memcheck/initcheck report zero errors. The edit is retained as a small
+exact simplification, not a solution to the serial planner. Following review,
+the next design target is a parallel count/group/chunk plan with low-frequency
+CPU policy updates rather than further per-copy greedy complexity.

@@ -1262,3 +1262,8 @@ Out of scope until evidence expands the project:
 - Clean `7b0466f` 10+100 accepts HA060-K: one-hop finish is 34.701 ms median /
   34.898 ms p95 and adaptive is 52.919 / 52.989 ms. These are 1.196x and
   1.124x below O101; both eligibility gates pass. Capability remains false.
+- HA060-L computes pair/source maxima once per multi-candidate record instead
+  of once per candidate. A rot1 C100 diagnostic falls from 179.096 to
+  173.004 ms (3.5%); exact 11/11, off-diagonal vnode, and focused sanitizer
+  checks pass. This closes micro-optimization of the serial greedy prototype;
+  the next planner step is group/chunk materialization off the hot path.

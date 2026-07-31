@@ -520,3 +520,16 @@ be007ce3b37100ce4d500de6e3d34b4bc4c78754c6baa587ab9ed1011f96c29c  c100-adaptive-
 ```
 
 Claim scope remains checked single-node adapter only.
+
+### HA060-L multi-candidate peak reuse
+
+The pre-edit rot1 one-hop C100 3+20 `finish` median is 179.096 ms; exact
+per-record peak reuse reduces it to 173.004 ms. Diagnostic artifacts hash to:
+
+```text
+c38b2391038ae039bd79469a7c6c8253f452b6d39bc16140c92c133b15faa729  c100-rot1-onehop-prepeaks-diag.json
+da65b053744e5129dfb6a52fbd1eb60a20f846209119e6194be93996cd55ab0f  c100-rot1-onehop-initial-peaks-diag.json
+```
+
+This is a 3.5% diagnostic improvement with exact/vnode/sanitizer evidence.
+Clean evidence remains pending; no claim scope changes.
