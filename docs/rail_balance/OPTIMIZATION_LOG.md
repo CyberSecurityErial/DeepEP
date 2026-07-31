@@ -2266,3 +2266,44 @@ falsifiable target: determine whether hop source-shuffle scans the dense record
 table or performs avoidable per-copy lookup work. The next edit is forbidden
 until a clean profiler-free distribution plus Nsys and, if needed, NCU locate
 the exposed time. Return smokes (269.417/416.797 us) are likewise diagnostic.
+
+## O095 — precompute retained staging prefixes
+
+Hypothesis: the hop source-shuffle long tail is integer/address work, not TMA
+payload bandwidth. Nsys isolated device 0 at 3,081.955 us while the other seven
+devices took 10–13 us. The hot source line recomputed the retained staging
+offset for every copy by summing all preceding channel/destination counts.
+
+Single variable: the hop planner now writes the exclusive retained prefix for
+each `(egress, channel, destination)` group into the existing, otherwise-unused
+hop specialization of `owner_channel_prefix`. Source shuffle replaces the
+nested rescan with one indexed load. The legacy specialization is unchanged;
+no output tensor, descriptor, resolution field, or persistent buffer byte was
+added.
+
+Matched 3-warmup/20-sample checked-source diagnostics:
+
+| Mode | Before median / p95 (us) | After median / p95 (us) | Speedup |
+| --- | ---: | ---: | ---: |
+| one-hop | 3225.273 / 3246.491 | 129.304 / 148.484 | 24.943x |
+| adaptive | 2878.798 / 2918.892 | 674.253 / 704.638 | 4.270x |
+
+Matched Nsys one-hop device-0 source kernel time falls from 3,081.955 to
+39.488 us (78.047x); aggregate duration across all eight device invocations
+falls from 3,162.436 to 120.416 us (26.262x). The stage is now dominated more
+by fixed launch/gate overhead. These are single-node checked-adapter results,
+not Gin/RDMA or end-to-end speedup.
+
+Rejected evidence and failures are material:
+
+- the first edited launcher still passed a null retained-prefix pointer. The
+  strict kernel returned immediately, producing a false 0.113 ms median; C100
+  status/guard checks passed, but full vnode correctly failed. The pointer was
+  wired through both submit paths, the false samples were rejected, and both
+  one-hop/adaptive full round trips then passed;
+- NCU application replay completed pass 1 but could not reproduce the exact
+  kernel set for pass 2. No `.ncu-rep` was generated and no metric claimed;
+- full-vnode Compute Sanitizer ran the functional round trip to PASS but its
+  NCCL initialization produced `NoKernelImageForDevice` under child-process
+  instrumentation. That run is rejected as tool/environment incompatible.
+  Focused planner memcheck and initcheck remain zero-error.

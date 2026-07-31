@@ -315,6 +315,7 @@ static void submit_prepared_rail_balance_hop_source_shuffle(
     void* arena,
     const rail_balance::HopCopyRecord* records,
     const rail_balance::HopCopyResolution* resolutions,
+    const int* retained_prefix,
     const int* retained,
     const int* group_prefix,
     const int* proxy_required,
@@ -339,7 +340,7 @@ static void submit_prepared_rail_balance_hop_source_shuffle(
             .topk_idx = topk_idx,
             .topk_weights = topk_weights,
             .arena = arena,
-            .owner_channel_prefix = nullptr,
+            .owner_channel_prefix = retained_prefix,
             .keep_count = nullptr,
             .segments = nullptr,
             .num_segments = nullptr,
@@ -376,6 +377,7 @@ static void launch_prepared_rail_balance_hop_source_shuffle(
     void* arena,
     const rail_balance::HopCopyRecord* records,
     const rail_balance::HopCopyResolution* resolutions,
+    const int* retained_prefix,
     const int* retained,
     const int* group_prefix,
     const int* proxy_required,
@@ -393,7 +395,7 @@ static void launch_prepared_rail_balance_hop_source_shuffle(
     submit_prepared_rail_balance_hop_source_shuffle(
         prepared, nccl_dev_comm, nccl_window,
         x, topk_idx, topk_weights, arena, records, resolutions,
-        retained, group_prefix, proxy_required, status,
+        retained_prefix, retained, group_prefix, proxy_required, status,
         num_experts, num_destinations, local_destination,
         num_rails, owner, num_max_tokens_per_rank,
         rank_idx, proxy_capacity, stream);

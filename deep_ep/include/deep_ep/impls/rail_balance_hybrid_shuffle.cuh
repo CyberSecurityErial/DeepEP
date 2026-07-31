@@ -50,7 +50,8 @@ void rail_balance_hybrid_source_shuffle_impl(
     if (source_channel >= num_channels or threadIdx.x >= 32 or
         (num_tokens > 0 and
          (x == nullptr or topk_idx == nullptr or topk_weights == nullptr)) or
-        arena == nullptr or retained == nullptr or group_prefix == nullptr or
+        arena == nullptr or owner_channel_prefix == nullptr or
+        retained == nullptr or group_prefix == nullptr or
         proxy_required == nullptr or status == nullptr or
         (kHopAware and
          (hop_records == nullptr or hop_resolutions == nullptr or
@@ -252,6 +253,17 @@ void rail_balance_hybrid_source_shuffle_impl(
                         (kHopAware or
                          resolution.channel == source_channel) and
                         resolution.proxy_slot == -1;
+                    if constexpr (kHopAware) {
+                        const int retained_begin = __ldg(
+                            owner_channel_prefix +
+                            rail_balance::hybrid_plan_detail::gcd_offset(
+                                owner, resolution.channel, lane,
+                                num_channels, num_destinations));
+                        schedule_valid = schedule_valid and
+                            retained_begin >= 0 and
+                            retained_begin + resolution.remote_slot <
+                                proxy_capacity;
+                    }
                 }
                 if (schedule_valid and resolution.moved == 1) {
                     const int egress = resolution.egress;
@@ -307,17 +319,26 @@ void rail_balance_hybrid_source_shuffle_impl(
                 ptx::exchange(resolution.remote_slot, source_lane);
             const int target_channel =
                 ptx::exchange(resolution.channel, source_lane);
-            int retained_prefix = 0;
-            for (int channel = 0; channel <= target_channel; ++channel) {
-                const int destination_end = channel < target_channel ?
-                    num_destinations : destination;
-                for (int previous_destination = 0;
-                     previous_destination < destination_end;
-                     ++previous_destination) {
-                    retained_prefix += __ldg(retained +
-                        rail_balance::hybrid_plan_detail::gcd_offset(
-                            owner, channel, previous_destination,
-                            num_channels, num_destinations));
+            int retained_prefix;
+            if constexpr (kHopAware) {
+                retained_prefix = __ldg(
+                    owner_channel_prefix +
+                    rail_balance::hybrid_plan_detail::gcd_offset(
+                        owner, target_channel, destination,
+                        num_channels, num_destinations));
+            } else {
+                retained_prefix = 0;
+                for (int channel = 0; channel <= target_channel; ++channel) {
+                    const int destination_end = channel < target_channel ?
+                        num_destinations : destination;
+                    for (int previous_destination = 0;
+                         previous_destination < destination_end;
+                         ++previous_destination) {
+                        retained_prefix += __ldg(retained +
+                            rail_balance::hybrid_plan_detail::gcd_offset(
+                                owner, channel, previous_destination,
+                                num_channels, num_destinations));
+                    }
                 }
             }
             const int retained_slot = retained_prefix + remote_slot;

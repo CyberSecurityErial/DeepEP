@@ -239,3 +239,60 @@ one cold sample, the capacity differs between legacy and hop mode, and
 next hypothesis: hop source-shuffle has exposed work worth attributing with a
 clean profiler-free distribution and Nsys before any kernel edit. Real Gin,
 RDMA, NIC load and end-to-end DeepEP speed remain missing evidence.
+
+## HA060-D: precompute retained staging prefixes
+
+The HA060-C clue was reproduced without a profiler over 3 warmups and 20
+steady iterations. For the C100 matrix source stage at hidden size 256,
+one-hop had a 3,225.273 us median and adaptive had a 2,878.798 us median.
+The legacy control was 502.329 us. These are checked-adapter stage timings,
+not end-to-end or real-Rail claims.
+
+Nsys then attributed the one-hop critical source kernel on device 0 to
+3,081.955 us. Source inspection found that every retained copy recomputed its
+slot base by scanning all preceding channel/destination counters. The single
+variable edit makes the planner write an exclusive retained prefix into the
+existing `owner_channel_prefix` allocation and changes only the hop-aware
+source path to load that value once. It adds no output tensor or public ABI.
+
+After the edit and complete vnode validation, matched 3+20 profiler-free runs
+reported:
+
+| Mode | Before median (us) | After median (us) | Stage speedup |
+| --- | ---: | ---: | ---: |
+| one_hop | 3,225.273 | 129.304 | 24.94x |
+| adaptive | 2,878.798 | 674.253 | 4.27x |
+
+The post-edit Nsys report measured the same device-0 source kernel at
+39.488 us, a 78.05x kernel reduction; the all-device kernel-duration sum fell
+from 3,162.436 us to 120.416 us. Reports are retained at:
+
+```text
+.cache/rail_balance/hop-aware/ha060/c100-onehop-source-nsys.nsys-rep
+.cache/rail_balance/hop-aware/ha060/c100-onehop-source-prefix-nsys.nsys-rep
+```
+
+Their SHA-256 values are respectively
+`a2466876e83271c8f11a910b0ee9b395075815628977be065877c99ecc591992` and
+`f1d3ca0502591f619f0cac728e3093e812020edfb2ef4da25414ab8e04a3ad78`.
+Both one-hop off-diagonal and adaptive diagonal eight-GPU vnode round trips
+passed after the final pointer fix. The GPU planner passed 10/10 under both
+memcheck and initcheck with zero errors.
+
+Rejected observations are preserved rather than counted as evidence:
+
+- The first edit failed to pass the new prefix pointer from the host launcher.
+  The kernel fail-closed early return produced a false 113 us result; full
+  vnode round-trip correctness caught it, and the result was discarded.
+- NCU application replay collected one pass but rejected later passes because
+  the multi-process application did not reproduce a consistent profiled
+  kernel sequence. No `.ncu-rep` exists and no NCU metric is claimed.
+- Full-vnode Compute Sanitizer completed the functional round trip but emitted
+  492 `cudaErrorNoKernelImageForDevice` errors from NCCL initialization. This
+  is retained as a sanitizer/tool compatibility failure, not reported as a
+  RailBalance kernel result.
+
+The current device tools identify the visible accelerator as `NVIDIA L20X`,
+CC 9.0 with 132 SMs. Therefore this checkpoint remains
+`single_node_diagnostic`; it provides no H200, Gin, RDMA, NIC, or real
+multi-node performance claim, and capability remains false.

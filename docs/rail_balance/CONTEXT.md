@@ -1194,3 +1194,12 @@ Out of scope until evidence expands the project:
   the legacy control, GPU planner 10/10, both vnode round trips, and focused
   sanitizer gates pass. Hop path-byte counters are not retained yet, so the
   benchmark refuses to publish a fabricated logical bandwidth numerator.
+- HA060-D removes the hop source-shuffle's per-copy retained-prefix rescan.
+  The hop planner writes one exclusive retained staging prefix into the
+  already-owned `owner_channel_prefix` tensor; source shuffle performs one
+  indexed load. Valid profiler-free C100 source medians improve 24.943x for
+  one-hop and 4.270x for adaptive. Matched Nsys reduces the hotspot GPU kernel
+  from 3,081.955 to 39.488 us. No buffer, resolution, ticket, or public ABI was
+  added. A missing host pointer first caused a fast early return; that result
+  was rejected, the full vnode caught it, and the corrected one-hop/adaptive
+  round trips pass. Capability remains closed.

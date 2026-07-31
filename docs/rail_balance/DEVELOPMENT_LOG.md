@@ -6709,3 +6709,67 @@ The smoke stage medians are recorded only as clues in `OPTIMIZATION_LOG.md`.
 They are cold, one-sample, dirty-tree diagnostics, and `nvidia-smi` identified
 the current devices as L20X. They are not H200, NVLink, Gin, RDMA, or end-to-end
 performance claims. Real D>1 capability remains false.
+
+## 2026-07-31 — HA060-D: remove hop source retained-prefix rescan
+
+### Evidence and edit
+
+- Reproduced the checked C100 source-stage regression over 3 warmups and 20
+  steady iterations: one-hop 3,225.273 us median, adaptive 2,878.798 us, and
+  legacy 502.329 us.
+- Nsys isolated 3,081.955 us on device 0 in the hop source-shuffle kernel.
+- Source correlation found a nested scan over every earlier channel and
+  destination for every retained copy.
+- Reused the existing `owner_channel_prefix` allocation as the sole retained
+  prefix source. The planner now writes one exclusive prefix per
+  `(egress, channel, destination)` and the hop source kernel performs one
+  cached load. Legacy behavior and all public structures remain unchanged.
+
+### Validation
+
+```text
+extension SM90 build                                      PASS
+GPU hop planner                                           10/10 PASS
+planner memcheck/initcheck/synccheck                      0 errors
+C100 API/constructor/commit contracts                 9/9, 9/9, PASS
+one-hop offdiag vnode dispatch/combine round trip         PASS
+adaptive diagonal vnode dispatch/combine round trip       PASS
+legacy checked-adapter control                            PASS
+```
+
+Matched post-edit 3+20 medians were 129.304 us for one-hop and 674.253 us
+for adaptive. A second Nsys run reduced the device-0 source kernel to
+39.488 us and the all-device kernel sum from 3,162.436 us to 120.416 us.
+
+### Failures retained
+
+- The first final static-test invocation assumed `pytest`, which is not
+  installed in the pinned environment; the direct scripts are the repository
+  contract. A second invocation omitted `PYTHONPATH=.` and failed import.
+  Running the same scripts with the documented environment passed.
+- A synccheck attempt used the older legacy planner runner and stopped before
+  CUDA execution because its frozen `ptx.cuh` checksum is stale on the current
+  branch. The focused hop-planner runner then passed all 10 cases with a
+  zero-error synccheck summary; the unrelated golden was not weakened.
+- The first host integration left the prefix pointer null. Device validation
+  returned before moving payload and produced a false-fast result around
+  113 us. The checked stage-status harness was insufficient to detect this;
+  the full vnode round trip failed and invalidated the timing. The launcher
+  now passes the prefix in immediate and prepared source paths, and both full
+  round trips pass.
+- NCU application replay failed its consistency requirement after pass one;
+  the multi-process launch sequence was not identical on replay. The log is
+  retained under `.cache/rail_balance/hop-aware/ha060/ncu/`; no counter result
+  is inferred.
+- Full-vnode Compute Sanitizer ran the round trip successfully but reported
+  492 `cudaErrorNoKernelImageForDevice` failures in NCCL's
+  `cudaFuncGetAttributes` initialization. This tool/library incompatibility is
+  not attributed to the RailBalance kernel. Focused planner sanitizer runs are
+  the accepted zero-error evidence.
+
+### Next action
+
+Commit this single-variable source-path optimization, collect clean 10+100
+profiler-free distributions, then profile the planner separately. Nsys already
+indicates planner construction is the next dominant diagnostic stage; no
+planner performance code will change before that evidence is captured.

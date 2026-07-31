@@ -196,6 +196,7 @@ void rail_balance_hop_plan_impl(
         int* owner_remaining,
         int* retained,
         int* moved,
+        int* retained_prefix,
         int* group_prefix,
         int* proxy_required,
         int* path_units,
@@ -215,7 +216,8 @@ void rail_balance_hop_plan_impl(
     const int lane = ptx::get_lane_idx();
     if (records == nullptr or resolutions == nullptr or pair_load == nullptr or
         source_load == nullptr or owner_remaining == nullptr or
-        retained == nullptr or moved == nullptr or group_prefix == nullptr or
+        retained == nullptr or moved == nullptr or
+        retained_prefix == nullptr or group_prefix == nullptr or
         proxy_required == nullptr or path_units == nullptr or
         moved_copies == nullptr or status == nullptr or num_rails < 1 or
         num_rails > 32 or num_tokens < 0 or num_topk < 1 or num_topk > 32 or
@@ -617,21 +619,22 @@ void rail_balance_hop_plan_impl(
 
     for (int egress = 0; egress < num_rails; ++egress) {
         int prefix = 0;
-        int retained_total = 0;
+        int retained_cursor = 0;
         for (int channel = 0; channel < num_channels; ++channel) {
             for (int destination = 0;
                  destination < num_destinations; ++destination) {
                 const int group =
                     (egress * num_channels + channel) * num_destinations +
                     destination;
+                retained_prefix[group] = retained_cursor;
+                retained_cursor += retained[group];
                 group_prefix[group] = prefix;
                 prefix += moved[group];
-                retained_total += retained[group];
             }
         }
         proxy_required[egress] = prefix;
         if (prefix > proxy_capacity_per_egress or
-                retained_total > proxy_capacity_per_egress)
+                retained_cursor > proxy_capacity_per_egress)
             hybrid_plan_detail::report_error(
                 status, HybridPlanError::CapacityExceeded);
     }

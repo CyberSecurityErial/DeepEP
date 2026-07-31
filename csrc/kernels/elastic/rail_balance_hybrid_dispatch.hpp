@@ -167,6 +167,7 @@ public:
         int* owner_remaining;
         int* retained;
         int* moved;
+        int* retained_prefix;
         int* group_prefix;
         int* proxy_required;
         int* path_units;
@@ -206,7 +207,8 @@ static void __instantiate_kernel() {
             kernel, config,
             args.records, args.resolutions,
             args.pair_load, args.source_load, args.owner_remaining,
-            args.retained, args.moved, args.group_prefix,
+            args.retained, args.moved, args.retained_prefix,
+            args.group_prefix,
             args.proxy_required, args.path_units, args.moved_copies,
             args.status, args.num_rails, args.num_tokens, args.num_topk,
             args.num_channels, args.num_destinations,
@@ -251,6 +253,7 @@ static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
         .owner_remaining = nullptr,
         .retained = nullptr,
         .moved = nullptr,
+        .retained_prefix = nullptr,
         .group_prefix = nullptr,
         .proxy_required = nullptr,
         .path_units = nullptr,
@@ -324,6 +327,7 @@ static void launch_prepared_rail_balance_hop_plan(
     int* owner_remaining,
     int* retained,
     int* moved,
+    int* retained_prefix,
     int* group_prefix,
     int* proxy_required,
     int* path_units,
@@ -351,6 +355,7 @@ static void launch_prepared_rail_balance_hop_plan(
             .owner_remaining = owner_remaining,
             .retained = retained,
             .moved = moved,
+            .retained_prefix = retained_prefix,
             .group_prefix = group_prefix,
             .proxy_required = proxy_required,
             .path_units = path_units,
@@ -1657,6 +1662,8 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
         {num_rails, num_channels, num_destinations}, int_options);
     auto moved = torch::zeros(
         {num_rails, num_channels, num_destinations}, int_options);
+    auto retained_prefix = torch::zeros(
+        {num_rails, num_channels, num_destinations}, int_options);
     auto group_prefix = torch::zeros(
         {num_rails, num_channels, num_destinations}, int_options);
     auto proxy_required = torch::zeros({num_rails}, int_options);
@@ -1678,6 +1685,7 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
         .owner_remaining = nullptr,
         .retained = nullptr,
         .moved = nullptr,
+        .retained_prefix = nullptr,
         .group_prefix = nullptr,
         .proxy_required = nullptr,
         .path_units = nullptr,
@@ -1712,6 +1720,7 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
             .owner_remaining = owner_remaining.data_ptr<int>(),
             .retained = retained.data_ptr<int>(),
             .moved = moved.data_ptr<int>(),
+            .retained_prefix = retained_prefix.data_ptr<int>(),
             .group_prefix = group_prefix.data_ptr<int>(),
             .proxy_required = proxy_required.data_ptr<int>(),
             .path_units = path_units.data_ptr<int>(),

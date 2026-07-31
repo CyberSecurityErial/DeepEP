@@ -1197,6 +1197,7 @@ public:
                 hop.source_load.data_ptr<int>(),
                 hop.owner_remaining.data_ptr<int>(),
                 pending.raw.retained, pending.raw.moved,
+                pending.raw.owner_channel_prefix,
                 pending.raw.group_prefix, pending.raw.proxy_required,
                 hop.path_units.data_ptr<int>(), pending.raw.moved_copies,
                 pending.raw.status, pending.num_rails,
@@ -1343,6 +1344,7 @@ public:
                 nccl_dev_comm, nccl_window,
                 raw.x, raw.topk_idx, raw.topk_weights,
                 raw.arena, hop_records, hop_resolutions,
+                raw.owner_channel_prefix,
                 raw.retained, raw.group_prefix,
                 raw.proxy_required, raw.status,
                 num_experts, num_destinations, scaleout_rank_idx,
@@ -1841,6 +1843,7 @@ public:
                     reinterpret_cast<
                         const rail_balance::HopCopyResolution*>(
                             hop.resolutions.data_ptr<int>()),
+                    pending.raw.owner_channel_prefix,
                     pending.raw.retained, pending.raw.group_prefix,
                     pending.raw.proxy_required, pending.raw.status,
                     pending.num_experts, pending.num_destinations,
@@ -2550,6 +2553,7 @@ public:
                 hop->source_load.data_ptr<int>(),
                 hop->owner_remaining.data_ptr<int>(),
                 plan.retained.data_ptr<int>(), plan.moved.data_ptr<int>(),
+                plan.owner_channel_prefix.data_ptr<int>(),
                 plan.group_prefix.data_ptr<int>(),
                 plan.proxy_required.data_ptr<int>(),
                 hop->path_units.data_ptr<int>(),
