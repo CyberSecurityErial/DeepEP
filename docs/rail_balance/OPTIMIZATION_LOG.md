@@ -2685,3 +2685,45 @@ SHA256 7d656074e99cd371965cde9b3f1cc1b1eee8af096d299079c1f199c7baf05bba
 .cache/rail_balance/hop-aware/ha070-onehop-n8192-parallel-materialize.nsys-rep
 SHA256 db90bcaae747593200d2231f1bf43df86781eb574a0031f6d370e7e8fc9e941a
 ```
+
+## O108 — close the planner-to-source-shuffle capacity contract
+
+The first C100 run that forced the private transaction onto chunk 8 failed in
+the checked source shuffle with status 4. This falsified the assumption that a
+deterministic rotated source channel was sufficient. Several owners may share
+an egress and destination, so their individually legal stripes can overflow a
+single physical channel.
+
+The first replacement used separate retained and moved path-local ordinals.
+Review falsified that repair with G2/C2/N2: one retained and one moved copy
+both mapped to channel zero, so their shared final tail was 2 while physical
+capacity was 1. That failed intermediate design is retained here because the
+old oracle checked only each path-local slot.
+
+Accepted change: one egress warp prefixes retained copies first and then moved
+copies in one combined `(egress,destination)` sequence. The finalizer maps
+combined ordinal `u` to `channel=u%C`; a moved copy uses
+`remote_slot=u/C-retained[channel]`. This bounds the actual shared
+`retained+moved` tail by `ceil(N/C)`. The obsolete adaptive rotated
+materializer was deleted, removing roughly 130 lines and leaving one slot
+mapping fact source.
+
+The regression oracle now asserts both each remote slot and the combined
+channel tail. GPU planner tests pass 13/13 with mixed chunk-1/chunk-8 random
+coverage; focused memcheck/initcheck/synccheck report zero errors. C100
+one-hop/adaptive one-iteration source smokes pass at 157.811/366.901 us, and
+true EP8 LSA plus both vnode round trips pass. These zero-warmup samples are
+correctness evidence, not the forthcoming committed-tree 10+100 performance
+claim.
+
+The first vnode run after O108 timed out because its path-distribution oracle
+still used chunk 1 while the transaction used chunk 8. A single-rank assertion
+failed and peers waited in the next collective. The planner itself had already
+completed. Aligning the test oracle to chunk 8 is required before the vnode
+round-trip result can be accepted.
+
+After the oracle was aligned, vnode reached return demux and reported
+`stage=5, code=36`: its internal GPU planner still rebuilt chunk-1
+resolutions, which cannot consume proxy payload laid out by the chunk-8 source
+plan. The adapter now uses the shared production chunk and parallel workspace.
+This is a correctness alignment, not a claimed speedup.

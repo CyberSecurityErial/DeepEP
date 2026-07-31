@@ -302,9 +302,9 @@ one group, supplies parallelism.
 | endpoint record | `G*C` | 1 warp | one top-k lane | about `N/C` tokens |
 | endpoint decision | 1 | 1 warp | lane 0 preserves group order; other lanes help reductions | endpoint groups only, at most 32 chunk decisions per large group |
 | record assignment | `G*C` | 1 warp | one top-k lane | resolve about `N/C` tokens from group quota |
-| group count | `G*C` | 1 warp | one top-k lane | count final `(egress,C,D)` ownership for about `N/C` tokens |
-| slot prefix | `G` | 1 warp initially | lanes stripe channel/destination groups | one egress's compact counters |
-| slot finalize | `G*C` | 1 warp | one top-k lane | add static group bases to about `N/C` tokens |
+| group count | `G*C` | 1 warp | one top-k lane | count assigned `(owner,egress,source-channel,D)` copies for about `N/C` tokens |
+| slot prefix | `G` | 1 warp initially | lanes scan source-channel stripes | one egress's retained/moved ordinals and compact prefixes |
+| slot finalize | `G*C` | 1 warp | one top-k lane | map each combined ordinal to channel and path-local slot for about `N/C` tokens |
 
 The serialized stage may decide only coarse endpoint chunks; it must not scan
 channels or allocate per-copy slots. With `G=8`, `C=256`, and `N=8192`, the
@@ -313,7 +313,50 @@ tokens. Launch boundaries provide the only grid-wide ordering. A later fusion
 is allowed only after profiling proves launch cost material; correctness is
 not based on cooperative-launch residency or cross-block spin barriers.
 
+The slot map is capacity-safe by construction. For each
+`(egress,destination)`, retained copies precede moved copies in one combined
+sequence. Prefixing gives every copy a unique combined ordinal `u`, then:
+
+```text
+target_channel = u % C
+channel_ordinal = u / C
+retained remote_slot = channel_ordinal
+moved remote_slot    = channel_ordinal - retained[target_channel]
+```
+
+The endpoint decision caps every `(destination,egress)` load at `N`, hence
+`retained + moved <= ceil(N/C)` in every physical channel. Retained and moved
+must not be striped from separate ordinal zeroes: their individual bounds do
+not bound the shared final tail. A rotated source channel is also insufficient;
+several owners can rotate onto the same target channel and overflow it even
+though the total egress load is legal.
+
 HA070-C implements this map for `one_hop`. The prepared production launcher
-uses the same five materializer kernels as the private benchmark. `adaptive`
-uses the parallel pre-count but intentionally retains its prior residual/tail
-kernel until that path has an equally explicit ownership map.
+uses the same five materializer kernels as the private benchmark. The old
+adaptive chunk tail was removed after it reproduced the same capacity bug;
+adaptive currently shares the correct combined lane-0 materializer while its
+residual decision still uses the precounted single-warp kernel.
+
+### 11.2 Adaptive selective two-hop ownership
+
+The adaptive residual loop is state dependent: accepting one migration changes
+the next candidate's pair and source loads. It must not be copied into several
+blocks with global spin barriers. The production fast path instead makes the
+ordered warp decide only a small endpoint-group quota and lets the existing
+dense stages apply that quota:
+
+| stage | grid | block / warp | lane work | ownership |
+|---|---:|---:|---|---|
+| one-hop + two-hop quota decision | 1 | 1 warp | lanes reduce `(o,d,t,old-side,new-e)` candidates; lane 0 commits accepted batches | ordered endpoint table only |
+| adaptive endpoint assignment | `G*C` | 1 warp | one top-k lane | one `(owner,source-channel)` stripe |
+| group count / prefix / finalize | unchanged from 11.1 | 1 warp | unchanged | reuse the one-hop materializer |
+
+The quota table is indexed by `(owner,destination,target,old-side,new-egress)`.
+`old-side` distinguishes the owner-Rail and target-Rail portions of the
+one-hop plan. It is bounded by endpoint counts, the two-hop cap, pair capacity,
+proxy capacity, threshold, and hop penalty. The record table is scanned only
+when `G*C` assignment blocks consume these quotas. Kernel launch order on one
+stream is the only grid-wide synchronization; no host readback, cooperative
+launch, or per-copy global tail atomic is introduced. Exact chunk 1 remains
+the record-level oracle; production chunk 8 is deterministic but intentionally
+need not reproduce the exact oracle's record-by-record migration order.

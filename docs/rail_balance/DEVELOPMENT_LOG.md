@@ -7135,3 +7135,57 @@ An unrelated `mmunlearner` briefly occupied about 0.5--1 GiB per GPU. It was
 not killed and no performance result collected during that interval is used.
 After it exited, the clean N8192/C256 10+100 one-hop median/p95 is
 0.429/0.435 ms. Public capability remains false.
+
+## 2026-07-31 — HA070-D: production transaction coverage and channel-capacity fix
+
+The private C100 transaction still hard-coded planner chunk 1 even though the
+public experimental dispatch path had moved to chunk 8. Consequently the
+earlier C100 and true-EP8 transaction tests proved the exact path, not the new
+parallel materializer. The transaction now uses the same default chunk as
+production, while `_build_rail_balance_hop_one_hop_plan` remains the explicit
+chunk-1 oracle. The benchmark also requires the mode-specific JIT kernels so a
+future identity drift fails visibly.
+
+The first real chunk-8 C100 source run then failed with `InvalidSchedule`.
+The fast materializer had rotated source channels but had not bounded the
+aggregate from several owners landing on one target channel. This failure is
+retained: planner-only invariants did not yet assert the physical
+`remote_slot < ceil(N/C)` contract. The first repair striped retained and moved
+from separate ordinal zeroes. A review counterexample then invalidated it: one
+retained and one moved copy can both occupy channel zero while each path-local
+slot is individually legal.
+
+The final materializer uses one retained-first combined ordinal for every
+`(egress,destination)`. It maps the combined ordinal to a channel and subtracts
+that channel's retained count only when deriving a moved path-local slot. The
+old adaptive rotated tail was deleted so one-hop and adaptive cannot drift
+between two slot implementations. No queue or global per-copy atomic was
+added.
+
+After the final fix, all 13 GPU planner tests pass; 128 one-hop and 64 adaptive
+random seeds alternate between exact chunk 1 and production chunk 8. The
+minimal G2/C2/N2 retained-plus-moved counterexample runs in both one-hop and
+adaptive modes. Focused memcheck, initcheck, and synccheck each report zero
+errors.
+
+The corrected C100 one-hop/adaptive 8-GPU source smokes pass at 157.811 and
+366.901 us for the measured source stage. Both are zero-warmup single samples,
+so they are functional evidence only. True EP8 LSA verifies exact payload,
+metadata, and static proxy slots. Both one-hop/off-diagonal and
+adaptive/diagonal 4x2 vnode dispatch/combine inverse round trips pass. Formal
+clean-tree 10+100 evidence is still pending.
+
+The first vnode rerun appeared idle until its 300-second process-group timeout.
+It was not a device deadlock: rank 1 had failed an old path-count assertion
+that compared the production chunk-8 GPU plan with a chunk-1 Python oracle,
+while the other ranks waited at the next checked phase. The vnode oracle now
+uses the same chunk size as the transaction. This is a test-configuration fix,
+not a planner fallback or a change to the data path.
+
+The aligned oracle exposed a second stale exact-path assumption inside the
+vnode adapter itself: it rebuilt resolutions from the shared records with
+chunk 1, while `proxy_dispatch` had been produced by the source transaction's
+chunk-8 resolutions. Stages 0--4 completed, then return demux rejected the
+mismatched base descriptor (`stage=5`, code 36). Vnode now prepares the same
+default chunk planner and cursor workspace as the source transaction; it does
+not receive or trust a second host-side plan.

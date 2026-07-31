@@ -1298,3 +1298,17 @@ Out of scope until evidence expands the project:
   9.198 ms after pre-count and 13.586 ms at O104. EP8 LSA consumes the new
   production plan byte-exactly; vnode combine inverse and all sanitizer gates
   pass. Adaptive still uses the precounted old tail. Capability remains false.
+- HA070-D discovered that the private C100/EP8 transaction still forced chunk
+  1, so prior downstream coverage had not exercised the fast production plan.
+  After aligning it with chunk 8, C100 exposed a real channel-capacity bug in
+  rotated slot placement. A first separate retained/moved ordinal repair was
+  also wrong because both paths share one final channel tail. The accepted
+  retained-first combined ordinal bounds `retained+moved` without atomics and
+  deletes the duplicate adaptive tail. 13/13 planner tests, focused sanitizer,
+  C100 one-hop/adaptive smokes, true EP8 byte-exact LSA, and both vnode round
+  trips now pass on the actual fast transaction. The first vnode rerun exposed
+  a stale
+  chunk-1 oracle assertion rather than a GPU deadlock; its reference now
+  matches production chunk 8. A second rerun found vnode itself re-planning
+  chunk 1 and rejecting chunk-8 proxy descriptors at return demux; vnode now
+  shares the production chunk/workspace. Clean 10+100 evidence remains pending.
