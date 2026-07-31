@@ -6921,3 +6921,12 @@ planner memcheck/initcheck                              0 errors
 
 The code remains experimental until a clean 10+100 report is collected from
 the committed tree. Capability remains false.
+
+### Clean HA060-I closeout
+
+Commit `1a01f44` passes a clean-tree 10+100 checked-adapter run. Adaptive
+`finish` is 308.736 ms median / 308.977 ms p95 with 0.038% population CV,
+versus 399.294 / 399.510 ms before O100. The 1.293x reduction confirms the
+peak-cache edit outside profiler runs. Source-stage median is 666.255 us and
+is not folded into the planner claim. Baseline eligibility is true; public
+capability remains false.

@@ -408,3 +408,21 @@ eba083d97f7e9fc53082197d9648a549caa9945ada81140a266c0a980a09c5a6  c100-adaptive-
 
 The after timing is dirty-tree diagnostic evidence; a clean distribution is
 required before acceptance. Scope remains single-node checked adapter.
+
+The clean committed-tree 10+100 run closes that requirement:
+
+```text
+adaptive finish median / p95       308.736 / 308.977 ms
+pre-O100 finish median / p95        399.294 / 399.510 ms
+median reduction                                      1.293x
+source stage median / p95             666.255 / 698.132 us
+```
+
+The result passes baseline eligibility and hashes to:
+
+```text
+68d3968621157d97d01fd6deca9d43f64d2fdea80a8591dea0f45faf839f7266  c100-adaptive-peaks-formal.json
+```
+
+This accepts the exact adaptive peak cache for the experimental planner. It
+does not establish real Gin/RDMA or multi-node Rail performance.

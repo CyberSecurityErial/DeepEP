@@ -2441,3 +2441,17 @@ stays at 12.13 ms. C100 adaptive 3+20 `finish` improves from the clean
 399.294 ms predecessor to 308.661 ms (1.29x). GPU exact tests pass 11/11, the
 adaptive vnode round trip passes, and focused memcheck/initcheck report zero
 errors. Clean 10+100 evidence follows the code commit.
+
+Clean commit `1a01f44` 10+100 evidence accepts O100:
+
+```text
+adaptive finish median / p95   399.294 / 399.510 -> 308.736 / 308.977 ms
+median speedup                                           1.293x
+population CV                                             0.038%
+source median                                            666.255 us
+baseline collection eligible                                  true
+```
+
+The source stage is reported but not attributed to this planner-only edit.
+Report SHA-256 is
+`68d3968621157d97d01fd6deca9d43f64d2fdea80a8591dea0f45faf839f7266`.

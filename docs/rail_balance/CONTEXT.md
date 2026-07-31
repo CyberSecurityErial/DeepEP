@@ -1238,3 +1238,8 @@ Out of scope until evidence expands the project:
   from 399.294 to 308.661 ms in the diagnostic (1.29x); one-hop is unchanged.
   Exact 11/11, adaptive vnode, and focused sanitizer gates pass. Capability
   remains false pending clean and real multi-node evidence.
+- Clean `1a01f44` 10+100 confirms adaptive finish at 308.736 ms median /
+  308.977 ms p95 versus 399.294 / 399.510 ms before O100 (1.293x median).
+  The checked source stage remains separate at 666.255 us median; the report
+  passes baseline eligibility. O100 is accepted for the experimental planner,
+  while real multi-node capability remains closed.
