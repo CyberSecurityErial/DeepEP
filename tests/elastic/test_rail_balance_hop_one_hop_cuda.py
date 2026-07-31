@@ -320,39 +320,48 @@ def test_adaptive_diagonal_uses_bounded_third_rail_escape() -> None:
     assert outputs[7].tolist() == [4, 0, 0, 4]
     assert max(outputs[1][1]).item() == 4
 
-    tensor, chunked = _build(
-        records,
-        channels=2,
-        destinations=2,
-        capacity=32,
-        max_two_hop_percent=50,
-        planner_chunk_size=8,
-    )
-    _validate(
-        tensor,
-        chunked,
-        channels=2,
-        destinations=2,
-        max_two_hop_percent=50,
-        planner_chunk_size=8,
-    )
-    assert chunked[7].tolist() == [4, 0, 0, 4]
-
 
 def test_adaptive_threshold_and_cap_stop_extra_hops() -> None:
     records = tuple(
         tuple((_record(1, 1),) if owner == 0 else (_UNUSED,) for _ in range(8))
         for owner in range(4)
     )
+    tensor, baseline = _build(
+        records,
+        channels=2,
+        destinations=2,
+        capacity=32,
+        planner_chunk_size=8,
+    )
     _tensor, rejected = _build(
         records,
         channels=2,
         destinations=2,
         capacity=32,
-        threshold_percent=100,
+        threshold_percent=10_000,
         max_two_hop_percent=50,
+        planner_chunk_size=8,
     )
-    assert rejected[7].tolist() == [8, 0, 0, 0]
+    assert rejected[-1].tolist() == [0]
+    assert all(
+        torch.equal(rejected[index], baseline[index])
+        for index in (1, 2, 7)
+    )
+
+    _tensor, penalized = _build(
+        records,
+        channels=2,
+        destinations=2,
+        capacity=32,
+        max_two_hop_percent=50,
+        hop_penalty_percent=10_000,
+        planner_chunk_size=8,
+    )
+    assert penalized[-1].tolist() == [0]
+    assert all(
+        torch.equal(penalized[index], baseline[index])
+        for index in (1, 2, 7)
+    )
 
     tensor, capped = _build(
         records,
@@ -360,6 +369,7 @@ def test_adaptive_threshold_and_cap_stop_extra_hops() -> None:
         destinations=2,
         capacity=32,
         max_two_hop_percent=25,
+        planner_chunk_size=8,
     )
     _validate(
         tensor,
@@ -367,8 +377,16 @@ def test_adaptive_threshold_and_cap_stop_extra_hops() -> None:
         channels=2,
         destinations=2,
         max_two_hop_percent=25,
+        planner_chunk_size=8,
     )
-    assert capped[7].tolist() == [6, 0, 0, 2]
+    assert capped[-1].tolist() == [0]
+    assert 0 < capped[7][3].item() <= 2
+    assert capped[1].amax(dim=1).le(baseline[1].amax(dim=1)).all()
+    assert capped[2].max().item() <= baseline[2].max().item()
+    assert (
+        capped[1].amax(dim=1).lt(baseline[1].amax(dim=1)).any()
+        or capped[2].max().item() < baseline[2].max().item()
+    )
 
 
 def test_adaptive_batch_stops_at_the_next_hot_rail() -> None:
@@ -396,6 +414,80 @@ def test_adaptive_batch_stops_at_the_next_hot_rail() -> None:
     )
     assert outputs[7][3].item() == 4
     assert max(outputs[1][1]).item() <= 8
+
+
+def test_adaptive_chunk_closed_block_escapes_endpoint_rails() -> None:
+    records = tuple(
+        tuple(
+            (_record(1, 1 << (1 - owner)),)
+            if owner < 2
+            else (_UNUSED,)
+            for _ in range(32)
+        )
+        for owner in range(4)
+    )
+    common = {
+        "channels": 4,
+        "destinations": 2,
+        "capacity": 128,
+        "planner_chunk_size": 8,
+    }
+    tensor, baseline = _build(records, **common)
+    _tensor, adaptive = _build(
+        records, max_two_hop_percent=25, **common
+    )
+    _validate(
+        tensor,
+        adaptive,
+        channels=4,
+        destinations=2,
+        max_two_hop_percent=25,
+        planner_chunk_size=8,
+    )
+    assert baseline[-1].tolist() == adaptive[-1].tolist() == [0]
+    assert baseline[1][1, 2:].sum().item() == 0
+    assert adaptive[1][1, 2:].sum().item() > 0
+    assert 0 < adaptive[7][3].item() <= 16
+    assert adaptive[1].amax(dim=1).le(baseline[1].amax(dim=1)).all()
+    assert adaptive[2].max().item() <= baseline[2].max().item()
+    assert (
+        adaptive[1].amax(dim=1).lt(baseline[1].amax(dim=1)).any()
+        or adaptive[2].max().item() < baseline[2].max().item()
+    )
+
+
+def test_adaptive_third_rail_shares_channel_capacity_with_retained() -> None:
+    records = tuple(
+        tuple(
+            (_record(1, 1 << owner),)
+            if token < (4 if owner == 0 else 1)
+            else (_UNUSED,)
+            for token in range(4)
+        )
+        for owner in range(4)
+    )
+    tensor, outputs = _build(
+        records,
+        channels=4,
+        destinations=2,
+        capacity=2,
+        max_two_hop_percent=50,
+        planner_chunk_size=8,
+    )
+    _validate(
+        tensor,
+        outputs,
+        channels=4,
+        destinations=2,
+        max_two_hop_percent=50,
+        planner_chunk_size=8,
+    )
+    assert outputs[-1].tolist() == [0]
+    assert outputs[7][3].item() > 0
+    assert outputs[6].le(2).all()
+    retained_by_group = outputs[3].sum(dim=1)
+    moved_by_group = outputs[4].sum(dim=1)
+    assert torch.any((retained_by_group > 0) & (moved_by_group > 0))
 
 
 def test_random_one_hop_invariants_and_determinism() -> None:
@@ -494,35 +586,60 @@ def test_random_adaptive_invariants_cap_and_determinism() -> None:
     for seed in range(64):
         rng = random.Random(1000 + seed)
         rails = rng.choice((3, 4, 8))
+        destinations = rng.choice((2, 4))
         num_tokens = rng.randint(1, 12)
+        num_topk = rng.randint(1, min(3, destinations - 1))
         records = []
         for _owner in range(rails):
             owner_records = []
             for _token in range(num_tokens):
-                target = rng.randrange(rails)
-                owner_records.append((_record(1, 1 << target),))
+                selected = sorted(
+                    rng.sample(
+                        range(1, destinations), rng.randint(0, num_topk)
+                    )
+                )
+                token_records = []
+                for destination in selected:
+                    num_targets = 2 if rails > 3 and rng.random() < 0.2 else 1
+                    targets = rng.sample(range(rails), num_targets)
+                    token_records.append(
+                        _record(
+                            destination,
+                            sum(1 << target for target in targets),
+                        )
+                    )
+                token_records.extend(
+                    _UNUSED for _ in range(num_topk - len(token_records))
+                )
+                owner_records.append(tuple(token_records))
             records.append(tuple(owner_records))
         ratio = rng.choice((10, 25, 50))
         kwargs = {
             "channels": rng.randint(1, 4),
-            "destinations": 2,
-            "capacity": rails * num_tokens,
+            "destinations": destinations,
+            "capacity": rails * num_tokens * num_topk,
             "seed": rng.randrange(64),
             "max_two_hop_percent": ratio,
             "hop_penalty_percent": rng.choice((0, 25, 50)),
-            "planner_chunk_size": 8 if seed % 2 else 1,
+            "planner_chunk_size": 8,
         }
         tensor, first = _build(tuple(records), **kwargs)
         _tensor, second = _build(tuple(records), **kwargs)
+        one_hop_kwargs = dict(kwargs)
+        one_hop_kwargs["max_two_hop_percent"] = 0
+        _tensor, baseline = _build(tuple(records), **one_hop_kwargs)
         assert all(torch.equal(lhs, rhs) for lhs, rhs in zip(first, second))
+        assert first[-1].tolist() == baseline[-1].tolist() == [0]
         _validate(
             tensor,
             first,
             channels=kwargs["channels"],
-            destinations=2,
+            destinations=destinations,
             max_two_hop_percent=ratio,
             planner_chunk_size=kwargs["planner_chunk_size"],
         )
+        assert first[1].amax(dim=1).le(baseline[1].amax(dim=1)).all()
+        assert first[2].max().item() <= baseline[2].max().item()
 
 
 def test_channel_masks_preserve_greedy_order_across_words() -> None:

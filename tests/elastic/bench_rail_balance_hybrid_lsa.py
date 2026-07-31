@@ -140,21 +140,25 @@ _COMMON_JIT_KERNEL_PREFIXES = (
 _LEGACY_SOURCE_JIT_KERNEL_PREFIX = (
     "kernel.rail_balance_hybrid_source_shuffle.",
 )
-_HOP_ONE_HOP_JIT_KERNEL_PREFIXES = (
-    "kernel.rail_balance_hop_record_v1.",
-    "kernel.rail_balance_hop_precount_v1.",
-    "kernel.rail_balance_hop_decision_v4.",
+_HOP_MATERIALIZER_JIT_KERNEL_PREFIXES = (
     "kernel.rail_balance_hop_endpoint_prefix_v1.",
-    "kernel.rail_balance_hop_endpoint_assign_v1.",
+    "kernel.rail_balance_hop_endpoint_assign_v2.",
     "kernel.rail_balance_hop_group_count_v1.",
     "kernel.rail_balance_hop_group_prefix_v1.",
     "kernel.rail_balance_hop_slot_finalize_v1.",
+)
+_HOP_ONE_HOP_JIT_KERNEL_PREFIXES = (
+    "kernel.rail_balance_hop_record_v1.",
+    "kernel.rail_balance_hop_precount_v1.",
+    "kernel.rail_balance_hop_decision_v5.",
+    *_HOP_MATERIALIZER_JIT_KERNEL_PREFIXES,
     "kernel.rail_balance_hop_source_shuffle.",
 )
 _HOP_ADAPTIVE_JIT_KERNEL_PREFIXES = (
     "kernel.rail_balance_hop_record_v1.",
     "kernel.rail_balance_hop_precount_v1.",
-    "kernel.rail_balance_hop_plan_precounted_v3.",
+    "kernel.rail_balance_hop_adaptive_decision_v1.",
+    *_HOP_MATERIALIZER_JIT_KERNEL_PREFIXES,
     "kernel.rail_balance_hop_source_shuffle.",
 )
 _JIT_KERNEL_PREFIXES = (
@@ -1176,7 +1180,7 @@ def _build_report(
     })
     if args.hop_mode == "legacy":
         mode_jit_prefixes = _LEGACY_SOURCE_JIT_KERNEL_PREFIX
-    elif args.max_two_hop_percent == 0:
+    elif args.hop_mode == "one_hop" or args.max_two_hop_percent == 0:
         mode_jit_prefixes = _HOP_ONE_HOP_JIT_KERNEL_PREFIXES
     else:
         mode_jit_prefixes = _HOP_ADAPTIVE_JIT_KERNEL_PREFIXES

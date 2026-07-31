@@ -238,10 +238,18 @@ def _worker(local_rank: int, num_local_ranks: int,
             assert source_plan is not None
             assert source_plan[10].item() == 0
             path_units = tuple(int(value) for value in source_plan[8].cpu())
-            assert path_units == tuple(
-                hop_oracle.plan.units_for(kind)
-                for kind in ("direct", "dst_forward", "src_forward", "two_hop")
-            )
+            if args.mode == "one_hop":
+                assert path_units == tuple(
+                    hop_oracle.plan.units_for(kind)
+                    for kind in (
+                        "direct", "dst_forward", "src_forward", "two_hop"
+                    )
+                )
+            else:
+                assert sum(path_units) == hop_oracle.plan.total_units
+                assert path_units[3] <= (
+                    sum(path_units) * args.max_two_hop_percent // 100
+                )
 
         _checked_phase(
             "hop source shuffle", control_group,

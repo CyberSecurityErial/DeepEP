@@ -332,11 +332,12 @@ public:
                 {num_rails, num_destinations}, int_options),
             .endpoint_count = torch::zeros(
                 {num_rails, num_destinations, num_rails}, int_options),
-            .endpoint_owner_quota = torch::zeros(
-                {num_rails, num_destinations, num_rails}, int_options),
+            .endpoint_egress_quota = torch::zeros(
+                {num_rails, num_destinations, num_rails, num_rails},
+                int_options),
             .owner_group_cursor = planner_chunk_size > 1 ? torch::zeros(
-                {max_two_hop_percent == 0 ? num_rails : 32,
-                 num_rails, num_channels, num_destinations}, int_options) :
+                {num_rails, num_rails, num_channels, num_destinations},
+                int_options) :
                 torch::zeros({1}, int_options),
             .path_units = torch::zeros({4}, int_options),
             .local_records = local_records,
@@ -348,7 +349,7 @@ public:
             .planner_chunk_size = planner_chunk_size,
             .prepared = prepare_rail_balance_hop_plan(
                 num_channels, planner_chunk_size > 1,
-                planner_chunk_size > 1 and max_two_hop_percent == 0),
+                planner_chunk_size > 1 and max_two_hop_percent > 0),
         };
     }
 
@@ -1208,7 +1209,7 @@ public:
                 hop.source_load.data_ptr<int>(),
                 hop.owner_remaining.data_ptr<int>(),
                 hop.endpoint_count.data_ptr<int>(),
-                hop.endpoint_owner_quota.data_ptr<int>(),
+                hop.endpoint_egress_quota.data_ptr<int>(),
                 hop.owner_group_cursor.data_ptr<int>(),
                 pending.raw.retained, pending.raw.moved,
                 pending.raw.owner_channel_prefix,
@@ -2498,12 +2499,12 @@ public:
                 .endpoint_count = torch::zeros(
                     {num_source_ranks, num_destinations, num_source_ranks},
                     int_options),
-                .endpoint_owner_quota = torch::zeros(
-                    {num_source_ranks, num_destinations, num_source_ranks},
-                    int_options),
+                .endpoint_egress_quota = torch::zeros(
+                    {num_source_ranks, num_destinations, num_source_ranks,
+                     num_source_ranks}, int_options),
                 .owner_group_cursor = torch::zeros(
-                    {max_two_hop_percent == 0 ? num_source_ranks : 32,
-                     num_source_ranks, num_channels, num_destinations},
+                    {num_source_ranks, num_source_ranks, num_channels,
+                     num_destinations},
                     int_options),
                 .path_units = torch::zeros({4}, int_options),
                 .local_records = nullptr,
@@ -2514,7 +2515,7 @@ public:
                 .hop_penalty_percent = hop_penalty_percent,
                 .planner_chunk_size = planner_chunk_size,
                 .prepared = prepare_rail_balance_hop_plan(
-                    num_channels, true, max_two_hop_percent == 0),
+                    num_channels, true, max_two_hop_percent > 0),
             });
         }
         auto compact_quota = torch::empty(
@@ -2584,7 +2585,7 @@ public:
                 hop->source_load.data_ptr<int>(),
                 hop->owner_remaining.data_ptr<int>(),
                 hop->endpoint_count.data_ptr<int>(),
-                hop->endpoint_owner_quota.data_ptr<int>(),
+                hop->endpoint_egress_quota.data_ptr<int>(),
                 hop->owner_group_cursor.data_ptr<int>(),
                 plan.retained.data_ptr<int>(), plan.moved.data_ptr<int>(),
                 plan.owner_channel_prefix.data_ptr<int>(),
