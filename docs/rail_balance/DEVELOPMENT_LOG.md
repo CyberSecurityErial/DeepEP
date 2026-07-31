@@ -6870,3 +6870,24 @@ tests but changed the private median from 22.167 to 22.257 ms and worsened p95
 from 22.199 to 22.935 ms. The extra shared address operations and output
 double-writes cancel the latency reduction. The entire production edit was
 reverted; no C100 run was needed to reject a microbenchmark regression.
+
+## 2026-07-31 — HA060-H: exploit packed destination records
+
+The endpoint-record kernel is the single source of truth: per token it writes
+sorted remote destinations contiguously, followed by unused entries. The hop
+planner now verifies that contract and skips the unused tail in all five
+sequential passes. A gap is an `InvalidSchedule`, not a silent fallback.
+
+```text
+private one-hop N1024/K8/C256 median    22.167 -> 12.165 ms
+C100 one-hop finish diagnostic          44.445 -> 41.448 ms
+C100 adaptive finish diagnostic        416.741 -> 399.364 ms
+GPU exact planner                                       11/11 PASS
+packed-gap fail-closed                                       PASS
+one-hop/adaptive full vnode round trips                      PASS
+planner memcheck/initcheck                               0 errors
+```
+
+This optimization removes empty work without changing any valid assignment or
+adding workspace. It remains scoped to diagnostic evidence until a clean
+10+100 run is collected from the committed tree.

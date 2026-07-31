@@ -355,3 +355,22 @@ baseline eligibility and hash to:
 Adaptive remains planner-bound because selective residual search is separate
 from exact channel materialization. No claim expands beyond the checked
 single-node adapter.
+
+### HA060-H packed-record diagnostic
+
+The planner's input producer guarantees a compact per-token destination prefix.
+After adding fail-closed validation, all later planner passes skip from the
+first unused slot to the next token. Private N=1024/K=8/C=256 one-hop latency
+drops from 22.167 to 12.165 ms. C100 3+20 `finish` medians drop from 44.445 to
+41.448 ms for one-hop and 416.741 to 399.364 ms for adaptive. The diagnostic
+JSON hashes are:
+
+```text
+c8ab370db013bafd1124ef175f0b63bd2c4b74ad84367d4406ab774b1b4ff83b  hop-plan-both-n1024-c256-packed.json
+178fb1285e990c7650d74ef8fc46835306350ebc0578bc2157d24a9e540d84e8  c100-onehop-packed-diag.json
+03a319ed8a0b51da62686d1ec90d0a038889d4c6e573826568c9c99a1f0d2f7e  c100-adaptive-packed-diag.json
+```
+
+These three reports were collected from a dirty tree and are not the final
+profiler-free claim. Exact planner/vnode correctness and focused sanitizer
+evidence pass; public capability remains false.

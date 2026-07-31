@@ -1224,3 +1224,9 @@ Out of scope until evidence expands the project:
   NCU shows serialization and long-scoreboard stalls but already high L1/L2
   hit rates; exact tests pass while median/p95 slightly regress. The production
   edit was removed rather than adding duplicate state with no measured value.
+- HA060-H validates and exploits the record producer's packed per-token
+  destination prefix. Five planner scans skip trailing unused top-k slots;
+  valid assignment order is unchanged and a gap fails closed. The private
+  one-hop planner improves 1.82x, C100 finish improves about 7%/4% for
+  one-hop/adaptive diagnostics, and no storage is added. Exact 11/11, both
+  vnode round trips, and focused sanitizer checks pass.

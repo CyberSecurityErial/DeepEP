@@ -2392,3 +2392,23 @@ passed 11/11, but the N=1024/C=256 private median changed from 22.167 to
 22.257 ms and p95 regressed from 22.199 to 22.935 ms. Existing cache locality
 is sufficient; shared addressing plus duplicate stores add more work than
 they hide. The production edit was fully reverted.
+
+## O099 — skip validated packed-record padding
+
+The record materializer already writes each token's remote destinations into a
+dense prefix and leaves trailing `target_mask=0` slots. The planner nevertheless
+visited every K slot in its endpoint, adaptive-candidate, adaptive-migration,
+channel, and proxy passes. The edit validates the packed-prefix invariant once;
+an active record after padding fails closed. Each later scan then jumps from
+the first padding slot directly to the next token. Valid-record order, scores,
+tie-breaking, output layout, and buffer ownership are unchanged.
+
+The N=1024/K=8/C=256 private one-hop median falls from 22.167 to 12.165 ms
+(1.82x); the same post-edit adaptive median is 18.540 ms. C100 3+20 diagnostics
+reduce `finish` from 44.445 to 41.448 ms for one-hop and from 416.741 to
+399.364 ms for adaptive. Source-stage timing stays within its prior range.
+
+The patch adds no allocation or metadata. GPU exact tests pass 11/11 including
+explicit gap rejection, both full vnode round trips pass, and focused memcheck
+and initcheck report zero errors. Clean 10+100 distributions follow the code
+commit before the ratios are treated as accepted profiler-free evidence.

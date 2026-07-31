@@ -263,8 +263,11 @@ void rail_balance_hop_plan_impl(
     int lane_units = 0;
     const int64_t owner_records =
         static_cast<int64_t>(num_tokens) * num_topk;
+    bool reached_padding = false;
     for (int64_t index = static_cast<int64_t>(lane) * owner_records;
          lane < num_rails and index < (lane + 1) * owner_records; ++index) {
+        if (index % num_topk == 0)
+            reached_padding = false;
         resolutions[index] = {-1, -1, -1, -1};
         const auto record = records[index];
         if (record.target_mask == 0) {
@@ -273,6 +276,12 @@ void rail_balance_hop_plan_impl(
                     status, HybridPlanError::InvalidSchedule);
                 continue;
             }
+            reached_padding = true;
+            continue;
+        }
+        if (reached_padding) {
+            hybrid_plan_detail::report_error(
+                status, HybridPlanError::InvalidSchedule);
             continue;
         }
         if (record.destination < 0 or record.destination >= num_destinations or
@@ -291,8 +300,10 @@ void rail_balance_hop_plan_impl(
 
     for (int64_t index = 0; index < num_records; ++index) {
         const auto record = records[index];
-        if (record.target_mask == 0)
+        if (record.target_mask == 0) {
+            index += num_topk - 1 - index % num_topk;
             continue;
+        }
         const int owner = static_cast<int>(
             index / (static_cast<int64_t>(num_tokens) * num_topk));
         const int token = static_cast<int>(
@@ -376,8 +387,10 @@ void rail_balance_hop_plan_impl(
 
         for (int64_t index = 0; index < num_records; ++index) {
             const auto record = records[index];
-            if (record.target_mask == 0)
+            if (record.target_mask == 0) {
+                index += num_topk - 1 - index % num_topk;
                 continue;
+            }
             const int owner = static_cast<int>(
                 index / (static_cast<int64_t>(num_tokens) * num_topk));
             const int old_egress = resolutions[index].egress;
@@ -520,8 +533,11 @@ void rail_balance_hop_plan_impl(
         for (int64_t index = 0; index < num_records and migrated < batch;
              ++index) {
             const auto record = records[index];
-            if (record.target_mask == 0 or
-                record.destination != best_record.destination or
+            if (record.target_mask == 0) {
+                index += num_topk - 1 - index % num_topk;
+                continue;
+            }
+            if (record.destination != best_record.destination or
                 resolutions[index].egress != old_egress)
                 continue;
             const int owner = static_cast<int>(
@@ -584,8 +600,10 @@ void rail_balance_hop_plan_impl(
 
     for (int64_t index = 0; index < num_records; ++index) {
         const auto record = records[index];
-        if (record.target_mask == 0)
+        if (record.target_mask == 0) {
+            index += num_topk - 1 - index % num_topk;
             continue;
+        }
         const int owner = static_cast<int>(
             index / (static_cast<int64_t>(num_tokens) * num_topk));
         const int token = static_cast<int>((index / num_topk) % num_tokens);
@@ -690,8 +708,10 @@ void rail_balance_hop_plan_impl(
 
     for (int64_t index = 0; index < num_records; ++index) {
         auto& resolution = resolutions[index];
-        if (resolution.egress < 0)
+        if (resolution.egress < 0) {
+            index += num_topk - 1 - index % num_topk;
             continue;
+        }
         const int owner = static_cast<int>(
             index / (static_cast<int64_t>(num_tokens) * num_topk));
         if (resolution.egress == owner)

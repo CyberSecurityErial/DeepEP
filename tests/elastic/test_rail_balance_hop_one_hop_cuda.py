@@ -429,6 +429,14 @@ def test_proxy_capacity_and_corrupt_records_fail_closed() -> None:
                     ))
     assert outputs[-1].tolist() == [4]
 
+    gap = torch.full((4, 1, 2), _UNUSED, device="cuda", dtype=torch.int64)
+    gap[0, 0, 1] = _record(1, 1 << 1)
+    outputs = tuple(output.cpu() for output in
+                    _C._build_rail_balance_hop_one_hop_plan(
+                        gap, 2, 2, 1, 8, 0
+                    ))
+    assert outputs[-1].tolist() == [4]
+
 
 def test_retained_staging_capacity_fails_before_shuffle() -> None:
     records = tuple(
