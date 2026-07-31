@@ -1271,3 +1271,10 @@ Out of scope until evidence expands the project:
   with 0.068% CV and a passing eligibility gate. O103 is accepted as a small
   exact simplification; the serial planner is not accepted as a final hot-path
   design.
+- HA060-M keeps exact/public Hybrid at `planner_chunk_size=1` and proves a
+  private chunk-8 GPU path. One-hot endpoint groups use deterministic 32-lane
+  count/prefix/materialization; shared multi-target records remain exact.
+  N=8192/C=256 is 13.586 ms one-hop and 15.608 ms adaptive versus
+  92.678/89.563 ms exact. GPU tests pass 12/12 and focused
+  memcheck/initcheck/synccheck report zero errors. Next, fuse endpoint
+  histograms into record production and keep per-token slot work off CPU.

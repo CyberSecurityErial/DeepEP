@@ -37,7 +37,9 @@ def _records(tokens: int, mode: str) -> torch.Tensor:
     return records
 
 
-def _run(records: torch.Tensor, mode: str, channels: int) -> None:
+def _run(
+    records: torch.Tensor, mode: str, channels: int, planner_chunk_size: int
+) -> None:
     tokens = records.size(1)
     _C._build_rail_balance_hop_one_hop_plan(
         records,
@@ -49,6 +51,7 @@ def _run(records: torch.Tensor, mode: str, channels: int) -> None:
         0,
         25 if mode == "adaptive" else 0,
         0,
+        planner_chunk_size,
     )
 
 
@@ -59,14 +62,19 @@ def main() -> None:
     )
     parser.add_argument("--tokens", type=int, nargs="+", default=(8, 32, 128, 512))
     parser.add_argument("--channels", type=int, default=8)
+    parser.add_argument("--planner-chunk-size", type=int, default=1)
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--steady", type=int, default=20)
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--nvtx", action="store_true")
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
-    if (min(*args.tokens, args.steady) <= 0 or args.warmup < 0 or
-            not 1 <= args.channels <= 256):
+    if (
+        min(*args.tokens, args.steady) <= 0
+        or args.warmup < 0
+        or not 1 <= args.channels <= 256
+        or args.planner_chunk_size < 1
+    ):
         parser.error(
             "tokens/steady must be positive, warmup nonnegative, and "
             "channels in [1, 256]"
@@ -79,7 +87,7 @@ def main() -> None:
         for tokens in args.tokens:
             records = _records(tokens, mode)
             for _ in range(args.warmup):
-                _run(records, mode, args.channels)
+                _run(records, mode, args.channels, args.planner_chunk_size)
             samples = []
             for sample in range(args.steady):
                 if args.nvtx:
@@ -87,7 +95,7 @@ def main() -> None:
                         f"rail_balance_hop_plan/{mode}/N{tokens}_sample{sample}"
                     )
                 started = time.perf_counter_ns()
-                _run(records, mode, args.channels)
+                _run(records, mode, args.channels, args.planner_chunk_size)
                 samples.append((time.perf_counter_ns() - started) / 1000)
                 if args.nvtx:
                     torch.cuda.nvtx.range_pop()
@@ -99,6 +107,7 @@ def main() -> None:
                     "K": 8,
                     "C": args.channels,
                     "D": 2,
+                    "planner_chunk_size": args.planner_chunk_size,
                     "samples_us": samples,
                     "median_us": statistics.median(samples),
                     "p95_us": _percentile(samples, 95),

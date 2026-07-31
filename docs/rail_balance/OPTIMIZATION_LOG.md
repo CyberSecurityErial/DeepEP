@@ -2549,3 +2549,45 @@ Full CPU offload is rejected: every fresh route would require D2H, host work,
 H2D, and a synchronization before dispatch. CPU/background work is limited to
 low-frequency policy updates; per-route histograms, quotas, and slot
 materialization remain GPU-resident and may overlap the previous microbatch.
+
+### O104 GPU prototype
+
+The private API keeps `planner_chunk_size=1` exact. With chunk 8 it aggregates
+one-hot `(owner,destination,target)` records, limits large groups to 32
+decisions, and uses a deterministic per-worker channel prefix. Multi-target
+payloads retain exact endpoint assignment.
+
+Profiler-free N=8192/C=256 10+100 results:
+
+```text
+                                      one-hop median / p95
+exact chunk 1                          92.678 / 92.801 ms
+chunk decisions only                   88.633 / 89.315 ms
+direct channel mapping                 87.281 / 87.993 ms
+8-owner deterministic prefix           63.918 / 64.045 ms
+32-lane deterministic prefix           14.483 / 14.599 ms
+32-decision large-group budget          13.586 / 13.597 ms
+
+adaptive chunk 1                       89.563 / 89.639 ms
+adaptive chunk 8                       15.608 / 15.739 ms
+```
+
+Thus the accepted private prototype is 6.82x faster for one-hop and 5.74x for
+adaptive. It does not use nondeterministic slot atomics. GPU tests pass 12/12;
+focused memcheck, initcheck, and synccheck each report zero errors.
+
+Nsys measures the pre-prefix chunk-8 planner at 88.518 ms and the 32-lane
+version at 14.407 ms. NCU basic on the former records a one-block/one-warp
+launch, 1.56% achieved occupancy, and roughly 0.02% SM/memory throughput.
+NCU replay duration is not used as an end-to-end number. Report hashes:
+
+```text
+pre Nsys   ac022a735299773557f43cf5587d0aa2ea12c97da73deef5b20bb6dfac4b18c1
+NCU basic  5726f9268a8ed6119c19dcb28838ea3404d014b02d339a0ac0cd148be0659514
+post Nsys  b067a076a93e3125a29c6bb2710bb28f635e7210b618cbc625fdf6d912016d2b
+final A/B  f6e0e4bc6dd5de8b8357da44e3502c5018a01a23eca39eb86d81ec2e857ad954
+```
+
+An initial Nsys command included a disallowed `rm -f` cleanup and was rejected
+before execution. The retry used a unique report name; this is a command-safety
+failure, not a profiler or kernel failure.

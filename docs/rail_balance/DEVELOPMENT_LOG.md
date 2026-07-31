@@ -7047,3 +7047,19 @@ median / 173.222 ms p95 with 0.068% population CV. Source-stage median is
 also makes the architectural boundary explicit: exact serial per-copy planning
 remains over 600x slower than the measured source stage and must leave the
 final critical path.
+
+## 2026-07-31 — HA060-M: private GPU chunk checkpoint
+
+The first private fast path is functional and measured. It adds a configurable
+minimum chunk only to `_build_rail_balance_hop_one_hop_plan`; public Hybrid
+still constructs `planner_chunk_size=1`. One-hot endpoint groups use bounded
+chunk decisions, all 32 warp lanes validate/materialize records, and fixed
+worker prefixes make remote/proxy slots deterministic. Shared multi-target
+payloads continue through the exact endpoint scorer.
+
+The N=8192 private one-hop median falls from 92.678 to 13.586 ms; adaptive
+falls from 89.563 to 15.608 ms. Twelve GPU tests and focused sanitizer checks
+pass. This checkpoint proves the data structure and parallel materializer but
+does not yet claim the planner is cheap enough or asynchronous: the next step
+is to fuse endpoint histograms into record production and expose only the
+small group plan to the serialized phase.
