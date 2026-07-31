@@ -1254,3 +1254,8 @@ Out of scope until evidence expands the project:
   59.689 ms p95, 5.19x below O100's 308.736 ms. The one-hop control is stable
   at 41.510 ms versus 41.372 ms. Both eligibility gates pass; capability and
   claim scope remain unchanged.
+- HA060-K adds an exact singleton endpoint bypass to one-hop assignment. The
+  diagonal C100 diagnostic finish falls from 41.510 to 34.669 ms for one-hop
+  and 59.493 to 52.918 ms for adaptive; an off-diagonal two-candidate control
+  is unchanged. GPU 11/11, both vnode round trips, and focused sanitizer gates
+  pass. Clean committed-tree evidence remains pending.

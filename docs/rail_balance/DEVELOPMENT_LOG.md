@@ -6976,3 +6976,29 @@ The one-hop finish changes only +0.33% from 41.372 ms, while adaptive falls
 from 308.736 ms. Population CV is 0.250%/0.122%, and both reports pass baseline
 eligibility. HA060-J is accepted for the experimental planner; real Gin/RDMA
 capability remains closed.
+
+## 2026-07-31 — HA060-K: bypass singleton endpoint scoring
+
+Post-O101 Nsys reduces the selected adaptive planner from 237.244 to 46.378 ms
+(5.12x); it remains 98.6% of selected kernel time, while source shuffle is
+0.525 ms. A channel-count sweep with the exact C100 endpoint table measures
+31.598/31.278/31.325/32.194 ms at C=1/8/32/256 in one-hop mode. Thus channel
+materialization contributes less than 1 ms and initial endpoint assignment is
+the remaining planner floor.
+
+The fanout diagnostic has `o=t=0` for every remote copy, so `{o,t}` contains
+one Rail. The planner now accepts that sole candidate after the existing
+capacity check instead of running a general load score whose result cannot
+change. Multi-candidate records use the unchanged path.
+
+```text
+C100 one-hop finish diagnostic         41.510 -> 34.669 ms
+C100 adaptive finish diagnostic        59.493 -> 52.918 ms
+off-diagonal one-hop private control    12.143 -> 12.177 ms
+GPU exact planner                                      11/11 PASS
+one-hop/adaptive vnode round trips                         PASS
+planner memcheck/initcheck/synccheck                  0 errors
+```
+
+The edit adds no state or output. Capability remains false pending clean and
+real multi-node evidence.

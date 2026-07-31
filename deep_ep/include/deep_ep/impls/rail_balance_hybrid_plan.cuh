@@ -384,7 +384,15 @@ void rail_balance_hop_plan_impl(
         int best_source_peak = INT_MAX;
         int best_local_forwards = INT_MAX;
         int best_tie = INT_MAX;
-        for (int egress = 0; egress < num_rails; ++egress) {
+        if ((candidates & (candidates - 1)) == 0) {
+            best_egress = __ffs(static_cast<int>(candidates)) - 1;
+            const int pair_offset =
+                destination * num_rails + best_egress;
+            if (pair_load[pair_offset] + 1 + owner_remaining[
+                    best_egress * num_destinations + destination] >
+                    num_max_tokens_per_rank)
+                best_egress = -1;
+        } else for (int egress = 0; egress < num_rails; ++egress) {
             if ((candidates & (uint32_t{1} << egress)) == 0)
                 continue;
             const int pair_offset = destination * num_rails + egress;

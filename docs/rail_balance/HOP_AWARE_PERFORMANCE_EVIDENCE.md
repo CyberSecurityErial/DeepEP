@@ -473,3 +473,33 @@ only +0.33% from 41.372 ms. Both reports pass baseline eligibility and hash to:
 
 The evidence remains a checked single-node adapter result, not real Rail/NIC
 performance.
+
+### HA060-K singleton endpoint diagnostic
+
+O101's matched Nsys range measures:
+
+```text
+adaptive planner kernel              46.378 ms (98.6%)
+source-shuffle kernel                 0.525 ms
+record materializer                   0.0069 ms
+```
+
+The report artifacts hash to:
+
+```text
+26e1eadd280566833a08497db7a240691668cb78c80aac95871b68a3b49fbf92  c100-adaptive-warp-records-nsys.nsys-rep
+69fdcc7a71a5e8941ac3e3bbe22f2a56547c2816da37b46d906831cd3c7d2598  c100-adaptive-warp-records-nsys.sqlite
+65084977f0842b03fa240500bb0d2bc8a950fddf017ecf13a68b2f1ebb0e6bdf  c100-adaptive-warp-records-nsys.json
+```
+
+Bypassing the score for one-bit endpoint sets produces 3+20 C100 finish
+medians of 34.669 ms one-hop and 52.918 ms adaptive, from clean predecessors
+41.510 and 59.493 ms. The diagnostic JSON hashes are:
+
+```text
+5a2a3c7fbfc4849b666d2500217ed2a3ae7d95e1ccd40cb7bedd3e38f7abfa8c  c100-onehop-singleton-diag.json
+4c3af2bb17bfe53f05a5b498ae1219d7e0632663fc6d0fd7fb452c4009d333e0  c100-adaptive-singleton-diag.json
+```
+
+Correctness gates pass; clean distributions are pending and claim scope is
+unchanged.

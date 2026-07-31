@@ -2485,3 +2485,21 @@ median versus 41.372 ms before the edit. Adaptive `finish` is 59.493 ms median
 / 59.689 ms p95 versus 308.736 / 308.977 ms at O100, a 5.19x median speedup.
 Source-stage medians are 119.918 us and 642.279 us respectively and remain a
 separate data-plane boundary. Both eligibility gates pass.
+
+## O102 — exact singleton endpoint bypass
+
+The C100 channel sweep shows that C=1 through C=256 changes private one-hop
+time by less than 1 ms; endpoint assignment dominates. A record whose
+`target_mask | owner_bit` has one bit has no Rail choice. O102 takes that bit
+directly after the same reservation-aware capacity check and leaves all
+multi-candidate scoring untouched.
+
+```text
+C100 one-hop finish diagnostic    41.510 -> 34.669 ms (1.197x)
+C100 adaptive finish diagnostic   59.493 -> 52.918 ms (1.124x)
+off-diagonal control              12.143 -> 12.177 ms (noise)
+```
+
+Exact tests, both vnode round trips, and focused memcheck/initcheck/synccheck
+pass. The dirty-tree diagnostics decide to keep the candidate pending clean
+10+100 evidence.
