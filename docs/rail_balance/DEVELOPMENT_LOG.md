@@ -7089,3 +7089,18 @@ as an ownership-boundary lesson rather than hidden.
 Before the next CUDA edit, the design now fixes grid/block/warp/lane ownership
 for every stage. The dense record and slot phases will use `G*C` one-warp
 blocks; only coarse endpoint decisions remain in one ordered warp.
+
+## 2026-07-31 — HA070-B: parallel pre-count checkpoint
+
+The first multi-block slice changes only the initial record validation/count.
+It launches `G*C` one-warp blocks; a block owns one `(owner, channel)` stripe,
+each lane owns one top-k slot, and the block scans about `N/C` tokens. The
+existing ordered endpoint decision consumes the completed counts and skips its
+old single-warp full-table pass. Exact chunk-1 remains on the unchanged kernel.
+
+All 12 GPU planner tests pass, including corrupt/gapped records, capacity,
+adaptive cap, and determinism. Compute Sanitizer memcheck and synccheck report
+zero errors. On N8192/C256, one-hop falls from 13.586 to 9.198 ms and adaptive
+from 15.608 to 11.177 ms. Nsys measures the new pre-count at 16.672 us and the
+remaining ordered planner at 9.098 ms (99.6% of kernel time), so the next slice
+is assignment/slot materialization rather than pre-count tuning.

@@ -1287,3 +1287,8 @@ Out of scope until evidence expands the project:
   histogram was neutral and reverted. The next implementation must start from
   the documented `grid -> block -> warp -> lane` map: coarse decisions in one
   warp, dense assignment/count/finalization in `G*C` independent blocks.
+- HA070-B implements the first mapped slice: `G*C` one-warp blocks validate
+  and count about `N/C` tokens each. N8192/C256 one-hop/adaptive improve to
+  9.198/11.177 ms, 12/12 GPU tests and memcheck/synccheck pass. Nsys measures
+  the pre-count at 16.672 us and leaves 9.098 ms in the ordered planner, so the
+  next slice is parallel assignment and static slot materialization.

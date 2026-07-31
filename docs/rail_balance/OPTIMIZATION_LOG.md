@@ -2622,3 +2622,30 @@ Evidence:
 /tmp/rail-hop-ha070-private-hist.json
 private-hist SHA256 246fdf215f9e08ff2b0367b90b6b94505298da002895fcf0dbc9e6176477ae
 ```
+
+## O106 — parallel record pre-count
+
+Hypothesis: the first of several full record-table passes is a material part of
+the one-warp latency chain. Only that pass is moved to `G*C` one-warp blocks;
+endpoint decisions and final slots remain byte-for-byte on the prior path.
+
+```text
+                                  before      after       speedup
+one-hop N8192/C256 median         13.586 ms    9.198 ms      1.477x
+adaptive N8192/C256 median        15.608 ms   11.177 ms      1.396x
+one-hop after p95                              9.206 ms
+adaptive after p95                            11.238 ms
+```
+
+Matched Nsys attributes 16.672 us to the new pre-count and 9.098 ms to the
+remaining precounted planner. Thus the experiment replaces roughly 4.4 ms of
+serialized work with 0.017 ms and is accepted; it also falsifies pre-count as
+the remaining bottleneck.
+
+```text
+.cache/rail_balance/hop-aware/ha070-onehop-n8192-precount.nsys-rep
+/tmp/rail-hop-ha070-precount-onehop.json
+/tmp/rail-hop-ha070-precount-adaptive.json
+one-hop SHA256 d3fbdcc9451e1a322b907710dd1fcc3c6913e01aad80c68ac2f47120da32476c
+adaptive SHA256 dc12f779b42fd4ca48ba3a5280dad4b7db0a687b4d59ec0a3180c049fa7432c4
+```
