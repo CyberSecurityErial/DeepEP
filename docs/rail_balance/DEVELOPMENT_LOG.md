@@ -7682,3 +7682,37 @@ transport comparison requires same-tree DeepEP off, clean DeepEP v2,
 RailBalance, UCCL EP and NCCL EP on frozen common API/rank-max contracts, or an
 audited terminal failure row.  No competitor GPU program was built or run, no
 formal source round was launched, and the performance Leader did not change.
+
+## 2026-08-01 — HA070-M: competitor checkpoint published and clean scaffold finalized
+
+Commit `469e771` publishes the fail-closed competitor preflight, its 26 CPU
+contracts, frozen local manifest and tightened paper evidence.  It was pushed
+to `fork/feat/rail-balance-hop-aware`; local and remote were `0/0` ahead/behind
+immediately after the push.  There are no CUDA/C++ changes in that commit.
+
+A new scaffold-only campaign then ran on the exact clean executable checkpoint:
+
+```text
+run_id: takeover-scaffold-20260801-04
+source: 469e7712dbf00cc3767a0dbd07ce4c8213960475, clean pre/post
+status/scope: scaffold_only/scaffold_only
+reasons: Qwen PID 3047501,3047502; explicit scaffold-only
+CPU gates: 6/6 PASS
+exclusive-8GPU stages: 19 skipped
+GPU attempts/process starts: 0/0
+artifact bytes before result: 109458
+/home pre/post bytes: 272010797056 / 272011198464
+result.json sha256: 47744b43c56ed3c24237378bc3380d87c1f9ee8221e96727fa4a80d37e353455
+SHA256SUMS sha256: c4b45c2076b1ea747d12bdccaa744b74cff27c762cd1519329aa04a36e0972a3
+FINALIZED.json sha256: 1ed73344f675571ad8de8bee75e0bbd29e6c1b32a40f34a046642dc3bef3d67a
+terminal Leaderboard entry: b27e2fa2a1070de81a5c6cc93dfc644cd0055d0a42b11804a03693218c0068f8
+terminal exit code: 0
+round evaluation allowed: false
+```
+
+Every `SHA256SUMS` row was independently recomputed successfully.  The run
+contains six CPU stage processes only.  Qwen still occupied GPU 0--1, so all
+19 exclusive-eight-GPU stages had empty attempt lists; no build, CUDA kernel,
+benchmark or profiler started.  This closes the clean resource-gate checkpoint
+for `469e771`, not the pending post-`286da0a` 4x2 vnode or formal performance
+round.  The performance Leader remains `8c56939` and no NIC/RDMA claim changed.

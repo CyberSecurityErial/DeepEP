@@ -259,22 +259,22 @@ PYTHONPATH="$PWD/tests/elastic:$PWD" \
 当前 terminal合同下的 clean-tree finalized记录为：
 
 ```text
-run_id: takeover-scaffold-20260801-03
-source: 6103180323e798c1c146ce54d719b0912e097359, clean pre/post
+run_id: takeover-scaffold-20260801-04
+source: 469e7712dbf00cc3767a0dbd07ce4c8213960475, clean pre/post
 status/scope: scaffold_only/scaffold_only
 reasons: Qwen PID 3047501,3047502; explicit scaffold-only
 CPU gates: 6/6 PASS
 exclusive-8GPU stages: 19 skipped; GPU attempts/process starts: 0/0
-artifact bytes before result: 115,814
-/home pre/post: 271,835,348,992 / 271,836,360,704 bytes
+artifact bytes before result: 109,458
+/home pre/post: 272,010,797,056 / 272,011,198,464 bytes
 result.json sha256:
-a2ecd3797dcc2b42d0d84dd190765c7017bd4f579d20c925ea7f1778c5cb5c49
+47744b43c56ed3c24237378bc3380d87c1f9ee8221e96727fa4a80d37e353455
 SHA256SUMS sha256:
-cf203463ea005eaa883ef2f0226f308c13217a46f3ab5e154427656619735134
+c4b45c2076b1ea747d12bdccaa744b74cff27c762cd1519329aa04a36e0972a3
 FINALIZED.json sha256:
-47d26d62cc4bace8f24717d030c563ad7112ca4fbb7f2703e7efe7df4e4a8009
+1ed73344f675571ad8de8bee75e0bbd29e6c1b32a40f34a046642dc3bef3d67a
 terminal Leaderboard entry:
-e56382a8cc18487dbda28a3939d1ce725abf4fae8348dd82beca7b021de4805f
+b27e2fa2a1070de81a5c6cc93dfc644cd0055d0a42b11804a03693218c0068f8
 ```
 
 全部 `SHA256SUMS` 条目已重算一致。`FINALIZED.json` 的
