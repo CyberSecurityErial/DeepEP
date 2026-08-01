@@ -145,6 +145,17 @@ def _assert_source_contract() -> None:
     assert "'_rail_balance_world_gate_stream'" in force_combine
 
 
+def _assert_multinode_hybrid_auto_resources_are_bounded() -> None:
+    assert elastic_module._hybrid_auto_sm_floor(True, 2) == 32
+    assert elastic_module._hybrid_auto_sm_floor(True, 8) == 32
+    assert elastic_module._hybrid_auto_sm_floor(False, 2) == 64
+    assert elastic_module._hybrid_auto_sm_floor(True, 1) == 64
+    assert elastic_module._hybrid_auto_qp_limit(True, 2) == 2
+    assert elastic_module._hybrid_auto_qp_limit(True, 16) == 8
+    assert elastic_module._hybrid_auto_qp_limit(False, 2) is None
+    assert elastic_module._hybrid_auto_qp_limit(True, 1) is None
+
+
 class _FakeGroup:
     def rank(self) -> int:
         return 0
@@ -767,6 +778,7 @@ def main() -> None:
     elastic_module._run_rail_balance_world_gate = _GateController.patched_gate
     try:
         _assert_source_contract()
+        _assert_multinode_hybrid_auto_resources_are_bounded()
         _assert_successful_round_trip()
         _assert_one_hop_selects_endpoint_planner()
         _assert_adaptive_does_not_fall_back()

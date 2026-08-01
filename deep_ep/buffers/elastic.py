@@ -88,6 +88,20 @@ _RAIL_BALANCE_COMBINE_MANIFEST_ERROR = 42
 _RAIL_BALANCE_COMBINE_ENCODE_ERROR = 43
 
 
+def _hybrid_auto_sm_floor(allow_hybrid_mode: bool,
+                          num_scaleout_ranks: int) -> int:
+    """Return the non-overlap SM floor for the resolved Hybrid topology."""
+    return 32 if allow_hybrid_mode and num_scaleout_ranks > 1 else 64
+
+
+def _hybrid_auto_qp_limit(allow_hybrid_mode: bool,
+                          num_scaleout_ranks: int) -> Optional[int]:
+    """Limit multi-node Hybrid QPs to useful scale-out destinations."""
+    if not allow_hybrid_mode or num_scaleout_ranks <= 1:
+        return None
+    return min(num_scaleout_ranks, 8)
+
+
 def _rail_balance_error(code: str, detail: str) -> str:
     return f'[DeepEP rail_balance:{code}] {detail}'
 
@@ -1708,7 +1722,10 @@ class ElasticBuffer:
                 bounded_gbs / bounded_traffic * sm_write / sm_write_gbs,
             )
         num_sms = align(max(4, math.ceil(num_sms * 1.25)), 2)
-        num_sms = num_sms if self.prefer_overlap_with_compute else max(num_sms, 64)
+        num_sms = num_sms if self.prefer_overlap_with_compute else max(
+            num_sms,
+            _hybrid_auto_sm_floor(
+                self.allow_hybrid_mode, self.num_scaleout_ranks))
         num_sms = min(num_sms, num_device_sms)
 
         # Summary
@@ -1736,6 +1753,10 @@ class ElasticBuffer:
         # For hybrid mode, we encourage every channel (and notify) to have an independent QP
         if self.allow_hybrid_mode:
             num_qps = num_sms * 16 + 1
+            qp_limit = _hybrid_auto_qp_limit(
+                self.allow_hybrid_mode, self.num_scaleout_ranks)
+            if qp_limit is not None:
+                num_qps = min(num_qps, qp_limit)
 
         return min(num_qps, self.num_allocated_qps)
 
