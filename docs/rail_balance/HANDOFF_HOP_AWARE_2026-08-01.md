@@ -16,8 +16,8 @@ GitHub fork：`git@github.com:CyberSecurityErial/DeepEP.git`
 
 当前分支：`feat/rail-balance-hop-aware`
 
-最近已发布代码检查点：`469e771`；UCCL/NCCL竞品静态预检与论文实验基础设施已经提交
-并推送（恢复时实际 HEAD以 `git rev-parse HEAD` 为准）
+最近实验检查点：`3306da2`；精简论文实验清单和 COMMON_FAIR CPU 合同已经提交
+（恢复时实际 HEAD以 `git rev-parse HEAD` 为准）
 
 原型基线：`feat/rail-balance-prototype` / `5199a04`
 
@@ -30,15 +30,15 @@ source round、4×2 vnode复验和真实多机 Rail/Gin 仍是门槛。**
 
 ## 0. 一屏状态
 
-- `469e771` 相对 prototype `5199a04` 有 50 个 hop-aware提交。核心 planner/checkpoint
+- `3306da2` 相对 prototype `5199a04` 有 52 个 hop-aware提交。核心 planner/checkpoint
   已提交为 `286da0a`，benchmark证据门禁为 `771fcc6`，CUDA harness监督契约为
   `0f38688`，fail-closed campaign/formal source-round控制面为 `448a727`，竞品证据与
   论文口径为 `be4a69b`，source-round manifest freezer为`6103180`，fail-closed竞品
-  preflight与收紧后的实验矩阵为`469e771`。后续提交会继续增加计数，恢复时必须现场
-  查询 Git。
+  preflight与收紧后的实验矩阵为`469e771`，精简实验清单与 COMMON_FAIR CPU 合同为
+  `3306da2`。后续提交会继续增加计数，恢复时必须现场查询 Git。
 - 当前没有 `csrc/`、`deep_ep/include/` 或核心 CUDA 测试的未提交改动。campaign、
-  formal-round执行控制面和 CPU-only source-round preparer已经提交；本次新增的是
-  CPU-only competitor preflight、合同测试和论文证据文档，不能用旧的 dirty实现文件清单
+  formal-round执行控制面、CPU-only source-round preparer、COMMON_FAIR manifest/route/
+  payload/result/bundle 合同和精简论文实验文档已经提交；不能用旧的 dirty实现文件清单
   判断是否丢改动。
 - 交接时没有遗留 benchmark、sanitizer 或构建进程；2026-08-01 takeover resource gate
   观察到用户 Qwen占 GPU0–1，短算子也曾瞬时占满8卡，均不得终止或干扰。

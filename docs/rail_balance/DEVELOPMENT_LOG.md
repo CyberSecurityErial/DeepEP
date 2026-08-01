@@ -7719,6 +7719,9 @@ round.  The performance Leader remains `8c56939` and no NIC/RDMA claim changed.
 
 ## 2026-08-01 — HA070-N: paper experiment scope and CPU contracts closed
 
+Commit `3306da2` records this experiment-document and CPU-contract checkpoint;
+it contains no CUDA/C++ implementation change and no performance result.
+
 The user froze the execution boundary more narrowly than the earlier long-form
 matrix: this single-node machine is for reducing the hop-aware **plan CUDA
 operator latency**.  Final competitor and real-workload performance belongs on
