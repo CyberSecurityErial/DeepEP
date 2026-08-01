@@ -161,7 +161,7 @@ _HOP_ONE_HOP_JIT_KERNEL_PREFIXES = (
 _HOP_ADAPTIVE_JIT_KERNEL_PREFIXES = (
     "kernel.rail_balance_hop_record_v1.",
     "kernel.rail_balance_hop_precount_v2.",
-    "kernel.rail_balance_hop_adaptive_decision_v8.",
+    "kernel.rail_balance_hop_adaptive_decision_v9.",
     *_HOP_MATERIALIZER_JIT_KERNEL_PREFIXES,
     "kernel.rail_balance_hop_source_shuffle.",
 )

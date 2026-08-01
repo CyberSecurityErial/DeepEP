@@ -7789,3 +7789,15 @@ The first clean post-commit run then exposed one stale v7 benchmark identity
 prefix after the launcher moved to v8; the whitelist was corrected directly.
 O110 in `OPTIMIZATION_LOG.md` contains raw metrics and artifact paths. No
 multi-node or NIC performance claim was made.
+
+O111 starts from clean commit `a9bd59a`: matched Nsys reduced the adaptive
+decision median from about 4.20 ms before O110 to 1.706 ms, but it still
+accounts for roughly 61% of profiler-free `finish`.  The next minimal kernel
+experiment replaces the redundant all-lanes/all-candidates warp comparison
+with a deterministic five-level tree reduction.  It does not alter the
+planner search budget or policy and must reproduce the current plan exactly.
+The first 3+20 diagnostic met that contract: volume/rot1 plans match v8 while
+`finish` fell from 2.776/5.065 ms to 2.489/4.827 ms.  Direct repository
+runners passed 20/20 CUDA tests, 12/12 CPU tests and the 8-rank transaction.
+The unavailable `pytest` module and one rejected rot1 CLI spelling are kept
+in O111 as non-measurement failures; neither reached a timed CUDA iteration.

@@ -2855,3 +2855,49 @@ Evidence:
 .cache/rail_balance/hop-aware/takeover-20260801/round-budget-4-adaptive-rot1-10x100.json
 .cache/rail_balance/hop-aware/takeover-20260801/final-v8-adaptive-volume-10x100.json
 ```
+
+## O111 — tree-reduce the adaptive candidate
+
+Matched post-O110 Nsys still attributes a 1.706 ms median to the adaptive
+decision kernel, about 61% of the 2.776 ms profiler-free `finish` median.
+Source shuffle is only about 25 us.  The next single variable is therefore
+the warp candidate reduction: the old loop made every lane exchange and
+compare all 32 nine-field candidates.  A five-level tree now elects the same
+strictly ordered winner and broadcasts lane 0.  Search rounds, scan order,
+candidate scoring, cap, threshold, quota updates and materialization remain
+unchanged.  Acceptance requires byte-identical plan tensors and lower matched
+profiler-free/Nsys time; otherwise this patch is reverted before trying a
+multi-warp scan.
+
+Pre-change evidence:
+
+```text
+.cache/rail_balance/hop-aware/takeover-20260801/clean-a9bd59a-adaptive-volume-10x100.json
+.cache/rail_balance/hop-aware/takeover-20260801/clean-a9bd59a-adaptive-rot1-10x100.json
+.cache/rail_balance/hop-aware/takeover-20260801/post-a9bd59a-volume.nsys-rep
+.cache/rail_balance/hop-aware/takeover-20260801/post-a9bd59a-volume.sqlite
+```
+
+The dirty-tree 3+20 acceptance diagnostic kept both measured plans identical
+to v8 and reduced the exposed phase without changing the policy:
+
+```text
+case       v8 clean finish   tree finish   v8/tree source peak   pair peak   two-hop
+volume            2.776 ms      2.489 ms             1405/1405         256      2048
+rot1              5.065 ms      4.827 ms             7194/7194        1344      5236
+```
+
+All path units, moved copies and extra local-forward units also match.  The
+focused CUDA planner passed 20/20, the CPU oracle passed 12/12, and the 8-rank
+plan transaction passed.  A first test command tried `pytest`, which is not
+installed in the frozen runtime; the repository's direct runners were then
+used without changing the tests.  A rot1 command typo (`c100_rot1_h256`) was
+rejected by argparse before CUDA initialization and rerun with the actual
+`c100_matrix_rot1_h256` case.  Neither failed command contributed timing.
+
+Post-change diagnostic evidence:
+
+```text
+.cache/rail_balance/hop-aware/takeover-20260801/o111-tree-adaptive-volume-3x20.json
+.cache/rail_balance/hop-aware/takeover-20260801/o111-tree-adaptive-rot1-3x20.json
+```

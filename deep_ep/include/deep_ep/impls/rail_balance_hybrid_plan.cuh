@@ -177,6 +177,18 @@ __forceinline__ __device__ bool better_candidate(
     return candidate.index < current.index;
 }
 
+__forceinline__ __device__ AdaptiveCandidate warp_best_candidate(
+        AdaptiveCandidate best) {
+    const int lane = ptx::get_lane_idx();
+    #pragma unroll
+    for (int offset = 16; offset > 0; offset /= 2) {
+        const auto candidate = ptx::exchange(best, lane + offset);
+        if (lane < offset and better_candidate(candidate, best))
+            best = candidate;
+    }
+    return ptx::exchange(best, 0);
+}
+
 __forceinline__ __device__ LoadPeaks find_load_peaks(
         const int* loads, const int count) {
     LoadPeaks peaks = {-1, 0, 0};
@@ -550,11 +562,7 @@ __forceinline__ __device__ bool rebalance_endpoint_quotas(
                     best = candidate;
             }
         }
-        for (int source_lane = 0; source_lane < 32; ++source_lane) {
-            const auto candidate = ptx::exchange(best, source_lane);
-            if (better_candidate(candidate, best))
-                best = candidate;
-        }
+        best = warp_best_candidate(best);
         if (best.index < 0 or
             (not best.meets_batch_floor and
              tiny_tail_rounds >= num_rails))
