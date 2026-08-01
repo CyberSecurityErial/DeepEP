@@ -2783,3 +2783,73 @@ e264a1352b856b8248a7173cfa763990840a8c993abf57798f87efe841bc38bf  c100-adaptive-
 
 The earlier explanation that C100 `finish` was probably host-gate dominated is
 rejected and retained here. Nsys locates the exposed cost in the GPU planner.
+
+## O110 — bound low-value adaptive rounds
+
+Current-HEAD Nsys isolated the remaining adaptive cost in
+`rail_balance_hop_plan_impl<0,true,true>`: one block, one warp, 100 registers
+per thread, and 4.20--5.52 ms per C100 invocation. It represented 69.5% of
+kernel time while source shuffle was 24.56 us median. A targeted private NCU
+replay confirmed the structural limit: one active warp on one of 132 SMs,
+1.56% achieved occupancy, only 14.56% scheduler cycles with an eligible warp,
+78,184 executed instructions, 0.03% SM throughput and 0.02% memory throughput.
+The kernel is a serial, dependency-heavy search rather than a bandwidth-bound
+copy kernel.
+
+The single variable was the maximum adaptive search budget per Rail. The old
+`G*32` bound permits 256 full candidate rescans on G8. The accepted `G*8`
+bound permits 64 rescans and raises the deterministic batch floor; candidate
+scoring, threshold, two-hop cap, quota materialization and data movement are
+unchanged. This is an algorithm-budget optimization, not a byte-for-byte
+equivalent kernel rewrite, so plan quality is part of its acceptance contract.
+
+Profiler-free 10+100 diagnostics:
+
+```text
+case          rounds/Rail  finish median  transaction median  source peak  pair peak  two-hop
+volume                 32       6.080 ms          15.684 ms         1412        256     2048
+volume                  8       2.778 ms          12.465 ms         1405        256     2048
+rot1                   32       7.394 ms          16.901 ms         7285       1382     5872
+rot1                    8       5.078 ms          14.264 ms         7194       1344     5236
+```
+
+The volume run repeated at 2.775 ms finish with an identical plan. After the
+JIT identity was bumped to `rail_balance_hop_adaptive_decision_v8`, the same
+source produced 2.812 ms finish and the identical 2048 two-hop / 1405 source
+peak plan. These are local checked-adapter diagnostics, not NIC/RDMA claims.
+
+The more aggressive `G*4` experiment passed correctness and reduced volume /
+rot1 finish to 2.260 / 4.231 ms, but volume source peak regressed from 1405 to
+1484 (+5.6%). It was rejected and reverted. This establishes 8 rounds/Rail as
+the measured latency/plan-quality knee rather than selecting the fastest
+synthetic point.
+
+Validation after restoring 8:
+
+```text
+GPU endpoint/adaptive invariants, capacity and determinism   20/20 PASS
+CPU reference hop semantics and randomized properties       12/12 PASS
+random destination widths extended through D=32                  PASS
+volume plan repeated identically                                  PASS
+```
+
+One failed C100 attempt reused a populated JIT directory and was correctly
+rejected by the report builder's empty-pre-JIT identity assertion. It was not
+counted; the rerun used a new empty cache. The next clean checkpoint must
+repeat profiler-free volume/rot1 and then collect matched Nsys. A multi-warp
+scan that preserves all 256 rounds remains a separate future experiment; it
+is not mixed into O110.
+
+Evidence:
+
+```text
+.cache/rail_balance/hop-aware/takeover-20260801/current-adaptive-volume.nsys-rep
+.cache/rail_balance/hop-aware/takeover-20260801/current-adaptive-multitarget-decision-basic.ncu-rep
+.cache/rail_balance/hop-aware/takeover-20260801/current-adaptive-multitarget-decision-directed.ncu-rep
+.cache/rail_balance/hop-aware/takeover-20260801/round-budget-8-adaptive-volume-10x100.json
+.cache/rail_balance/hop-aware/takeover-20260801/round-budget-8-adaptive-volume-r2-10x100.json
+.cache/rail_balance/hop-aware/takeover-20260801/round-budget-8-adaptive-rot1-10x100.json
+.cache/rail_balance/hop-aware/takeover-20260801/round-budget-4-adaptive-volume-10x100.json
+.cache/rail_balance/hop-aware/takeover-20260801/round-budget-4-adaptive-rot1-10x100.json
+.cache/rail_balance/hop-aware/takeover-20260801/final-v8-adaptive-volume-10x100.json
+```

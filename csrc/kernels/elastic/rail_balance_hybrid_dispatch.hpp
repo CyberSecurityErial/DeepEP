@@ -560,7 +560,7 @@ static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
             "rail_balance_hop_record_v1",
             RailBalanceHopRecordRuntime::generate(record_args)),
         .plan = jit::compiler->build(
-            aggregate_adaptive ? "rail_balance_hop_adaptive_decision_v7" :
+            aggregate_adaptive ? "rail_balance_hop_adaptive_decision_v8" :
             precounted ? "rail_balance_hop_decision_v7" :
                          "rail_balance_hop_plan_v4",
             RailBalanceHopPlanRuntime::generate(plan_args)),
@@ -2113,7 +2113,7 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
         .launch_args = jit::LaunchArgs(1, 32),
     };
     const auto runtime = jit::compiler->build(
-        aggregate_adaptive ? "rail_balance_hop_adaptive_decision_v7" :
+        aggregate_adaptive ? "rail_balance_hop_adaptive_decision_v8" :
         precounted ? "rail_balance_hop_decision_v7" :
                      "rail_balance_hop_plan_v4",
         RailBalanceHopPlanRuntime::generate(prototype));

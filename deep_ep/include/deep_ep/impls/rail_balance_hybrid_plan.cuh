@@ -11,7 +11,7 @@ namespace deep_ep::elastic::rail_balance {
 
 static constexpr int kNumHybridSegmentFields = 5;
 static constexpr int kNumMaxEndpointChunks = 32;
-static constexpr int kNumMaxAdaptiveRoundsPerRail = 32;
+static constexpr int kNumMaxAdaptiveRoundsPerRail = 8;
 
 enum HybridSegmentField : int {
     kHybridSegmentOwner = 0,

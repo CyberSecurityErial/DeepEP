@@ -625,7 +625,7 @@ def test_random_one_hop_invariants_and_determinism() -> None:
     for seed in range(128):
         rng = random.Random(seed)
         rails = rng.choice((2, 4, 8))
-        destinations = rng.choice((2, 4))
+        destinations = rng.choice((2, 4, 8, 16, 32))
         num_tokens = rng.randint(1, 16)
         num_topk = rng.randint(1, min(4, destinations))
         records = []
@@ -748,7 +748,7 @@ def test_random_adaptive_invariants_cap_and_determinism() -> None:
     for seed in range(64):
         rng = random.Random(1000 + seed)
         rails = rng.choice((3, 4, 8))
-        destinations = rng.choice((2, 4))
+        destinations = rng.choice((2, 4, 8, 16, 32))
         num_tokens = rng.randint(1, 12)
         num_topk = rng.randint(1, min(3, destinations - 1))
         records = []

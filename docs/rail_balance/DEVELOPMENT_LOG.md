@@ -7762,3 +7762,28 @@ then rerun with the frozen DeepEP Python 3.11 binary and passed 103/103; no gate
 was weakened.  GPU0--1 still belonged to the user's Qwen job, so no CUDA work
 was attempted.  The next phase is plan-operator optimization after this
 experiment-document checkpoint is committed.
+
+## 2026-08-01 — HA070-O: distributed runbook and adaptive round-budget checkpoint
+
+The distributed experiment work was separated from local operator tuning.
+`docs/rail_balance/DISTRIBUTED_EXPERIMENT_RUNBOOK.md` was committed alone as
+`a476034`. It requires real continuous token-level traces, direct same-tree
+`one_hop` versus `adaptive` pairing, an exact one-hop/max-flow constraint-gap
+audit, and runtime plus NIC/QP/NVLink counter closure. Synthetic diagonal,
+closed-block and rail-hot inputs are correctness/stress cases only. Missing
+trace, adapter, counter or business SLO evidence forces `INCONCLUSIVE`.
+
+For the local operator, profiler-free one-hop/adaptive controls, Nsys and
+targeted NCU all locate the exposed third-Rail cost in the single-warp
+adaptive decision loop. Reducing the deterministic budget from 32 to 8 rounds
+per Rail keeps the threshold, cap and data plane unchanged, cuts volume finish
+from 6.080 to about 2.8 ms, and does not worsen measured Rail peaks in volume
+or rot1. The 4-round experiment was faster but worsened volume source peak by
+5.6%, so it was reverted. The final JIT identity is v8.
+
+The final pre-commit verification passed 20/20 GPU planner tests and 12/12 CPU
+reference tests; randomized destination counts now include D=8/16/32. One
+benchmark attempt failed only because its JIT cache was already populated;
+the fail-closed report builder rejected it and a fresh-cache rerun passed.
+O110 in `OPTIMIZATION_LOG.md` contains raw metrics and artifact paths. No
+multi-node or NIC performance claim was made.

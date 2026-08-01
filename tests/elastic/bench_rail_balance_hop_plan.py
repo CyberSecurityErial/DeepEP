@@ -31,6 +31,8 @@ def _records(tokens: int, pattern: str) -> torch.Tensor:
     records = torch.full((8, tokens, 8), _UNUSED, dtype=torch.int64, device="cuda")
     if pattern == "singleton":
         records[0, :, 0] = (1 << 32) | 1
+    elif pattern == "multitarget":
+        records[:4, :, 0] = (1 << 32) | 0b1111
     else:
         for token in range(tokens):
             records[0, token, 0] = (1 << 32) | (1 << (1 + token % 7))
@@ -69,7 +71,9 @@ def main() -> None:
         "--mode", choices=("one_hop", "adaptive", "both"), default="both"
     )
     parser.add_argument(
-        "--pattern", choices=("rotating", "singleton"), default="rotating"
+        "--pattern",
+        choices=("rotating", "singleton", "multitarget"),
+        default="rotating",
     )
     parser.add_argument("--tokens", type=int, nargs="+", default=(8, 32, 128, 512))
     parser.add_argument("--channels", type=int, default=8)
