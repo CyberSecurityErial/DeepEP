@@ -7716,3 +7716,46 @@ contains six CPU stage processes only.  Qwen still occupied GPU 0--1, so all
 benchmark or profiler started.  This closes the clean resource-gate checkpoint
 for `469e771`, not the pending post-`286da0a` 4x2 vnode or formal performance
 round.  The performance Leader remains `8c56939` and no NIC/RDMA claim changed.
+
+## 2026-08-01 — HA070-N: paper experiment scope and CPU contracts closed
+
+The user froze the execution boundary more narrowly than the earlier long-form
+matrix: this single-node machine is for reducing the hop-aware **plan CUDA
+operator latency**.  Final competitor and real-workload performance belongs on
+an external multi-node cluster.  This repository records only the external
+experiments' key dependencies and measurement contract; it must not install,
+build, containerize, or deploy those external environments here.
+
+`PAPER_PERFORMANCE_CHECKLIST_2026-08-01.md` is now the short execution list.
+Each experiment has exactly three substantive sections: what it validates,
+which libraries/metrics it compares, and the key environment dependencies.
+It contains local plan optimization, external DeepEP/NCCL-EP/UCCL-EP transport,
+one real MoE workload, and optional UltraEP/MoonEP coverage.  The older paper
+matrix remains a non-blocking candidate pool.
+
+The already-started COMMON_FAIR CPU work was closed without launching a build
+or GPU process.  It now has a strict design-only manifest, deterministic BF16
+payload generator, expanded world2/world4 correctness routes, compact
+world16/world32 logical routes, unverified raw-result aggregation, and a CPU
+bundle verifier.  The compact HT/world32 route represents 1,048,576 logical
+items in a roughly 1.7 KiB artifact.  All modules keep performance execution
+at `NOT_RUN` and do not authorize or promote a benchmark result.
+
+Verification at this checkpoint:
+
+```text
+COMMON_FAIR tests: 205 passed, 87 subtests passed
+existing preflight/campaign/source-round tests: 103 passed
+Ruff check/format: PASS
+py_compile: PASS
+static manifest: DESIGN_ONLY, execution_authorized=false
+payload conformance: PASS
+GPU/build/benchmark/profile: NOT_RUN
+```
+
+The first control-plane test attempt used an unpinned Python 3.12 interpreter
+and correctly failed one interpreter-hash assertion.  The unchanged suite was
+then rerun with the frozen DeepEP Python 3.11 binary and passed 103/103; no gate
+was weakened.  GPU0--1 still belonged to the user's Qwen job, so no CUDA work
+was attempted.  The next phase is plan-operator optimization after this
+experiment-document checkpoint is committed.

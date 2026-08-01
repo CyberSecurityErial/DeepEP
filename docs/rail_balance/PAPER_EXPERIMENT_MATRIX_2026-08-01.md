@@ -8,6 +8,12 @@
 >
 > 范围：设计 transport-only / placement-enabled、single-node / multi-node 四条赛道；不运行 GPU，不宣称已经打平或超过任何方案。
 
+实际执行优先级已经收缩为
+[`PAPER_PERFORMANCE_CHECKLIST_2026-08-01.md`](./PAPER_PERFORMANCE_CHECKLIST_2026-08-01.md)：
+本机只优化 plan CUDA 算子时间；真实多节点竞品与真实工作负载在外部集群运行。
+当前只编写外部实验的环境依赖文档，不在本机安装、构建或部署对应环境。本文保留为
+长版候选池，不要求一次完成所有条目。
+
 ## 1. 实验要回答的问题
 
 RailBalance 的核心假设是：在不改变 token 的最终专家语义、payload 和目标端点集合的前提下，允许发送端选择较空闲的 NIC/Rail，并在必要时增加一次受限的节点内转发，可以降低最拥塞 Rail 的负载和通信尾延迟。
@@ -91,18 +97,19 @@ source/tool/dependency/GPU/NIC/topology/disk合同的静态检查可复现；当
 
 | ID | 系统/模式 | 工作负载 | 公平条件 | 主结论位置 | 状态 |
 |---|---|---|---|---|---|
-| `TM-01` | same-tree `off` vs `one_hop` vs `adaptive` | 合成 2×2 trace：专家均衡/偏斜 × Rail均衡/热点 | 完全相同物理目标、payload、二进制/JIT、timed window；ABBA/BAAB | 主图：核心因果结果 | `NOT_RUN` |
+| `TM-01` | same-tree `off` vs `one_hop`；另一个独立pair为`off` vs `adaptive` | 合成 2×2 trace：专家均衡/偏斜 × Rail均衡/热点 | 完全相同物理目标、payload、二进制/JIT、timed window；每个预注册pair各自ABBA/BAAB | 主图：核心因果结果 | `NOT_RUN` |
 | `TM-02` | same-tree `off` vs `legacy_exact` | 同 `TM-01` | 冻结 legacy 语义和新模式语义，不把兼容路径当优化 Leader | 补充：回归与兼容性 | `NOT_RUN` |
 | `TM-03` | same-tree `off` / clean DeepEP v2 / tuning-frozen RailBalance best | UCCL官方HT anchor：4096 token/rank、H7168、K8、E288，FP8 dispatch/BF16 combine | 相同 GPU/NIC、route、SM/QP、API 与 rank-max | `AUTHOR_ARTIFACT_COMPAT`背景panel | `NOT_RUN` |
 | `TM-04` | UCCL-EP vs `TM-03`三系统 | 与 `TM-03`相同；若支持再加 128-token LL anchor | 同硬件/NIC/trace；UCCL 4 proxy threads/GPU或共同调参预算并单独披露 | UCCL官方shape兼容图，不与NCCL横算 | `NOT_RUN` |
 | `TM-05` | UCCL-EP / clean DeepEP v2 / tuning-frozen RailBalance best 三系统 scaling | nodes/EP、tokens、H、K、E、dtype 分轴变化 | 每次只改变一个轴；route seed/hash固定 | scaling 图 | `NOT_RUN` |
 | `TM-06` | UCCL-EP / clean DeepEP v2 / tuning-frozen RailBalance best 真实 trace replay | 脱敏且版本化的 logical/physical trace | 同时间片、相同 endpoint，报告 trace覆盖度 | 主图或外部有效性图 | `NOT_RUN` |
-| `TM-07` | same-tree `off` / clean DeepEP v2 / RailBalance best / UCCL-EP / NCCL EP LL | E256、H7168、K8、128 token/rank、全BF16；至少2/4 nodes | 统一逐iteration rank-max；route/layout/handle update、Dispatch(+Complete)、Combine(+Complete)分层；作者 mixed timing只进背景 | LL五系统主图 | `NOT_RUN` |
-| `TM-08` | 与`TM-07`相同五系统的HT | E256、H7168、K8、4096 token/rank、全BF16；至少2/4 nodes | 与`TM-07`同一分层边界；论文无HT性能，later v0.1的HT优化/`>8` nodes修复不等于作者复现 | HT五系统主图 | `NOT_RUN` |
+| `TM-07a/07b` | same-tree `off` / clean DeepEP v2 / RailBalance best / UCCL-EP / NCCL EP LL | E256、H7168、K8、128 token/rank、全BF16；07a=2×8、07b=4×8，分别成点 | 统一逐iteration rank-max；route/layout/handle update、Dispatch(+Complete)、Combine(+Complete)分层；作者 mixed timing只进背景 | LL五系统主图 | `NOT_RUN` |
+| `TM-08a/08b` | 与`TM-07`相同五系统的HT | E256、H7168、K8、4096 token/rank、全BF16；08a=2×8、08b=4×8，分别成点 | 与`TM-07`同一分层边界；论文无HT transport性能，later v0.1的HT优化/`>8` nodes修复不等于作者复现 | HT五系统主图 | `NOT_RUN` |
 | `TM-09` | SABRE vs NCCL/PyTorch AllToAllv AUTHOR_REPRO；Rail adapter COMMON_FAIR | 完整 skew matrix 与相同最终 endpoint | packing/reorder/API 无法统一时记 `NO_COMMON_API` | 算法边界/补充图 | `NOT_RUN` |
 | `TM-10` | fabric-lib vs DeepEP v2 vs RailBalance | decode 128 与 prefill 4096 分开 | 固定 proxy CPU/NUMA、NIC集合；逐 iteration rank-max | 多NIC直接竞品图 | `NOT_RUN` |
 | `TM-11` | SwiftEP off/on × Rail off/on | 2K/4K/8K prefill与同一token trace | 必须合并到同一冻结源码基座、共享`off/off`并可独立开关；固定fused buffer/SM/QP/NIC | 共同基座成立才做2×2；否则只做两个独立对比 | `NOT_RUN` |
 | `EV-01` | NCCL论文vLLM panel兼容复现；Rail接入仅在同一serving基座成立后加入 | Qwen3-30B-A3B、1/2/4 nodes、1000 requests、max concurrency 32 | 每backend 4 runs与IQR字段兼容；另保存逐请求raw/CI；不得代替transport主矩阵 | 外部有效性补充 | `NOT_RUN` |
+| `EV-02` | UCCL论文SGLang应用轨 | SGLang v0.5.3；DeepSeek-R1-0528、Qwen3-235B-A22B-FP8；EP16/32；input4096/output5 | 冻结请求集、sampling/seed、CPU proxy与utilization；UCCL vs NCCL作者兼容字段，Rail仅在同一基座成立后加入 | 外部有效性/CPU资源成本 | `NOT_RUN` |
 
 UCCL 官方六类 testbed 的作者数据只做背景。只有本集群与其中某一硬件完全匹配时才称“官方硬件复现”；否则 `TM-04` 是共同口径的本地对比，不是 UCCL 论文曲线复现。论文 Fig. 8 每个点取 HT/LL 的最小值；这个 oracle 只允许在 `AUTHOR_REPRO` 兼容图中出现。`COMMON_FAIR` 必须把两种 mode 分开，或在 tuning 分区一次选定后冻结到 confirmatory。
 
@@ -115,6 +122,7 @@ UCCL 官方六类 testbed 的作者数据只做背景。只有本集群与其中
 | `PS-02b` | MoonEP full-layer/FWD+BWD | 与`PS-01`相同H20 EP8合同 | grouped GEMM、prefetch、backward、grad_reduce、full-step、allocated/reserved峰值 | 通信图不含这些阶段；OOM/碎片是结果，不能静默改shape | `NOT_RUN` |
 | `PS-03a` | UltraEP 8-Hopper demo功能/开销 | 官方 demo 的E32、K4、20 layers，精确冻结完整argv与router trace | placement/reroute/weight sync/grad reduce/token A2A 分项 | `AUTHOR_DEMO`；不冒充EP64表格或论文RSN | `NOT_RUN` |
 | `PS-03b` | UltraEP EP64公开microbench anchor | E256、K8、8192 token/rank、2 redundant/rank | 同官方计时兼容字段，并另做共同rank-max | 需要EP64；不能缩成8卡后沿用官方ID | `NOT_RUN` |
+| `PS-03c` | UltraEP × RailBalance组合 | placement off/on × Rail off/best | 先证明token A2A实际经过共享Gin/RDMA Rails并冻结同一transport | RSN论文硬件称`COMPOSED`；普通RDMA移植仅`COMPOSED_PORT`；8卡direct demo不能证明relay | `NOT_RUN` |
 | `PS-04` | EPLB vs LPLB planner | 同逻辑 load tensor、replica数、拓扑、seed；含 E256 EP16/32/64 | planner latency、最终 max/mean、迁移/复制量、解合法性 | planner质量不能代替 step time | `NOT_RUN` |
 | `PS-05` | RailBalance 单机组合 sanity | placement off/on × Rail off/on | 语义一致性、额外 local forwarding、控制面开销 | 不做网络性能结论 | `NOT_RUN` |
 | `IS-01a` | UniEP 公开前向融合段 | 单节点`EP=2/4/8`，dispatch+GEMM与GEMM+combine | 分EP的build/API/correctness；保留公开Torch/CUDA reference的严格/bitwise assert | 只是前向融合段，无多节点Rail | `NOT_RUN` |
@@ -202,8 +210,9 @@ UCCL 官方六类 testbed 的作者数据只做背景。只有本集群与其中
 FWD/BWD保留`API_GAP`。NCCL tag 的 stock `ep_test` 在2/4 ranks把
 `top_k=min(8,nRanks)`降成K2/K4，因此不能验证K8合同；少卡K8正确性应使用
 `ep_bench --top-k 8 --validate`或独立共同adapter，并明确其原生输出统计仍不是共同
-rank-max。UCCL的2卡intranode入口会运行自带调优，只能标功能smoke，不能把其输出当
-稳定benchmark。少卡时延只证明脚手架与趋势，不进入主性能结论。
+rank-max。NCCL/UCCL 的原生校验只作为各自 smoke，正式横比统一再过共同 reference；
+UCCL 的2卡intranode入口还会运行自带调优，因此少卡时延只证明脚手架与趋势，不进入
+主性能结论。
 
 ### 6.3 真实 trace
 
@@ -227,13 +236,22 @@ rank-max。UCCL的2卡intranode入口会运行自带调优，只能标功能smok
 1. `MATCHED_RESOURCE`：固定每 GPU可用 SM/QP/NIC、额外显存与 CPU cores；这是主结论。
 2. `EQUAL_TUNE_BUDGET_NATIVE_BEST`：给每个系统相同 wall-clock调参预算、shape集合和试验次数，允许各自最佳配置；这是补充结论。
 
+首版调参预算冻结为“每backend/shape最多30个**有效且正确**配置，且wall-clock不超过
+60分钟，先到者停止”；编译失败/正确性失败仍写leaderboard但不计入有效配置数，实际
+消耗时间照计。调参只读tuning split，confirmatory预算为零。若正式开跑前因集群配额
+必须修改数字，需要新experiment ID，不能看过confirmatory结果后回改。
+
 UCCL 的 CPU proxy时间、core数和NUMA绑定属于资源，不得隐藏。RailBalance增加的本地NVLink转发和buffer显存同样必须披露。
 
 ## 8. 正确性门禁
 
 每个版本必须先通过共同 reference，再测速。至少覆盖常用、边界、非对齐、最小/最大 shape，多seed，零、极值、重复expert、空expert、多target mask，以及所有声明支持的dtype/layout。
 
-记录：max absolute error、max relative error、首个错误位置、输入/参考/实测值、shape/dtype/seed、重复运行是否确定。共同浮点门禁默认 `relative error < 1e-3`；若竞品官方标准更严格（例如 UCCL LL 的 BF16/FP8门禁），同时报告并优先满足更严格标准。integer metadata、counts、indices、owner/target masks 应 exact。
+记录：max absolute error、max relative error、首个错误位置、输入/参考/实测值、shape/dtype/seed、重复运行是否确定。共同浮点门禁固定为
+`abs(actual-reference)/max(abs(reference), 1e-12) < 1e-3`，NaN/Inf直接失败。
+UCCL/NCCL原生`calc_diff`是在两侧先加1后的cosine-like discrepancy，与逐元素最大
+relative error不是同一量，不能宣称谁“更严格”；两种指标并列报告，但共同门禁必须
+独立通过。integer metadata、counts、indices、owner/target masks 应 exact。
 
 placement实验还必须验证：最终 logical expert输出、token不丢不重、replica权重一致、梯度归并、capacity/drop语义和无未来trace泄漏。任何 correctness失败的候选不得测速；失败行仍保留。
 
@@ -279,12 +297,27 @@ placement实验还必须验证：最终 logical expert输出、token不丢不重
 
 LPLB只优化token count，EPLB依赖历史估计；因此`max/mean`改善只能解释planner输出，不能代替最终step收益。
 
+### 9.5 可执行理论下界
+
+每种消息大小先在同一冻结环境实测单NIC、聚合NIC与NVLink P2P ceiling。再按冻结trace
+计算保守cut-set/launch下界：
+
+`max(max_rail_send_bytes/send_ceiling, max_rail_recv_bytes/recv_ceiling, local_forward_bytes/nvlink_ceiling, launch_floor)`。
+
+每个最佳点报告“实测时延/下界”和剩余百分比，并同时列明ceiling命令、raw counter与
+hash。软件预测的path distribution不能代替NIC counter；缺counter时该下界只作模型，
+不用于声称接近物理极限。
+
 ## 10. 重复、配对和显著性
 
 统一 protocol 在首轮GPU运行前写入manifest，之后不因结果好坏改变：
 
 - 每个新进程固定 warmup和steady次数；初始建议使用现有共同脚手架的 10 warmup + 100 steady，但正式冻结后所有共同版本一致。
-- 至少5次独立进程启动、至少10个paired blocks；系统顺序交替使用 ABBA 与 BAAB。
+- 至少5次独立进程启动、每个预注册两系统contrast至少10个paired blocks；每个contrast
+  的系统顺序等量交替使用 ABBA 与 BAAB。ABBA/BAAB不能直接泛化成五系统固定顺序；
+  若做五系统同场调度，必须另用预注册的Williams/平衡Latin顺序并证明每个系统的位置
+  均衡。当前`COMMON_FAIR`选择显式pairwise：Rail best分别对
+  DeepEP-clean、same-tree off、NCCL EP、UCCL-EP。
 - 每个 block共享输入trace、环境采样和紧邻时间窗口；发生热降频、外部作业、链路错误或counter不闭合时整block标记失败，不单删慢样本。
 - 对paired latency ratio取log，报告median speedup及block bootstrap 95% CI；原始逐iteration和逐rank样本全部保存。
 - 先跑 A/A伪配对估计噪声。只有收益CI排除1.0，且绝对log-ratio超过A/A噪声95百分位，才称“真实性能提升”；否则写“与噪声不可区分”。
@@ -292,7 +325,10 @@ LPLB只优化token count，EPLB依赖历史估计；因此`max/mean`改善只能
   分区并分别hash；候选生成、超参选择和“RailBalance best”排名只能读 tuning
   数据。冻结代码、参数和唯一候选ID后才解封 confirmatory；confirmatory 失败
   不能反向调参，如需继续优化必须新建实验ID和新的确证集。
-- 预注册主对比为 `off vs one_hop`、`off vs adaptive`、`tuning-frozen Rail best vs UCCL`；同一figure内多重主检验用Holm校正。其余标exploratory。
+- 内部因果主对比预注册为 `off vs one_hop`、`off vs adaptive`；横向
+  `COMMON_FAIR`主对比为`tuning-frozen Rail best`分别对same-tree off、
+  clean upstream DeepEP、UCCL-EP与NCCL EP。凡进入同一主结论/figure的胜负检验均纳入
+  同一Holm family；未预注册contrast只标exploratory。
 - p95/p99使用block bootstrap或分层bootstrap，不能把同一进程中的iteration错误当成完全独立样本。
 
 作者默认值（UltraEP 10/30、MoonEP 20/50、UCCL代码50/50或Kineto 30）仅用于各自 `AUTHOR_REPRO`，不混进 `COMMON_FAIR`统计。

@@ -60,10 +60,16 @@ RailBalance保持一个已经确定的物理目标端点不变，只在可用 NI
 分支，而 RailBalance位于本地 DeepEP-v2树。只有先把两个独立开关放到同一个冻结
 transport基座，2×2交互才可归因；否则只能发布两个独立结果，不能解释组合效应。
 
+这个组合还受硬件边界约束：UltraEP论文把token EP放在单个RSN的rack-wide scale-up
+fabric内，跨rack主要使用DP/PP；它没有证明标准多NIC RDMA token路径一定存在。只有先
+用实际调用路径和NIC counter证明共享transport经过Gin/RDMA Rails，才能标
+`COMPOSED`；普通H100/H200 RDMA集群上的移植只能标`COMPOSED_PORT`。冻结代码在
+NVLink domain不超过8 GPU时强制direct，因此8卡demo本身也不能验证adaptive relay。
+
 ### 3.2 第一手证据
 
 - **P**：[UltraEP arXiv:2606.04101v3](https://arxiv.org/abs/2606.04101v3)，[第 8 节评测](https://arxiv.org/html/2606.04101v3#S8)。论文报告公共云 RSN：每 rack 64 GPU/16 server；研究原型的训练使用 2 或 4 racks、serving prefill 使用 1 rack，所以公开研究结果覆盖到 256 GPU。论文没有披露生产部署规模，也未披露具体 GPU 型号。论文评测统一写明 BF16。
-- **C**：冻结 [Dots-Infra/UltraEP@94cab099b44fffa99a82fea99e7c12d89cf65e4f](https://github.com/Dots-Infra/UltraEP/tree/94cab099b44fffa99a82fea99e7c12d89cf65e4f)，tag `v1.0.0`。它能冻结公开 README/demo/test artifact，但论文没有证明所有 Fig. 11–17 都由该 tag 生成。
+- **C**：冻结 [Dots-Infra/UltraEP@94cab099b44fffa99a82fea99e7c12d89cf65e4f](https://github.com/Dots-Infra/UltraEP/tree/94cab099b44fffa99a82fea99e7c12d89cf65e4f)，tag `v1.0.0`。它能冻结公开 README/demo/test artifact，但论文没有证明所有 Fig. 11–17 都由该 tag 生成。论文token A2A写的是`hybrid-ep v1.2.1+7febc6e`；冻结仓库示例却使用另一DeepEP commit、现场`sed` patch且Megatron clone未pin，必须拆成不同lineage。
 - **R**：[分布式 `tests/test_e2e.py`](https://github.com/Dots-Infra/UltraEP/blob/94cab099b44fffa99a82fea99e7c12d89cf65e4f/tests/test_e2e.py#L680-L729)、[8×Hopper demo 与 Qwen3-235B recipe](https://github.com/Dots-Infra/UltraEP/blob/94cab099b44fffa99a82fea99e7c12d89cf65e4f/examples/README.md)。README 的公共入口是 `torchrun ... tests/test_e2e.py --num-experts 256`。
 - **A**：论文 Fig. 11–17、README 的 EP64 `test_e2e.py` 表格和端到端汇总图。它们是作者 artifact，不是本机测量。
 - **A-data**：仓库未发布可重算论文图或 README 表格的逐样本日志/CSV/JSON。
@@ -77,7 +83,7 @@ transport基座，2×2交互才可归因；否则只能发布两个独立结果�
 | 硬件 | 论文：64 GPU/16 server 的公共云 RSN，scale-up 带宽为 scale-out RDMA 的 8–10 倍；代码要求 SM90/SM100、NVLink、NVSHMEM | 论文 GPU 型号、NIC 型号、每 GPU/NIC 映射、时钟、CUDA/NVSHMEM 精确版本未完整披露 |
 | shape | 论文：GLM4.5 E128/K8 EP64、Qwen3 E128/K8 EP64、GLM4.7 E160/K8 EP40、DeepSeek-V3 E256/K8 EP64；代码表格：E256、K8、8192 token/rank、4 master+2 redundant/rank | 论文端到端每个点的完整 tensor layout、alignment 和实际 router trace未发布 |
 | dtype | 论文端到端写明 BF16；`test_e2e.py` 默认 weight 2 B（BF16）、grad FP32 | 论文图与公开 `test_e2e.py` 表格的完整低精度/scale layout lineage未发布 |
-| timing | `test_e2e.py` 默认 warmup 10、bench 30；[测试计时工具](https://github.com/Dots-Infra/UltraEP/blob/94cab099b44fffa99a82fea99e7c12d89cf65e4f/tests/utils.py#L116-L184) 使用 CUDA events、barrier，去掉首样本和两端极值；Kineto 通信 kernel duration 做 rank-max reduce | 论文端到端图的 warmup、iterations、独立重复、置信区间及其是否复用测试默认值未披露；CUDA-event统计与Kineto rank-max不能混用 |
+| timing | `test_e2e.py` 默认 warmup 10、bench 30；[测试计时工具](https://github.com/Dots-Infra/UltraEP/blob/94cab099b44fffa99a82fea99e7c12d89cf65e4f/tests/utils.py#L116-L184) 使用 CUDA events、barrier，去掉首样本和两端极值；CUDA-event路径由rank 0打印本地窗口，而Kineto通信kernel duration才做rank-max reduce | 论文端到端图的 warmup、iterations、独立重复、置信区间及其是否复用测试默认值未披露；本地CUDA-event统计与Kineto rank-max不能混用 |
 | API 边界 | 测试分别测 `update_placement`、`reroute`、`weight_sync`、`grad_reduce`；token A2A 仅在 `--include-token-a2a` 时加入 | 这些分项不是 DeepEP dispatch/combine 的同一 API 边界；论文端到端包含模型计算，不可直接和 RailBalance kernel latency 相除 |
 | correctness | `test_e2e.py`检查 placement/reroute 合法性、weight sync bitwise、deterministic grad bitwise、非 deterministic grad `allclose` | 论文图没有逐点 correctness artifact hash |
 
@@ -114,6 +120,12 @@ NVLink remote reads 提供单机静态 shape 与 zero-copy buffer view。公开 
 | 计时 | eager CUDA-event；每个 rank 对 back-to-back iterations 求均值，再对 8 ranks 求**算术均值** | RailBalance正式口径计划使用 rank-max；跨-rank mean 与 rank-max不可直接比较 |
 | API 边界 | MoonEP forward dispatch包含 inter-rank sync、planning、dispatch、fused permute、`prefetch_weight`；combine用 zero-copy view。DeepEP v2用 expanded dispatch和reduced combine | `grad_reduce`明确排除；DeepEP v2 layout以 `d_f-d_b`估算；端到端训练图没有公开运行脚本、warmup/iters或raw data |
 | 正确性 | 独立 `tests/test_e2e.py`覆盖通信路径 | `bench_vs_deepep.py`本身没有在每个计时点对两库输出做 reference gate；正确性与图表结果没有 artifact lineage |
+
+这里的“固定`S×K`”指每rank恰有`S×K`个真实token；物理输出为`[NvS,H]`，
+`NvS=S×K+每个VM group的padding`，不能把padding流量从物理字节口径中消失。
+20/50计时用一个事件窗口包住50次back-to-back iteration，随后做rank算术平均，因而
+没有逐iteration tail。脚本还直接`import deep_ep`而未冻结作者PNG所用DeepEP v2
+SHA；可复现MoonEP源码，不等于复现作者图中的DeepEP二进制。
 
 通信图不能代替 full-layer/FWD+BWD 证据。正式单机补充实验还要按
 [官方 buffer合同](https://github.com/MoonshotAI/MoonEP/blob/0f385f038fc33bec22e3bcf5a07a8a22693e754c/README.md#L49-L70)
@@ -163,6 +175,11 @@ UCCL-EP保持 DeepEP 风格 dispatch/combine API，以 GPU→CPU lock-free FIFO 
 写 16 servers。该项标记为 `PAPER_INTERNAL_INCONSISTENCY`，不能自行挑选其一当作
 冻结事实。
 
+正式资源表还必须逐testbed抄录并冻结Table 2的HBM、SM/CU、NVLink/xGMI、CPU core与
+云厂商字段；CPU proxy是UCCL核心资源，不能只列GPU/NIC。论文Fig.13 caption写
+“DeepEP and NCCL”，但正文明确比较UCCL-EP与NCCL且指出DeepEP不能运行于EFA，这一项
+同样标`PAPER_INTERNAL_INCONSISTENCY`。
+
 官方 README 可提取的预注册形状是：
 
 - HT：4 nodes×8 ranks，4096 tokens/rank、H7168、K8、E288；DeepSeek-V3口径为 FP8 dispatch/BF16 combine。
@@ -175,8 +192,17 @@ UCCL-EP保持 DeepEP 风格 dispatch/combine API，以 GPU→CPU lock-free FIFO 
 - `test_internode.py`的调优主路径调用 Kineto并由 node-local rank 0打印本地 best；它不是统一的全局 rank-max聚合。论文没有披露每张图最终采用的 warmup/iters、rank aggregation、独立重复或 CI，因此不能把代码默认值无条件归给论文曲线。
 - [论文 Fig. 8](https://arxiv.org/html/2512.19849v2#S5.SS2.SSS1)的每个点取 HT 与 LL 中较小的时延。这种逐点 mode-selection oracle 只能在 `AUTHOR_REPRO` 兼容图中复现；`COMMON_FAIR` 必须把 LL/HT 分开，或只用 tuning 集选择一次模式后冻结，不能在 confirmatory 数据上逐点挑最优。
 - HT测试在 benchmark 前验证 layout、recv count、token/weight内容和 combine reference；LL测试对 FP8 combine使用 `<9e-4`、BF16使用 `<1e-5` 的差异门禁，并有多项 exact/structural assert。正式横比仍需使用一套共同 reference harness，不能只相信各自自测。
+- 上述原生自测不能按进程exit code判通过：LL重复hash不一致只打印
+  `NON-DETERMINISM`且assert被注释；Kineto找不到目标kernel时会记录`0.0`并继续。
+  adapter必须解析明确成功证据，拒绝warning/缺kernel/非确定性，再以共同reference
+  作最终裁决。
 - 论文说明基线使用相同 GPU资源（与 DeepEP相同 SM数），UCCL-EP每 GPU使用4个 CPU proxy threads；后续 manifest必须同时冻结 CPU affinity/NUMA和实际线程数。
 - [论文 §4](https://arxiv.org/html/2512.19849v2#S4)明确描述 CPU proxy 在 QP 间 round-robin，并跨多个 NIC 聚合带宽；实现细节被论文省略。因此 UCCL-EP本身也属于显式 QP/NIC-balancing 对手，不能只把 SABRE/fabric-lib放入该类别。
+- 论文另有SGLang v0.5.3应用实验：DeepSeek-R1-0528与
+  Qwen3-235B-A22B-FP8、EP16/32、input 4096/output 5，并报告CPU utilization约
+  8%升至22%。它应单列`AUTHOR_REPRO`外部有效性/资源成本，不混入transport主图。
+- HT代码会在benchmark route上用本地Kineto在线选配置并采用rank 0选择；共同实验必须
+  只读tuning split选完后冻结，confirmatory上禁止在线挑参。
 
 ## 6. DeepEP v2
 
@@ -282,7 +308,8 @@ NVLink domain 聚合，再跨节点传输；这种“节点内聚合后跨节点
 RailBalance存在可比较的数据路径成分，但实现和API边界并不相同。
 
 - **P**：[NCCL EP arXiv:2603.13606v3](https://arxiv.org/abs/2603.13606v3)。论文只公布
-  LL 性能，并明确把 HT 优化和 Megatron 训练结果留作后续工作。这是
+  LL transport microbenchmark，并明确把 HT transport优化和 Megatron 训练结果留作
+  后续工作；论文另有vLLM端到端结果。这是
   **论文当时**的边界，不能转述成后续 release 仍未优化 HT。
 - **C/R**：截止日官方 artifact 为
   [NVIDIA/nccl `nccl-ep-v0.1.0` / `63cf786...`](https://github.com/NVIDIA/nccl/tree/63cf786b015b2b6bff6cf263461621acf584bd18/contrib/nccl_ep)。tag 晚于论文，论文没有冻结生成图表的精确 commit，二者不能冒充同一 lineage。
@@ -313,6 +340,9 @@ RailBalance存在可比较的数据路径成分，但实现和API边界并不相
   还把 minimum latency对应列标成 minimum throughput、maximum latency对应列标成
   maximum throughput，数学方向相反；这些字段不能进入共同图。
   `COMMON_FAIR` 必须保存每个 rank每次 iteration的原始时延并自行计算 rank-max。
+- **原生validate不是fail-closed**：tag的`ep_bench --validate`会汇总并打印全局
+  pass/fail，但程序最终固定`return 0`。adapter必须解析明确成功标记、拒绝缺失/失败
+  文本并再过共同reference；exit 0本身没有正确性证明力。
 - **API边界**：[论文的 handle/layout 生命周期](https://arxiv.org/html/2603.13606v3#S3.SS2)
   要求把 route/layout/handle create或update、`Dispatch(+Complete)`、
   `Combine(+Complete)`、group creation/JIT分层记录。只计 Dispatch/Combine会在
@@ -322,6 +352,12 @@ RailBalance存在可比较的数据路径成分，但实现和API边界并不相
   使用 Qwen3-30B-A3B、1/2/4 nodes、1000 requests、maximum concurrency 32，每个
   backend 4 runs并做 IQR filtering。它没有公开逐请求 raw data/CI，只能作为独立
   `AUTHOR_REPRO`/外部有效性轨，不能替代 transport共同主矩阵。
+- **比较对象lineage**：论文使用的DeepEP/NCCL backend来自仍可变化的
+  [DeepEP PR #521](https://github.com/deepseek-ai/DeepEP/pull/521)，论文没有冻结exact
+  head SHA；本地最多称
+  `PAPER_COMPATIBLE_RERUN`，不能称bit-exact `AUTHOR_REPRO`。vLLM panel还缺
+  prompt dataset、ISL/OSL分布、sampling/seed、dtype与精确IQR规则，补齐前保持
+  `MISSING_AUTHOR_METADATA`。
 - **Local**：`/home/chen/workspace/infra/nccl-ep-v0.1.0` 是精确 tag
   `nccl-ep-v0.1.0` / `63cf786...` 的 detached clean checkout，大小18,028,459 bytes。
   本机 `mpicc`/`mpirun`可见，nvcc为 CUDA 12.8 / V12.8.61 / build 35404655；这只证明

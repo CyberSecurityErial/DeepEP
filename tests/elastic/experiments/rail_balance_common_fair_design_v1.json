@@ -1,0 +1,2172 @@
+{
+  "cases": [
+    {
+      "claim_scope": "CONFIRMATORY_COMMON_FAIR",
+      "dtypes": {
+        "combine": "BF16",
+        "dispatch": "BF16",
+        "payload": "BF16",
+        "topk_idx": "INT64",
+        "topk_weights": "FP32"
+      },
+      "expert_owner_policy": "CONTIGUOUS_EQUAL",
+      "future_claim_eligible": false,
+      "hidden": 7168,
+      "id": "confirmatory-ht-n2-w16",
+      "mode": "HT",
+      "node_count": 2,
+      "num_experts": 256,
+      "payload_generator": {
+        "code_path": "tests/elastic/rail_balance_common_fair_payload.py",
+        "code_sha256": "07db5033a3861c7d5416aca5081d310dfdbc685d7d85d56d2b00f011ea67b781",
+        "code_sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "id": "rail-balance-deterministic-bf16-v1",
+        "seed": 20260801,
+        "status": "PINNED"
+      },
+      "ranks_per_node": 8,
+      "routes": [
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-compact-v2",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "balanced",
+          "per_rank_logical_shape": [
+            4096,
+            8
+          ],
+          "semantic_scope": "PHYSICAL_BALANCED_ROUTE_CONFIRMATORY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-compact-v2",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "expert_skew",
+          "per_rank_logical_shape": [
+            4096,
+            8
+          ],
+          "semantic_scope": "PHYSICAL_OWNER_BALANCED_EXPERT_SKEW_CONFIRMATORY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-compact-v2",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "rail_hot",
+          "per_rank_logical_shape": [
+            4096,
+            8
+          ],
+          "semantic_scope": "INTENDED_PHYSICAL_RAIL_HOT_REQUIRES_TOPOLOGY_AND_COUNTER_VERIFICATION",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        }
+      ],
+      "stage_limit": "BENCHMARK",
+      "tokens_per_rank": 4096,
+      "top_k": 8,
+      "world_size": 16
+    },
+    {
+      "claim_scope": "CONFIRMATORY_COMMON_FAIR",
+      "dtypes": {
+        "combine": "BF16",
+        "dispatch": "BF16",
+        "payload": "BF16",
+        "topk_idx": "INT64",
+        "topk_weights": "FP32"
+      },
+      "expert_owner_policy": "CONTIGUOUS_EQUAL",
+      "future_claim_eligible": false,
+      "hidden": 7168,
+      "id": "confirmatory-ht-n4-w32",
+      "mode": "HT",
+      "node_count": 4,
+      "num_experts": 256,
+      "payload_generator": {
+        "code_path": "tests/elastic/rail_balance_common_fair_payload.py",
+        "code_sha256": "07db5033a3861c7d5416aca5081d310dfdbc685d7d85d56d2b00f011ea67b781",
+        "code_sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "id": "rail-balance-deterministic-bf16-v1",
+        "seed": 20260801,
+        "status": "PINNED"
+      },
+      "ranks_per_node": 8,
+      "routes": [
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-compact-v2",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "balanced",
+          "per_rank_logical_shape": [
+            4096,
+            8
+          ],
+          "semantic_scope": "PHYSICAL_BALANCED_ROUTE_CONFIRMATORY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-compact-v2",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "expert_skew",
+          "per_rank_logical_shape": [
+            4096,
+            8
+          ],
+          "semantic_scope": "PHYSICAL_OWNER_BALANCED_EXPERT_SKEW_CONFIRMATORY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-compact-v2",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "rail_hot",
+          "per_rank_logical_shape": [
+            4096,
+            8
+          ],
+          "semantic_scope": "INTENDED_PHYSICAL_RAIL_HOT_REQUIRES_TOPOLOGY_AND_COUNTER_VERIFICATION",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        }
+      ],
+      "stage_limit": "BENCHMARK",
+      "tokens_per_rank": 4096,
+      "top_k": 8,
+      "world_size": 32
+    },
+    {
+      "claim_scope": "CONFIRMATORY_COMMON_FAIR",
+      "dtypes": {
+        "combine": "BF16",
+        "dispatch": "BF16",
+        "payload": "BF16",
+        "topk_idx": "INT64",
+        "topk_weights": "FP32"
+      },
+      "expert_owner_policy": "CONTIGUOUS_EQUAL",
+      "future_claim_eligible": false,
+      "hidden": 7168,
+      "id": "confirmatory-ll-n2-w16",
+      "mode": "LL",
+      "node_count": 2,
+      "num_experts": 256,
+      "payload_generator": {
+        "code_path": "tests/elastic/rail_balance_common_fair_payload.py",
+        "code_sha256": "07db5033a3861c7d5416aca5081d310dfdbc685d7d85d56d2b00f011ea67b781",
+        "code_sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "id": "rail-balance-deterministic-bf16-v1",
+        "seed": 20260801,
+        "status": "PINNED"
+      },
+      "ranks_per_node": 8,
+      "routes": [
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-compact-v2",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "balanced",
+          "per_rank_logical_shape": [
+            128,
+            8
+          ],
+          "semantic_scope": "PHYSICAL_BALANCED_ROUTE_CONFIRMATORY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-compact-v2",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "expert_skew",
+          "per_rank_logical_shape": [
+            128,
+            8
+          ],
+          "semantic_scope": "PHYSICAL_OWNER_BALANCED_EXPERT_SKEW_CONFIRMATORY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-compact-v2",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "rail_hot",
+          "per_rank_logical_shape": [
+            128,
+            8
+          ],
+          "semantic_scope": "INTENDED_PHYSICAL_RAIL_HOT_REQUIRES_TOPOLOGY_AND_COUNTER_VERIFICATION",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        }
+      ],
+      "stage_limit": "BENCHMARK",
+      "tokens_per_rank": 128,
+      "top_k": 8,
+      "world_size": 16
+    },
+    {
+      "claim_scope": "CONFIRMATORY_COMMON_FAIR",
+      "dtypes": {
+        "combine": "BF16",
+        "dispatch": "BF16",
+        "payload": "BF16",
+        "topk_idx": "INT64",
+        "topk_weights": "FP32"
+      },
+      "expert_owner_policy": "CONTIGUOUS_EQUAL",
+      "future_claim_eligible": false,
+      "hidden": 7168,
+      "id": "confirmatory-ll-n4-w32",
+      "mode": "LL",
+      "node_count": 4,
+      "num_experts": 256,
+      "payload_generator": {
+        "code_path": "tests/elastic/rail_balance_common_fair_payload.py",
+        "code_sha256": "07db5033a3861c7d5416aca5081d310dfdbc685d7d85d56d2b00f011ea67b781",
+        "code_sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "id": "rail-balance-deterministic-bf16-v1",
+        "seed": 20260801,
+        "status": "PINNED"
+      },
+      "ranks_per_node": 8,
+      "routes": [
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-compact-v2",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "balanced",
+          "per_rank_logical_shape": [
+            128,
+            8
+          ],
+          "semantic_scope": "PHYSICAL_BALANCED_ROUTE_CONFIRMATORY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-compact-v2",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "expert_skew",
+          "per_rank_logical_shape": [
+            128,
+            8
+          ],
+          "semantic_scope": "PHYSICAL_OWNER_BALANCED_EXPERT_SKEW_CONFIRMATORY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-compact-v2",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "rail_hot",
+          "per_rank_logical_shape": [
+            128,
+            8
+          ],
+          "semantic_scope": "INTENDED_PHYSICAL_RAIL_HOT_REQUIRES_TOPOLOGY_AND_COUNTER_VERIFICATION",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        }
+      ],
+      "stage_limit": "BENCHMARK",
+      "tokens_per_rank": 128,
+      "top_k": 8,
+      "world_size": 32
+    },
+    {
+      "claim_scope": "DERIVED_SCALE_DOWN_CORRECTNESS",
+      "dtypes": {
+        "combine": "BF16",
+        "dispatch": "BF16",
+        "payload": "BF16",
+        "topk_idx": "INT64",
+        "topk_weights": "FP32"
+      },
+      "expert_owner_policy": "CONTIGUOUS_EQUAL",
+      "future_claim_eligible": false,
+      "hidden": 7168,
+      "id": "derived-ht-n1-w2",
+      "mode": "HT",
+      "node_count": 1,
+      "num_experts": 256,
+      "payload_generator": {
+        "code_path": "tests/elastic/rail_balance_common_fair_payload.py",
+        "code_sha256": "07db5033a3861c7d5416aca5081d310dfdbc685d7d85d56d2b00f011ea67b781",
+        "code_sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "id": "rail-balance-deterministic-bf16-v1",
+        "seed": 20260801,
+        "status": "PINNED"
+      },
+      "ranks_per_node": 2,
+      "routes": [
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-v1",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "balanced",
+          "per_rank_logical_shape": [
+            4096,
+            8
+          ],
+          "semantic_scope": "LOGICAL_BALANCE_CORRECTNESS_ONLY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-v1",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "expert_skew",
+          "per_rank_logical_shape": [
+            4096,
+            8
+          ],
+          "semantic_scope": "LOGICAL_OWNER_BALANCED_EXPERT_SKEW_CORRECTNESS_ONLY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-v1",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "rail_hot",
+          "per_rank_logical_shape": [
+            4096,
+            8
+          ],
+          "semantic_scope": "LOGICAL_OWNER_HOTSPOT_NOT_PHYSICAL_NIC_EVIDENCE",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        }
+      ],
+      "stage_limit": "CORRECTNESS",
+      "tokens_per_rank": 4096,
+      "top_k": 8,
+      "world_size": 2
+    },
+    {
+      "claim_scope": "DERIVED_SCALE_DOWN_CORRECTNESS",
+      "dtypes": {
+        "combine": "BF16",
+        "dispatch": "BF16",
+        "payload": "BF16",
+        "topk_idx": "INT64",
+        "topk_weights": "FP32"
+      },
+      "expert_owner_policy": "CONTIGUOUS_EQUAL",
+      "future_claim_eligible": false,
+      "hidden": 7168,
+      "id": "derived-ht-n1-w4",
+      "mode": "HT",
+      "node_count": 1,
+      "num_experts": 256,
+      "payload_generator": {
+        "code_path": "tests/elastic/rail_balance_common_fair_payload.py",
+        "code_sha256": "07db5033a3861c7d5416aca5081d310dfdbc685d7d85d56d2b00f011ea67b781",
+        "code_sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "id": "rail-balance-deterministic-bf16-v1",
+        "seed": 20260801,
+        "status": "PINNED"
+      },
+      "ranks_per_node": 4,
+      "routes": [
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-v1",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "balanced",
+          "per_rank_logical_shape": [
+            4096,
+            8
+          ],
+          "semantic_scope": "LOGICAL_BALANCE_CORRECTNESS_ONLY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-v1",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "expert_skew",
+          "per_rank_logical_shape": [
+            4096,
+            8
+          ],
+          "semantic_scope": "LOGICAL_OWNER_BALANCED_EXPERT_SKEW_CORRECTNESS_ONLY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-v1",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "rail_hot",
+          "per_rank_logical_shape": [
+            4096,
+            8
+          ],
+          "semantic_scope": "LOGICAL_OWNER_HOTSPOT_NOT_PHYSICAL_NIC_EVIDENCE",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        }
+      ],
+      "stage_limit": "CORRECTNESS",
+      "tokens_per_rank": 4096,
+      "top_k": 8,
+      "world_size": 4
+    },
+    {
+      "claim_scope": "DERIVED_SCALE_DOWN_CORRECTNESS",
+      "dtypes": {
+        "combine": "BF16",
+        "dispatch": "BF16",
+        "payload": "BF16",
+        "topk_idx": "INT64",
+        "topk_weights": "FP32"
+      },
+      "expert_owner_policy": "CONTIGUOUS_EQUAL",
+      "future_claim_eligible": false,
+      "hidden": 7168,
+      "id": "derived-ll-n1-w2",
+      "mode": "LL",
+      "node_count": 1,
+      "num_experts": 256,
+      "payload_generator": {
+        "code_path": "tests/elastic/rail_balance_common_fair_payload.py",
+        "code_sha256": "07db5033a3861c7d5416aca5081d310dfdbc685d7d85d56d2b00f011ea67b781",
+        "code_sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "id": "rail-balance-deterministic-bf16-v1",
+        "seed": 20260801,
+        "status": "PINNED"
+      },
+      "ranks_per_node": 2,
+      "routes": [
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-v1",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "balanced",
+          "per_rank_logical_shape": [
+            128,
+            8
+          ],
+          "semantic_scope": "LOGICAL_BALANCE_CORRECTNESS_ONLY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-v1",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "expert_skew",
+          "per_rank_logical_shape": [
+            128,
+            8
+          ],
+          "semantic_scope": "LOGICAL_OWNER_BALANCED_EXPERT_SKEW_CORRECTNESS_ONLY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-v1",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "rail_hot",
+          "per_rank_logical_shape": [
+            128,
+            8
+          ],
+          "semantic_scope": "LOGICAL_OWNER_HOTSPOT_NOT_PHYSICAL_NIC_EVIDENCE",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        }
+      ],
+      "stage_limit": "CORRECTNESS",
+      "tokens_per_rank": 128,
+      "top_k": 8,
+      "world_size": 2
+    },
+    {
+      "claim_scope": "DERIVED_SCALE_DOWN_CORRECTNESS",
+      "dtypes": {
+        "combine": "BF16",
+        "dispatch": "BF16",
+        "payload": "BF16",
+        "topk_idx": "INT64",
+        "topk_weights": "FP32"
+      },
+      "expert_owner_policy": "CONTIGUOUS_EQUAL",
+      "future_claim_eligible": false,
+      "hidden": 7168,
+      "id": "derived-ll-n1-w4",
+      "mode": "LL",
+      "node_count": 1,
+      "num_experts": 256,
+      "payload_generator": {
+        "code_path": "tests/elastic/rail_balance_common_fair_payload.py",
+        "code_sha256": "07db5033a3861c7d5416aca5081d310dfdbc685d7d85d56d2b00f011ea67b781",
+        "code_sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "id": "rail-balance-deterministic-bf16-v1",
+        "seed": 20260801,
+        "status": "PINNED"
+      },
+      "ranks_per_node": 4,
+      "routes": [
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-v1",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "balanced",
+          "per_rank_logical_shape": [
+            128,
+            8
+          ],
+          "semantic_scope": "LOGICAL_BALANCE_CORRECTNESS_ONLY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-v1",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "expert_skew",
+          "per_rank_logical_shape": [
+            128,
+            8
+          ],
+          "semantic_scope": "LOGICAL_OWNER_BALANCED_EXPERT_SKEW_CORRECTNESS_ONLY",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        },
+        {
+          "binding": {
+            "canonical_sha256": null,
+            "path": null,
+            "raw_sha256": null,
+            "status": "NOT_FROZEN"
+          },
+          "format": "rail-balance-logical-route-v1",
+          "mask_policy": "NO_DROPPED_ROUTES",
+          "pattern": "rail_hot",
+          "per_rank_logical_shape": [
+            128,
+            8
+          ],
+          "semantic_scope": "LOGICAL_OWNER_HOTSPOT_NOT_PHYSICAL_NIC_EVIDENCE",
+          "weight_policy": "PRESERVE_INPUT_FP32"
+        }
+      ],
+      "stage_limit": "CORRECTNESS",
+      "tokens_per_rank": 128,
+      "top_k": 8,
+      "world_size": 4
+    }
+  ],
+  "correctness": {
+    "coverage_classes": [
+      "boundary-shape",
+      "common-shape",
+      "maximum-declared-shape",
+      "minimum-declared-shape",
+      "nonaligned-shape"
+    ],
+    "declared_dtypes_layouts_exhaustive": true,
+    "determinism_repetitions": 3,
+    "integer_metadata_exact": true,
+    "nonfinite_output_policy": "REJECT",
+    "random_seeds": [
+      0,
+      1,
+      17,
+      20260801
+    ],
+    "record_first_error": true,
+    "record_max_absolute_error": true,
+    "record_max_relative_error": true,
+    "reference": "CANONICAL_PYTORCH_CPU_EXACT_METADATA",
+    "reference_binding": {
+      "path": null,
+      "sha256": null,
+      "sha256_kind": "RAW_FILE_BYTES_SHA256",
+      "status": "NOT_FROZEN"
+    },
+    "relative_error_denominator_floor": 1e-12,
+    "relative_error_formula": "ABS(ACTUAL-REFERENCE)/MAX(ABS(REFERENCE),DENOMINATOR_FLOOR)",
+    "relative_error_operator": "STRICTLY_LESS_THAN",
+    "relative_error_threshold": 0.001,
+    "special_inputs": [
+      "empty-expert",
+      "finite-extremes",
+      "nonaligned-shape",
+      "repeated-expert-ids",
+      "zero-route-weights",
+      "zeros"
+    ]
+  },
+  "execution_contract": {
+    "build_execution_status": "NOT_RUN",
+    "closure_verification_status": "NOT_RUN",
+    "execution_authorized": false,
+    "executor_status": "NOT_IMPLEMENTED",
+    "gpu_execution_status": "NOT_RUN",
+    "performance_results_present": false,
+    "result_status": "NOT_RUN"
+  },
+  "experiment_id": "rail-balance-common-fair-v1",
+  "failure_policy": {
+    "evidence_missing_if_matrix_row_absent": true,
+    "failed_results_must_not_carry_promotable_metrics": true,
+    "performance_result_codes": [
+      "PASSED_BENCHMARK"
+    ],
+    "raw_sample_result_codes": [
+      "RAW_SAMPLES_COMPLETE_UNVERIFIED"
+    ],
+    "required_result_fields": [
+      "evidence_sha256",
+      "reasons",
+      "result_code",
+      "row_id",
+      "terminal_stage"
+    ],
+    "result_codes": [
+      "BENCHMARK_FAILED",
+      "BENCHMARK_INVALID",
+      "BLOCKED_DEPENDENCY",
+      "BLOCKED_DISK",
+      "BLOCKED_GPU",
+      "BLOCKED_NETWORK",
+      "BLOCKED_TOPOLOGY",
+      "BUILD_FAILED",
+      "CORRECTNESS_FAILED",
+      "EVIDENCE_MISSING",
+      "LAUNCH_FAILED",
+      "NONDETERMINISTIC",
+      "NOT_RUN",
+      "NO_COMMON_API",
+      "PASSED_BENCHMARK",
+      "PASSED_CORRECTNESS",
+      "RAW_SAMPLES_COMPLETE_UNVERIFIED",
+      "UNSUPPORTED_HARDWARE"
+    ],
+    "results_require_external_verification_before_promotion": true
+  },
+  "manifest_phase": "DESIGN_ONLY",
+  "matrix": [
+    {
+      "case_id": "confirmatory-ht-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ht-n2-w16--balanced--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "confirmatory-ht-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ht-n2-w16--balanced--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "confirmatory-ht-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ht-n2-w16--balanced--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ht-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ht-n2-w16--balanced--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "confirmatory-ht-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ht-n2-w16--balanced--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ht-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ht-n2-w16--expert_skew--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "confirmatory-ht-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ht-n2-w16--expert_skew--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "confirmatory-ht-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ht-n2-w16--expert_skew--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ht-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ht-n2-w16--expert_skew--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "confirmatory-ht-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ht-n2-w16--expert_skew--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ht-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ht-n2-w16--rail_hot--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "confirmatory-ht-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ht-n2-w16--rail_hot--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "confirmatory-ht-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ht-n2-w16--rail_hot--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ht-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ht-n2-w16--rail_hot--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "confirmatory-ht-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ht-n2-w16--rail_hot--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ht-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ht-n4-w32--balanced--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "confirmatory-ht-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ht-n4-w32--balanced--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "confirmatory-ht-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ht-n4-w32--balanced--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ht-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ht-n4-w32--balanced--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "confirmatory-ht-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ht-n4-w32--balanced--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ht-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ht-n4-w32--expert_skew--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "confirmatory-ht-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ht-n4-w32--expert_skew--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "confirmatory-ht-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ht-n4-w32--expert_skew--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ht-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ht-n4-w32--expert_skew--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "confirmatory-ht-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ht-n4-w32--expert_skew--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ht-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ht-n4-w32--rail_hot--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "confirmatory-ht-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ht-n4-w32--rail_hot--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "confirmatory-ht-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ht-n4-w32--rail_hot--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ht-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ht-n4-w32--rail_hot--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "confirmatory-ht-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ht-n4-w32--rail_hot--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ll-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ll-n2-w16--balanced--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "confirmatory-ll-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ll-n2-w16--balanced--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "confirmatory-ll-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ll-n2-w16--balanced--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ll-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ll-n2-w16--balanced--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "confirmatory-ll-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ll-n2-w16--balanced--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ll-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ll-n2-w16--expert_skew--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "confirmatory-ll-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ll-n2-w16--expert_skew--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "confirmatory-ll-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ll-n2-w16--expert_skew--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ll-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ll-n2-w16--expert_skew--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "confirmatory-ll-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ll-n2-w16--expert_skew--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ll-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ll-n2-w16--rail_hot--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "confirmatory-ll-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ll-n2-w16--rail_hot--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "confirmatory-ll-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ll-n2-w16--rail_hot--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ll-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ll-n2-w16--rail_hot--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "confirmatory-ll-n2-w16",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ll-n2-w16--rail_hot--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ll-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ll-n4-w32--balanced--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "confirmatory-ll-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ll-n4-w32--balanced--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "confirmatory-ll-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ll-n4-w32--balanced--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ll-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ll-n4-w32--balanced--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "confirmatory-ll-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "confirmatory-ll-n4-w32--balanced--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ll-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ll-n4-w32--expert_skew--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "confirmatory-ll-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ll-n4-w32--expert_skew--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "confirmatory-ll-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ll-n4-w32--expert_skew--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ll-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ll-n4-w32--expert_skew--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "confirmatory-ll-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "confirmatory-ll-n4-w32--expert_skew--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ll-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ll-n4-w32--rail_hot--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "confirmatory-ll-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ll-n4-w32--rail_hot--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "confirmatory-ll-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ll-n4-w32--rail_hot--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "confirmatory-ll-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ll-n4-w32--rail_hot--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "confirmatory-ll-n4-w32",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "confirmatory-ll-n4-w32--rail_hot--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "derived-ht-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ht-n1-w2--balanced--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "derived-ht-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ht-n1-w2--balanced--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "derived-ht-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ht-n1-w2--balanced--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "derived-ht-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ht-n1-w2--balanced--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "derived-ht-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ht-n1-w2--balanced--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "derived-ht-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ht-n1-w2--expert_skew--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "derived-ht-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ht-n1-w2--expert_skew--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "derived-ht-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ht-n1-w2--expert_skew--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "derived-ht-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ht-n1-w2--expert_skew--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "derived-ht-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ht-n1-w2--expert_skew--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "derived-ht-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ht-n1-w2--rail_hot--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "derived-ht-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ht-n1-w2--rail_hot--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "derived-ht-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ht-n1-w2--rail_hot--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "derived-ht-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ht-n1-w2--rail_hot--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "derived-ht-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ht-n1-w2--rail_hot--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "derived-ht-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ht-n1-w4--balanced--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "derived-ht-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ht-n1-w4--balanced--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "derived-ht-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ht-n1-w4--balanced--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "derived-ht-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ht-n1-w4--balanced--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "derived-ht-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ht-n1-w4--balanced--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "derived-ht-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ht-n1-w4--expert_skew--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "derived-ht-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ht-n1-w4--expert_skew--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "derived-ht-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ht-n1-w4--expert_skew--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "derived-ht-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ht-n1-w4--expert_skew--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "derived-ht-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ht-n1-w4--expert_skew--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "derived-ht-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ht-n1-w4--rail_hot--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "derived-ht-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ht-n1-w4--rail_hot--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "derived-ht-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ht-n1-w4--rail_hot--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "derived-ht-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ht-n1-w4--rail_hot--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "derived-ht-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ht-n1-w4--rail_hot--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "derived-ll-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ll-n1-w2--balanced--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "derived-ll-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ll-n1-w2--balanced--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "derived-ll-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ll-n1-w2--balanced--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "derived-ll-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ll-n1-w2--balanced--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "derived-ll-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ll-n1-w2--balanced--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "derived-ll-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ll-n1-w2--expert_skew--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "derived-ll-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ll-n1-w2--expert_skew--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "derived-ll-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ll-n1-w2--expert_skew--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "derived-ll-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ll-n1-w2--expert_skew--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "derived-ll-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ll-n1-w2--expert_skew--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "derived-ll-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ll-n1-w2--rail_hot--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "derived-ll-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ll-n1-w2--rail_hot--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "derived-ll-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ll-n1-w2--rail_hot--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "derived-ll-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ll-n1-w2--rail_hot--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "derived-ll-n1-w2",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ll-n1-w2--rail_hot--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "derived-ll-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ll-n1-w4--balanced--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "derived-ll-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ll-n1-w4--balanced--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "derived-ll-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ll-n1-w4--balanced--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "derived-ll-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ll-n1-w4--balanced--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "derived-ll-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "balanced",
+      "row_id": "derived-ll-n1-w4--balanced--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "derived-ll-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ll-n1-w4--expert_skew--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "derived-ll-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ll-n1-w4--expert_skew--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "derived-ll-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ll-n1-w4--expert_skew--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "derived-ll-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ll-n1-w4--expert_skew--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "derived-ll-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "expert_skew",
+      "row_id": "derived-ll-n1-w4--expert_skew--uccl-ep",
+      "system_id": "uccl-ep"
+    },
+    {
+      "case_id": "derived-ll-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ll-n1-w4--rail_hot--deepep-clean",
+      "system_id": "deepep-clean"
+    },
+    {
+      "case_id": "derived-ll-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ll-n1-w4--rail_hot--deepep-off",
+      "system_id": "deepep-off"
+    },
+    {
+      "case_id": "derived-ll-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ll-n1-w4--rail_hot--nccl-ep",
+      "system_id": "nccl-ep"
+    },
+    {
+      "case_id": "derived-ll-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ll-n1-w4--rail_hot--railbalance-best",
+      "system_id": "railbalance-best"
+    },
+    {
+      "case_id": "derived-ll-n1-w4",
+      "initial_result_code": "NOT_RUN",
+      "route_pattern": "rail_hot",
+      "row_id": "derived-ll-n1-w4--rail_hot--uccl-ep",
+      "system_id": "uccl-ep"
+    }
+  ],
+  "measurement": {
+    "aa_noise_gate": "CI_EXCLUDES_1_AND_ABS_LOG_RATIO_EXCEEDS_AA_P95",
+    "barrier_location": "OUTSIDE_TIMED_WINDOW",
+    "confidence_interval": "BLOCK_BOOTSTRAP_95_PERCENT",
+    "end_event_synchronize_location": "OUTSIDE_TIMED_WINDOW",
+    "environment_snapshot_required": true,
+    "fixed_gpu_clocks_or_block_invalid": true,
+    "fixed_input_required": true,
+    "fixed_stream_required": true,
+    "independent_process_repeats": 5,
+    "minimum_order_blocks": 10,
+    "multiple_testing": "HOLM_PRIMARY_FAMILY",
+    "native_rank_mean_forbidden": true,
+    "order_schedule": {
+      "blocks": [],
+      "pairs": [],
+      "sha256": null,
+      "status": "NOT_FROZEN"
+    },
+    "outlier_policy": "WHOLE_BLOCK_FAIL_NO_SINGLE_SAMPLE_DELETION",
+    "paired_effect": "LOG_LATENCY_RATIO",
+    "rank_aggregation": "PER_ITERATION_MAX",
+    "raw_rank_samples_required": true,
+    "raw_sample_fields": [
+      "block_id",
+      "case_id",
+      "iteration",
+      "order_position",
+      "pair_id",
+      "phase_ns",
+      "process_instance_id",
+      "rank",
+      "repeat",
+      "route_pattern",
+      "route_raw_sha256",
+      "sample_class",
+      "system_id"
+    ],
+    "steady_iterations": 100,
+    "summary_statistics": [
+      "CV",
+      "MAD",
+      "P50",
+      "P95",
+      "P99"
+    ],
+    "timing_api": "CUDA_EVENT",
+    "warmup_iterations": 10
+  },
+  "preregistration": {
+    "analysis_plan_binding": {
+      "path": null,
+      "sha256": null,
+      "sha256_kind": "RAW_FILE_BYTES_SHA256",
+      "status": "NOT_FROZEN"
+    },
+    "confirmatory_partition_binding": {
+      "path": null,
+      "sha256": null,
+      "sha256_kind": "RAW_FILE_BYTES_SHA256",
+      "status": "NOT_FROZEN"
+    },
+    "confirmatory_sealed_until_candidate_freeze": true,
+    "environment_binding": {
+      "path": null,
+      "sha256": null,
+      "sha256_kind": "RAW_FILE_BYTES_SHA256",
+      "status": "NOT_FROZEN"
+    },
+    "partition_policy": "HASHED_DISJOINT_TRACE_SEED_BLOCK_SETS",
+    "tuning_partition_binding": {
+      "path": null,
+      "sha256": null,
+      "sha256_kind": "RAW_FILE_BYTES_SHA256",
+      "status": "NOT_FROZEN"
+    }
+  },
+  "schema_version": 1,
+  "systems": [
+    {
+      "adapter": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_IMPLEMENTED"
+      },
+      "algorithm_mode": "UPSTREAM_DEFAULT",
+      "api_bindings": [
+        {
+          "completion_primitive": "host_route_ready",
+          "included_calls": [
+            "prepare_route"
+          ],
+          "phase": "route_prepare_complete",
+          "primary_metric": false,
+          "separability": "REQUIRED"
+        },
+        {
+          "completion_primitive": "cuda_event_after_public_completion",
+          "included_calls": [
+            "dispatch",
+            "dispatch_completion_wait"
+          ],
+          "phase": "dispatch_complete",
+          "primary_metric": true,
+          "separability": "REQUIRED"
+        },
+        {
+          "completion_primitive": "cuda_event_after_public_completion",
+          "included_calls": [
+            "combine",
+            "combine_completion_wait"
+          ],
+          "phase": "combine_complete",
+          "primary_metric": true,
+          "separability": "REQUIRED"
+        },
+        {
+          "completion_primitive": "cuda_event_after_public_completion",
+          "included_calls": [
+            "dispatch",
+            "identity_expert",
+            "combine"
+          ],
+          "phase": "roundtrip_complete",
+          "primary_metric": false,
+          "separability": "REQUIRED"
+        }
+      ],
+      "backend_modes": [
+        "HT",
+        "LL"
+      ],
+      "build_recipe": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_FROZEN"
+      },
+      "candidate_id": "upstream-dd758caf",
+      "execution_config": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_FROZEN"
+      },
+      "id": "deepep-clean",
+      "resources": {
+        "cpu_budget_status": "NOT_FROZEN",
+        "cpu_cores_per_rank": null,
+        "device_memory_budget_status": "NOT_FROZEN",
+        "extra_device_memory_bytes_per_rank": null,
+        "nic_ids": [],
+        "nic_set_status": "NOT_FROZEN",
+        "proxy_cpu_budget_status": "NOT_FROZEN",
+        "proxy_cpu_cores_per_rank": null,
+        "qp_budget_per_rank": null,
+        "qp_budget_status": "NOT_FROZEN",
+        "resource_track": "MATCHED_RESOURCE",
+        "sm_budget_per_rank": null,
+        "sm_budget_status": "NOT_FROZEN"
+      },
+      "role": "UPSTREAM_REPRODUCIBILITY_ANCHOR",
+      "runtime_closure": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_BUILT"
+      },
+      "source": {
+        "commit": "dd758caf451848bd150e1046af3d0a73e5fff38d",
+        "status": "PINNED",
+        "submodules": [
+          {
+            "commit": "a4c7e17133ee9cb6a2f45545f6e974dd3c393efa",
+            "path": "third-party/fmt",
+            "tree": "21478d0a3998e3dfef6accc73ba289be868bf835"
+          }
+        ],
+        "tree": "b385fecc3105afac74e0f7c0bf6a90b15bf9b336"
+      }
+    },
+    {
+      "adapter": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_IMPLEMENTED"
+      },
+      "algorithm_mode": "RAIL_BALANCE_OFF",
+      "api_bindings": [
+        {
+          "completion_primitive": "host_route_ready",
+          "included_calls": [
+            "prepare_route"
+          ],
+          "phase": "route_prepare_complete",
+          "primary_metric": false,
+          "separability": "REQUIRED"
+        },
+        {
+          "completion_primitive": "cuda_event_after_public_completion",
+          "included_calls": [
+            "dispatch",
+            "dispatch_completion_wait"
+          ],
+          "phase": "dispatch_complete",
+          "primary_metric": true,
+          "separability": "REQUIRED"
+        },
+        {
+          "completion_primitive": "cuda_event_after_public_completion",
+          "included_calls": [
+            "combine",
+            "combine_completion_wait"
+          ],
+          "phase": "combine_complete",
+          "primary_metric": true,
+          "separability": "REQUIRED"
+        },
+        {
+          "completion_primitive": "cuda_event_after_public_completion",
+          "included_calls": [
+            "dispatch",
+            "identity_expert",
+            "combine"
+          ],
+          "phase": "roundtrip_complete",
+          "primary_metric": false,
+          "separability": "REQUIRED"
+        }
+      ],
+      "backend_modes": [
+        "HT",
+        "LL"
+      ],
+      "build_recipe": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_FROZEN"
+      },
+      "candidate_id": "rail-balance-off",
+      "execution_config": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_FROZEN"
+      },
+      "id": "deepep-off",
+      "resources": {
+        "cpu_budget_status": "NOT_FROZEN",
+        "cpu_cores_per_rank": null,
+        "device_memory_budget_status": "NOT_FROZEN",
+        "extra_device_memory_bytes_per_rank": null,
+        "nic_ids": [],
+        "nic_set_status": "NOT_FROZEN",
+        "proxy_cpu_budget_status": "NOT_FROZEN",
+        "proxy_cpu_cores_per_rank": null,
+        "qp_budget_per_rank": null,
+        "qp_budget_status": "NOT_FROZEN",
+        "resource_track": "MATCHED_RESOURCE",
+        "sm_budget_per_rank": null,
+        "sm_budget_status": "NOT_FROZEN"
+      },
+      "role": "SAME_TREE_CAUSAL_BASELINE",
+      "runtime_closure": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_BUILT"
+      },
+      "source": {
+        "commit": null,
+        "status": "AWAITING_TUNING_FREEZE",
+        "submodules": [],
+        "tree": null
+      }
+    },
+    {
+      "adapter": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_IMPLEMENTED"
+      },
+      "algorithm_mode": "AUTHOR_BACKEND",
+      "api_bindings": [
+        {
+          "completion_primitive": "host_route_ready",
+          "included_calls": [
+            "prepare_route"
+          ],
+          "phase": "route_prepare_complete",
+          "primary_metric": false,
+          "separability": "NOT_SEPARABLE"
+        },
+        {
+          "completion_primitive": "cuda_event_after_public_completion",
+          "included_calls": [
+            "dispatch",
+            "dispatch_completion_wait"
+          ],
+          "phase": "dispatch_complete",
+          "primary_metric": true,
+          "separability": "REQUIRED"
+        },
+        {
+          "completion_primitive": "cuda_event_after_public_completion",
+          "included_calls": [
+            "combine",
+            "combine_completion_wait"
+          ],
+          "phase": "combine_complete",
+          "primary_metric": true,
+          "separability": "REQUIRED"
+        },
+        {
+          "completion_primitive": "cuda_event_after_public_completion",
+          "included_calls": [
+            "dispatch",
+            "identity_expert",
+            "combine"
+          ],
+          "phase": "roundtrip_complete",
+          "primary_metric": false,
+          "separability": "REQUIRED"
+        }
+      ],
+      "backend_modes": [
+        "HT",
+        "LL"
+      ],
+      "build_recipe": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "BLOCKED_BUILD_CONTRACT_INCOMPLETE"
+      },
+      "candidate_id": "nccl-ep-v0.1.0",
+      "execution_config": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_FROZEN"
+      },
+      "id": "nccl-ep",
+      "resources": {
+        "cpu_budget_status": "NOT_FROZEN",
+        "cpu_cores_per_rank": null,
+        "device_memory_budget_status": "NOT_FROZEN",
+        "extra_device_memory_bytes_per_rank": null,
+        "nic_ids": [],
+        "nic_set_status": "NOT_FROZEN",
+        "proxy_cpu_budget_status": "NOT_FROZEN",
+        "proxy_cpu_cores_per_rank": null,
+        "qp_budget_per_rank": null,
+        "qp_budget_status": "NOT_FROZEN",
+        "resource_track": "MATCHED_RESOURCE",
+        "sm_budget_per_rank": null,
+        "sm_budget_status": "NOT_FROZEN"
+      },
+      "role": "DIRECT_EP_COMPETITOR",
+      "runtime_closure": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_BUILT"
+      },
+      "source": {
+        "commit": "63cf786b015b2b6bff6cf263461621acf584bd18",
+        "status": "PINNED",
+        "submodules": [],
+        "tree": "22f0c4ad56f505c4b47dd7a8f0a3c4f93efed4ce"
+      }
+    },
+    {
+      "adapter": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_IMPLEMENTED"
+      },
+      "algorithm_mode": "TUNING_FROZEN_RAIL_BALANCE",
+      "api_bindings": [
+        {
+          "completion_primitive": "host_route_ready",
+          "included_calls": [
+            "prepare_route"
+          ],
+          "phase": "route_prepare_complete",
+          "primary_metric": false,
+          "separability": "REQUIRED"
+        },
+        {
+          "completion_primitive": "cuda_event_after_public_completion",
+          "included_calls": [
+            "dispatch",
+            "dispatch_completion_wait"
+          ],
+          "phase": "dispatch_complete",
+          "primary_metric": true,
+          "separability": "REQUIRED"
+        },
+        {
+          "completion_primitive": "cuda_event_after_public_completion",
+          "included_calls": [
+            "combine",
+            "combine_completion_wait"
+          ],
+          "phase": "combine_complete",
+          "primary_metric": true,
+          "separability": "REQUIRED"
+        },
+        {
+          "completion_primitive": "cuda_event_after_public_completion",
+          "included_calls": [
+            "dispatch",
+            "identity_expert",
+            "combine"
+          ],
+          "phase": "roundtrip_complete",
+          "primary_metric": false,
+          "separability": "REQUIRED"
+        }
+      ],
+      "backend_modes": [
+        "HT",
+        "LL"
+      ],
+      "build_recipe": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_FROZEN"
+      },
+      "candidate_id": null,
+      "execution_config": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_FROZEN"
+      },
+      "id": "railbalance-best",
+      "resources": {
+        "cpu_budget_status": "NOT_FROZEN",
+        "cpu_cores_per_rank": null,
+        "device_memory_budget_status": "NOT_FROZEN",
+        "extra_device_memory_bytes_per_rank": null,
+        "nic_ids": [],
+        "nic_set_status": "NOT_FROZEN",
+        "proxy_cpu_budget_status": "NOT_FROZEN",
+        "proxy_cpu_cores_per_rank": null,
+        "qp_budget_per_rank": null,
+        "qp_budget_status": "NOT_FROZEN",
+        "resource_track": "MATCHED_RESOURCE",
+        "sm_budget_per_rank": null,
+        "sm_budget_status": "NOT_FROZEN"
+      },
+      "role": "TUNING_FROZEN_CANDIDATE",
+      "runtime_closure": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_BUILT"
+      },
+      "source": {
+        "commit": null,
+        "status": "AWAITING_TUNING_FREEZE",
+        "submodules": [],
+        "tree": null
+      }
+    },
+    {
+      "adapter": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_IMPLEMENTED"
+      },
+      "algorithm_mode": "AUTHOR_BACKEND",
+      "api_bindings": [
+        {
+          "completion_primitive": "host_route_ready",
+          "included_calls": [
+            "prepare_route"
+          ],
+          "phase": "route_prepare_complete",
+          "primary_metric": false,
+          "separability": "NOT_SEPARABLE"
+        },
+        {
+          "completion_primitive": "cuda_event_after_public_completion",
+          "included_calls": [
+            "dispatch",
+            "dispatch_completion_wait"
+          ],
+          "phase": "dispatch_complete",
+          "primary_metric": true,
+          "separability": "REQUIRED"
+        },
+        {
+          "completion_primitive": "cuda_event_after_public_completion",
+          "included_calls": [
+            "combine",
+            "combine_completion_wait"
+          ],
+          "phase": "combine_complete",
+          "primary_metric": true,
+          "separability": "REQUIRED"
+        },
+        {
+          "completion_primitive": "cuda_event_after_public_completion",
+          "included_calls": [
+            "dispatch",
+            "identity_expert",
+            "combine"
+          ],
+          "phase": "roundtrip_complete",
+          "primary_metric": false,
+          "separability": "REQUIRED"
+        }
+      ],
+      "backend_modes": [
+        "HT",
+        "LL"
+      ],
+      "build_recipe": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "BLOCKED_BUILD_CONTRACT_INCOMPLETE"
+      },
+      "candidate_id": "uccl-ep-61ee4240",
+      "execution_config": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_FROZEN"
+      },
+      "id": "uccl-ep",
+      "resources": {
+        "cpu_budget_status": "NOT_FROZEN",
+        "cpu_cores_per_rank": null,
+        "device_memory_budget_status": "NOT_FROZEN",
+        "extra_device_memory_bytes_per_rank": null,
+        "nic_ids": [],
+        "nic_set_status": "NOT_FROZEN",
+        "proxy_cpu_budget_status": "NOT_FROZEN",
+        "proxy_cpu_cores_per_rank": null,
+        "qp_budget_per_rank": null,
+        "qp_budget_status": "NOT_FROZEN",
+        "resource_track": "MATCHED_RESOURCE",
+        "sm_budget_per_rank": null,
+        "sm_budget_status": "NOT_FROZEN"
+      },
+      "role": "DIRECT_EP_AND_NIC_BALANCING_COMPETITOR",
+      "runtime_closure": {
+        "path": null,
+        "sha256": null,
+        "sha256_kind": "RAW_FILE_BYTES_SHA256",
+        "status": "NOT_BUILT"
+      },
+      "source": {
+        "commit": "61ee42402819cabba3ac2a56dd4addec3363976c",
+        "status": "PINNED",
+        "submodules": [],
+        "tree": "0a9acaafb8fd24cde14b76ee01f0ab5a1c4c4161"
+      }
+    }
+  ],
+  "track": "COMMON_FAIR"
+}

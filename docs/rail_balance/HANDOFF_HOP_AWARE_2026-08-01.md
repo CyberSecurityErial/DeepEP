@@ -1,5 +1,13 @@
 # DeepEP RailBalance Hop-Aware 完整交接
 
+> 用户最新冻结的主线：这台机器的性能优化只关注减少 **plan CUDA 算子时间开销**；
+> 最终竞品性能与真实工作任务一定在外部多节点集群运行。当前只写各外部实验的环境依赖
+> 与执行口径文档，不在本机安装、构建或部署这些环境。实验保持精简，不为完整矩阵而
+> 过度设计。
+>
+> 精简实验清单：
+> [`PAPER_PERFORMANCE_CHECKLIST_2026-08-01.md`](PAPER_PERFORMANCE_CHECKLIST_2026-08-01.md)。
+
 最后核对：2026-08-01 UTC
 
 仓库：`/home/chen/workspace/source_code/DeepEP`
