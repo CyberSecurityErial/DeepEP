@@ -7817,3 +7817,32 @@ final plan statistics.  Matched Nsys reports a 1.300 ms decision median, below
 the 1.5 ms stop line.  The final validation is 20/20 focused CUDA, 12/12 CPU
 reference and the exact 8-rank LSA transaction.  No multi-warp refactor was
 added, and no NIC/RDMA or public capability claim was made.
+
+## 2026-08-01 — AT001: offline autotune scaffold without production changes
+
+The frozen operator commit `4e00276` was branched as
+`feat/rail-balance-autotune-scaffold`.  AT001 adds only a stdlib CPU tool, one
+finite search-space JSON, CPU contract tests and an operator guide; production
+Python, C++ and CUDA remain untouched.  The default execution preset passes
+`num_sms=0` and `num_allocated_qps=0`, so real runs continue to use DeepEP V2's
+existing automatic SM/QP selection.
+
+`plan` replays the existing endpoint-aware CPU oracle, rejects invalid or
+over-capacity policies, and keeps a deterministic Pareto frontier in
+pair-Rail peak versus extra local-hop bytes.  It emits argv/env but never
+launches a benchmark or claims performance.  `freeze` requires a clean plan,
+matching source/trace/config/capacity identities, unique eligible real-multinode
+reports and an explicitly preregistered speedup threshold.  Its output remains
+`production_consumed=false`.
+
+Initial CPU checks retained one-hop only for `offdiag_hot` and three distinct
+cost/peak trade-offs for `diag_hot`, demonstrating that the selector is not a
+hard-coded 4-hot/4-idle rule.  A 2-node x 8-Rail, 4096-token/rank, top-k 8
+synthetic plan evaluated 49 algorithm configurations in 13.578 s on one CPU
+process; this is offline control-plane time, not EP latency.  Re-parsing was
+kept simple because it is negligible beside the required multinode runs.
+
+Recorded setup failures: `/usr/bin/time` is absent, so the shell builtin was
+used; Pyrefly could not resolve the deliberate test-module path mutation, so
+the same module is now loaded through `importlib` without suppressing the
+check.  Ruff, Pyrefly and five CPU contracts pass after the fix.
