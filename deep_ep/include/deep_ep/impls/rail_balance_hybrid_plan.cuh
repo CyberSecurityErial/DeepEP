@@ -438,18 +438,19 @@ __forceinline__ __device__ bool rebalance_endpoint_quotas(
         const int remaining_rounds = max_rounds - round;
         const int required_batch = remaining_cap / remaining_rounds +
             static_cast<int>(remaining_cap % remaining_rounds != 0);
-        if (lane == 0)
-            for (int destination = 0;
-                 destination < num_destinations; ++destination) {
-                const auto peaks = find_load_peaks(
-                    pair_load + destination * num_rails, num_rails);
-                peak_scratch[destination] = peaks.first;
-                peak_scratch[num_destinations + destination] = peaks.second;
-                peak_scratch[2 * num_destinations + destination] =
-                    peaks.first_count;
-            }
+        for (int destination = lane;
+             destination < num_destinations; destination += 32) {
+            const auto peaks = find_load_peaks(
+                pair_load + destination * num_rails, num_rails);
+            peak_scratch[destination] = peaks.first;
+            peak_scratch[num_destinations + destination] = peaks.second;
+            peak_scratch[2 * num_destinations + destination] =
+                peaks.first_count;
+        }
         __syncwarp();
-        const auto source_peaks = find_load_peaks(source_load, num_rails);
+        auto source_peaks = lane == 0 ?
+            find_load_peaks(source_load, num_rails) : LoadPeaks{-1, 0, 0};
+        source_peaks = ptx::exchange(source_peaks, 0);
 
         AdaptiveCandidate best = {
             -1, INT64_MIN, -1, 0, 0,

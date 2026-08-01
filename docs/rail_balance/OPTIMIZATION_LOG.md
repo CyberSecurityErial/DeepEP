@@ -2901,3 +2901,48 @@ Post-change diagnostic evidence:
 .cache/rail_balance/hop-aware/takeover-20260801/o111-tree-adaptive-volume-3x20.json
 .cache/rail_balance/hop-aware/takeover-20260801/o111-tree-adaptive-rot1-3x20.json
 ```
+
+The clean 10+100 checkpoint measured 2.450 / 4.898 ms volume/rot1 `finish`
+with the same plans.  Matched Nsys reduced the decision median from 1.706 to
+1.472 ms.  Targeted NCU reduced executed instructions from 78,184 to 67,341
+(-13.9%) and registers/thread from 100 to 96; NCU replay duration is not used
+as endpoint truth.
+
+## O112 — parallelize the per-round peak refresh
+
+Before considering a 128-thread kernel, one final small exact experiment uses
+the existing warp more evenly.  The old code made lane 0 recompute all D pair
+peaks while the other 31 lanes waited, then made every lane redundantly scan
+the same G source loads.  The candidate scan and serial round mutation remain
+unchanged; destinations are now striped across lanes and lane 0 broadcasts
+one source peak.  The v9 plan must remain identical.  A result within normal
+run noise is rejected rather than followed by a larger multi-warp refactor.
+
+Clean O111 evidence:
+
+```text
+.cache/rail_balance/hop-aware/takeover-20260801/clean-28791cd-adaptive-volume-10x100.json
+.cache/rail_balance/hop-aware/takeover-20260801/clean-28791cd-adaptive-rot1-10x100.json
+.cache/rail_balance/hop-aware/takeover-20260801/post-28791cd-volume.nsys-rep
+.cache/rail_balance/hop-aware/takeover-20260801/post-28791cd-adaptive-multitarget-directed.ncu-rep
+```
+
+The dirty-tree 3+20 result passed the exact-plan gate and improved both
+structures:
+
+```text
+case       O111 tree finish   O112 peak finish   source peak   pair peak   two-hop
+volume              2.489 ms             2.215 ms          1405         256      2048
+rot1                4.827 ms             4.694 ms          7194        1344      5236
+```
+
+Path units and extra local-forward units remain identical.  The focused CUDA
+planner passed 20/20.  O112 is retained for a clean 10+100 checkpoint; a
+larger multi-warp rewrite remains deliberately out of tree.
+
+Diagnostic evidence:
+
+```text
+.cache/rail_balance/hop-aware/takeover-20260801/o112-peaks-adaptive-volume-3x20.json
+.cache/rail_balance/hop-aware/takeover-20260801/o112-peaks-adaptive-rot1-3x20.json
+```

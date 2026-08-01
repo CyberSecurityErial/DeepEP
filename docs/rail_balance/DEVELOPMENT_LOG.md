@@ -7801,3 +7801,13 @@ The first 3+20 diagnostic met that contract: volume/rot1 plans match v8 while
 runners passed 20/20 CUDA tests, 12/12 CPU tests and the 8-rank transaction.
 The unavailable `pytest` module and one rejected rot1 CLI spelling are kept
 in O111 as non-measurement failures; neither reached a timed CUDA iteration.
+The clean O111 checkpoint measured 2.450/4.898 ms volume/rot1 `finish`; Nsys
+placed the decision median at 1.472 ms and NCU showed 13.9% fewer executed
+instructions.  O112 is the last small exact experiment before stopping:
+stripe destination-peak refresh across the existing warp and broadcast the
+single source peak, without changing the candidate search or round mutation.
+The 3+20 acceptance run kept both plans unchanged and reduced volume/rot1
+`finish` from 2.489/4.827 ms to 2.215/4.694 ms.  The focused CUDA suite passed
+20/20.  The patch stays small; the proposed 128-thread planner refactor is not
+introduced because its extra synchronization and audit surface are not yet
+justified by the remaining exposed time.
