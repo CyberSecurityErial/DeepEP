@@ -2989,8 +2989,9 @@ strategy=v2_auto, num_sms=0, num_allocated_qps=0
 ```
 
 This delegates SM estimation and QP selection to the existing DeepEP V2 model.
-Explicit SM/QP presets are schema-supported but absent from the default search;
-they may be added only after Nsys identifies exposed resource imbalance and
-must still win profiler-free multinode confirmation.  Planner chunk size 8 and
-seed 0 are recorded as frozen identity fields, not search axes.  No CPU timing
-from AT001 is an operator-performance claim.
+The v1 schema rejects explicit or partially automatic presets; they may be
+added only after Nsys identifies exposed resource imbalance and a separate
+baseline contract is defined.  Reports record both zero-valued requests and
+V2's resolved SM, used-QP and allocated-QP values.  Planner chunk size 8 and
+seed 0 are frozen identity fields, not search axes.  No CPU timing from AT001
+is an operator-performance claim.

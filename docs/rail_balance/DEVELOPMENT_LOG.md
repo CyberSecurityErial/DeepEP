@@ -7828,21 +7828,32 @@ Python, C++ and CUDA remain untouched.  The default execution preset passes
 existing automatic SM/QP selection.
 
 `plan` replays the existing endpoint-aware CPU oracle, rejects invalid or
-over-capacity policies, and keeps a deterministic Pareto frontier in
-pair-Rail peak versus extra local-hop bytes.  It emits argv/env but never
-launches a benchmark or claims performance.  `freeze` requires a clean plan,
-matching source/trace/config/capacity identities, unique eligible real-multinode
-reports and an explicitly preregistered speedup threshold.  Its output remains
-`production_consumed=false`.
+over-capacity policies, reserves one-hop as the causal control, and keeps a
+deterministic Pareto frontier in pair peak, source peak and extra local-hop
+bytes.  Acceptance thresholds and five unique attempt IDs are fixed before
+execution.  `freeze` recomputes performance from raw rank-max samples and
+checks source/build/workload/config/capacity plus resolved V2 SM/QP identity.
+Endpoint-count v1 and synthetic inputs remain diagnostic: output is always
+`production_consumed=false` and `production_promotion_eligible=false` until
+token-trace v2, runtime path counters, held-out confirmation and direct
+one-hop/adaptive pairing exist.
 
 Initial CPU checks retained one-hop only for `offdiag_hot` and three distinct
 cost/peak trade-offs for `diag_hot`, demonstrating that the selector is not a
 hard-coded 4-hot/4-idle rule.  A 2-node x 8-Rail, 4096-token/rank, top-k 8
-synthetic plan evaluated 49 algorithm configurations in 13.578 s on one CPU
-process; this is offline control-plane time, not EP latency.  Re-parsing was
-kept simple because it is negligible beside the required multinode runs.
+synthetic plan originally evaluated 49 configurations in 13.578 s on one CPU
+process; the twelve redundant adaptive cap=0 combinations were then removed,
+leaving 37.  This is offline control-plane time, not EP latency.
 
 Recorded setup failures: `/usr/bin/time` is absent, so the shell builtin was
-used; Pyrefly could not resolve the deliberate test-module path mutation, so
-the same module is now loaded through `importlib` without suppressing the
-check.  Ruff, Pyrefly and five CPU contracts pass after the fix.
+used; bare `python` is also absent, so checks use the repository environment's
+explicit interpreter.  Pyrefly could not resolve the deliberate test-module
+path mutation, so the same module is now loaded through `importlib` without
+suppressing the check.
+
+The final independent audit found no remaining Blocker/High.  It verified that
+V2 auto remains the only v1 execution strategy, attempt paths/manifests/raw
+paired samples are bound fail-closed, and endpoint-count/synthetic artifacts
+cannot claim production promotion.  No GPU or multinode run was performed in
+AT001; token-trace v2, runtime counters, held-out confirmation and direct
+one-hop/adaptive pairing remain explicit evidence gaps.
