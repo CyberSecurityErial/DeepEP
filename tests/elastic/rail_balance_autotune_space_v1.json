@@ -1,0 +1,39 @@
+{
+  "algorithm": {
+    "hop_penalty_percent": [
+      25,
+      50,
+      100
+    ],
+    "max_two_hop_percent": [
+      0,
+      5,
+      10,
+      25
+    ],
+    "modes": [
+      "one_hop",
+      "adaptive"
+    ],
+    "planner_chunk_size": 8,
+    "planner_seed": 0,
+    "two_hop_threshold_percent": [
+      0,
+      2,
+      5,
+      10
+    ]
+  },
+  "execution_presets": [
+    {
+      "id": "v2_auto",
+      "num_allocated_qps": 0,
+      "num_sms": 0,
+      "strategy": "v2_auto"
+    }
+  ],
+  "frozen_default_commit": "4e002766d4be7c319687e127a69c1811efe7fe49",
+  "max_pareto_candidates": 8,
+  "proxy_slots_per_rank": null,
+  "schema_version": 1
+}
