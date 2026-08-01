@@ -5,7 +5,7 @@ import traceback
 import torch
 import torch.distributed as dist
 from typing import Callable, Optional, Tuple, Union, List, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 # noinspection PyUnresolvedReferences
 import deep_ep._C as _C
@@ -1182,6 +1182,11 @@ class ElasticBuffer:
                 constructor_gate_device_words
             self._rail_balance_world_gate_host_words = \
                 constructor_gate_host_words
+            # Control-plane consensus must not drain the caller's compute
+            # stream. The gate still synchronizes this dedicated stream before
+            # decoding its host result, preserving the fail-closed protocol.
+            self._rail_balance_world_gate_stream = torch.cuda.Stream(
+                device=constructor_gate_device_words.device)
             self._rail_balance_owner_token = object()
             self._rail_balance_next_invocation_id = 1
             self._rail_balance_live_ticket = None
@@ -1971,10 +1976,15 @@ class ElasticBuffer:
                     (0,) * _RAIL_BALANCE_DISPATCH_COMMON_FIELDS))
 
         try:
-            gate_result = _run_rail_balance_world_gate(
-                self._rail_balance_world_gate_device_words,
-                self._rail_balance_world_gate_host_words,
-                self.group)
+            gate_stream = getattr(
+                self, '_rail_balance_world_gate_stream', None)
+            gate_context = torch.cuda.stream(gate_stream) \
+                if gate_stream is not None else nullcontext()
+            with gate_context:
+                gate_result = _run_rail_balance_world_gate(
+                    self._rail_balance_world_gate_device_words,
+                    self._rail_balance_world_gate_host_words,
+                    self.group)
         except BaseException:
             self._rail_balance_terminal = True
             raise
@@ -2055,10 +2065,15 @@ class ElasticBuffer:
                     (0,) * _RAIL_BALANCE_DISPATCH_COMMON_FIELDS))
 
         try:
-            gate_result = _run_rail_balance_world_gate(
-                self._rail_balance_world_gate_device_words,
-                self._rail_balance_world_gate_host_words,
-                self.group)
+            gate_stream = getattr(
+                self, '_rail_balance_world_gate_stream', None)
+            gate_context = torch.cuda.stream(gate_stream) \
+                if gate_stream is not None else nullcontext()
+            with gate_context:
+                gate_result = _run_rail_balance_world_gate(
+                    self._rail_balance_world_gate_device_words,
+                    self._rail_balance_world_gate_host_words,
+                    self.group)
         except BaseException:
             self._rail_balance_terminal = True
             raise
@@ -2471,10 +2486,15 @@ class ElasticBuffer:
                     0, 0))
 
         try:
-            gate_result = _run_rail_balance_world_gate(
-                self._rail_balance_world_gate_device_words,
-                self._rail_balance_world_gate_host_words,
-                self.group)
+            gate_stream = getattr(
+                self, '_rail_balance_world_gate_stream', None)
+            gate_context = torch.cuda.stream(gate_stream) \
+                if gate_stream is not None else nullcontext()
+            with gate_context:
+                gate_result = _run_rail_balance_world_gate(
+                    self._rail_balance_world_gate_device_words,
+                    self._rail_balance_world_gate_host_words,
+                    self.group)
         except BaseException:
             self._rail_balance_terminal = True
             raise

@@ -137,6 +137,12 @@ def _assert_source_contract() -> None:
     ))
     assert "_rail_balance_hybrid_plan_abort" in force_dispatch
     assert "_rail_balance_hybrid_combine_abort" in force_combine
+    assert source.count(
+        "self._rail_balance_world_gate_stream = torch.cuda.Stream(") == 1
+    assert force_dispatch.count("with gate_context:") == 2
+    assert force_combine.count("with gate_context:") == 1
+    assert "'_rail_balance_world_gate_stream'" in force_dispatch
+    assert "'_rail_balance_world_gate_stream'" in force_combine
 
 
 class _FakeGroup:
