@@ -223,6 +223,8 @@ def build_reference_report(
     )
     before = [[[0] * rails for _ in range(num_nodes)] for _ in range(num_nodes)]
     after = [[[0] * rails for _ in range(num_nodes)] for _ in range(num_nodes)]
+    before_source = [[0] * rails for _ in range(num_nodes)]
+    after_source = [[0] * rails for _ in range(num_nodes)]
     path_units = {kind: 0 for kind in _KINDS}
     path_chunks = {kind: 0 for kind in _KINDS}
     local_forward_units = extra_forward_units = total_units = 0
@@ -242,6 +244,8 @@ def build_reference_report(
         validate_hop_plan(flows, plan)
         before[source] = [list(row) for row in off_plan.pair_load]
         after[source] = [list(row) for row in plan.pair_load]
+        before_source[source] = list(off_plan.source_rail_load)
+        after_source[source] = list(plan.source_rail_load)
         for kind in _KINDS:
             path_units[kind] += plan.units_for(kind)
             path_chunks[kind] += sum(
@@ -315,8 +319,12 @@ def build_reference_report(
             "unit": "token_copy",
             "before_pair_rail_load": before,
             "after_pair_rail_load": after,
+            "before_source_rail_load": before_source,
+            "after_source_rail_load": after_source,
             "before_stats": _load_stats(before_rows),
             "after_stats": _load_stats(after_rows),
+            "before_source_stats": _load_stats(before_source),
+            "after_source_stats": _load_stats(after_source),
         },
         "latency_statistics": {"planner_time_us": planner_time_us},
         "throughput_statistics": None,

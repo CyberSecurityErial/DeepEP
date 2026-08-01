@@ -52,6 +52,8 @@ _ALL_METRICS = _CUDA_METRICS + (
     "combine_host_ns",
     "roundtrip_host_ns",
 )
+_PRODUCTION_PLANNER_CHUNK_SIZE = 8
+_PRODUCTION_PLANNER_SEED = 0
 
 
 def _require(condition: bool, message: str) -> None:
@@ -371,6 +373,9 @@ def _measure_block(
     summary["logical_input_tokens_per_second"] = _stats(
         [sample["logical_input_tokens_per_second"] for sample in samples]
     )
+    resolved_num_sms = args.num_sms or buffer.get_theoretical_num_sms(
+        args.num_experts, args.num_topk
+    )
     return {
         "block_index": block_index,
         "pair_index": block_index // 2,
@@ -381,6 +386,11 @@ def _measure_block(
         "last_output_rank_digests": rank_digests,
         "samples": samples,
         "summary": summary,
+        "resolved_execution": {
+            "num_sms": resolved_num_sms,
+            "num_qps": buffer.get_theoretical_num_qps(resolved_num_sms),
+            "num_allocated_qps": buffer.num_allocated_qps,
+        },
     }
 
 
@@ -812,11 +822,11 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> 
             topk=args.num_topk,
             num_experts=args.num_experts,
             hidden=args.hidden,
-            chunk_size=1,
+            chunk_size=_PRODUCTION_PLANNER_CHUNK_SIZE,
             two_hop_threshold_percent=args.two_hop_threshold_percent,
             max_two_hop_percent=args.max_two_hop_percent,
             hop_penalty_percent=args.hop_penalty_percent,
-            seed=args.seed,
+            seed=_PRODUCTION_PLANNER_SEED,
             proxy_slots_per_rank=capacity,
             workload_json=args.workload_json,
         )
@@ -845,6 +855,16 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> 
             "kernel_config": {
                 "num_sms": args.num_sms,
                 "num_allocated_qps": args.num_allocated_qps,
+                "resolved_num_sms": probes[candidate_mode]["resolved_num_sms"],
+                "resolved_num_qps": probes[candidate_mode]["resolved_num_qps"],
+                "resolved_num_allocated_qps": probes[candidate_mode][
+                    "resolved_num_allocated_qps"
+                ],
+                "baseline_resolved": {
+                    "num_sms": probes["off"]["resolved_num_sms"],
+                    "num_qps": probes["off"]["resolved_num_qps"],
+                    "num_allocated_qps": probes["off"]["resolved_num_allocated_qps"],
+                },
             },
             "workload_summary": hop_reference["workload_summary"],
             "correctness": {

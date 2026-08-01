@@ -384,6 +384,9 @@ def _run_round_trip(
         "combined_x": combined_x.detach().cpu(),
         "combined_weights": combined_weights.detach().cpu(),
         "num_channels": channels,
+        "resolved_num_sms": int(handle.num_sms),
+        "resolved_num_qps": int(buffer.get_theoretical_num_qps(handle.num_sms)),
+        "resolved_num_allocated_qps": int(buffer.num_allocated_qps),
         "global_digest": global_digest,
         "rank_digests": rank_digests,
     }

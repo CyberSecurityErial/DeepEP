@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import copy
 import json
 import sys
 import tempfile
@@ -63,50 +64,134 @@ def _profile() -> dict[str, Any]:
     }
 
 
-def _candidate() -> dict[str, Any]:
+def _workload() -> dict[str, Any]:
     return {
-        "id": "rb_test",
-        "profile": _profile(),
-        "oracle": {
-            "pair_peak": 10,
-            "pair_cv": 0.1,
-            "extra_local_hop_bytes": 1024,
-            "two_hop_ratio": 0.05,
-        },
-        "result_path": "/tmp/rb_test.json",
-        "environment": {},
-        "argv": [],
+        "case": "trace",
+        "trace_semantics": "endpoint_count_v1_diagnostic",
+        "workload_json": None,
+        "workload_json_sha256": None,
+        "num_nodes": 2,
+        "gpus_per_node": 8,
+        "tokens_per_rank": 4096,
+        "hidden": 7168,
+        "topk": 8,
+        "num_experts": 256,
+        "warmup_iters": 10,
+        "steady_iters": 100,
     }
 
 
-def _plan() -> dict[str, Any]:
+def _contract() -> dict[str, Any]:
+    return {
+        "minimum_aggregate_speedup": 1.05,
+        "minimum_paired_median_speedup": 1.05,
+        "minimum_p95_speedup": 1.0,
+        "minimum_distinct_attempts": 5,
+    }
+
+
+def _candidate(result_directory: Path = Path("/tmp")) -> dict[str, Any]:
+    profile = _profile()
+    workload = _workload()
+    contract = _contract()
+    oracle = {
+        "pair_peak": 10,
+        "pair_cv": 0.1,
+        "source_peak": 12,
+        "source_cv": 0.2,
+        "extra_local_hop_bytes": 1024,
+        "two_hop_ratio": 0.05,
+    }
+    plan_identity = autotune._plan_identity(
+        _COMMIT, _COMMIT, "b" * 64, workload, contract
+    )
+    identifier = autotune._candidate_id(
+        {"plan_identity": plan_identity, "profile": profile, "oracle": oracle}
+    )
+    return {
+        "id": identifier,
+        "profile": profile,
+        "oracle": oracle,
+        "environment": {},
+        "attempts": [
+            {
+                "run_id": f"{identifier}-attempt-{index:02d}",
+                "result_path": str(
+                    result_directory / f"{identifier}-attempt-{index:02d}.json"
+                ),
+                "argv": [],
+            }
+            for index in range(1, 6)
+        ],
+    }
+
+
+def _plan(result_directory: Path = Path("/tmp")) -> dict[str, Any]:
+    workload = _workload()
+    contract = _contract()
     return {
         "schema_version": 1,
         "kind": "rail_balance_autotune_plan",
         "frozen_default_commit": _COMMIT,
         "source_commit": _COMMIT,
         "source_clean": True,
-        "workload": {
-            "case": "trace",
-            "num_nodes": 2,
-            "gpus_per_node": 8,
-            "tokens_per_rank": 4096,
-            "hidden": 7168,
-            "topk": 8,
-            "num_experts": 256,
-        },
-        "candidates": [_candidate()],
+        "search_space_sha256": "b" * 64,
+        "workload": workload,
+        "acceptance_contract": contract,
+        "plan_identity": autotune._plan_identity(
+            _COMMIT, _COMMIT, "b" * 64, workload, contract
+        ),
+        "candidates": [_candidate(result_directory)],
     }
 
 
-def _report(speedup: float = 1.10) -> dict[str, Any]:
+def _report(speedup: float = 1.10, run_id: str = "run-0") -> dict[str, Any]:
     profile = _profile()
+    modes = [
+        "off",
+        "adaptive",
+        "adaptive",
+        "off",
+        "adaptive",
+        "off",
+        "off",
+        "adaptive",
+    ]
+    resolved = {"num_sms": 64, "num_qps": 129, "num_allocated_qps": 129}
+    blocks = []
+    for index, mode in enumerate(modes):
+        value = 1.0 if mode == "off" else 1.0 / speedup
+        blocks.append(
+            {
+                "block_index": index,
+                "pair_index": index // 2,
+                "order_repeat": 0,
+                "pattern": "ABBA" if index < 4 else "BAAB",
+                "pattern_position": index % 4,
+                "mode": mode,
+                "samples": [
+                    {
+                        "iteration": iteration,
+                        "rank_raw": [
+                            {"rank": rank, "roundtrip_cuda_ms": value}
+                            for rank in range(16)
+                        ],
+                        "rank_max": {"roundtrip_cuda_ms": value},
+                    }
+                    for iteration in range(100)
+                ],
+                "resolved_execution": resolved,
+            }
+        )
     return {
         "schema_version": 1,
+        "run_id": run_id,
         "claim_scope": "real_multinode",
         "git_commit": _COMMIT,
         "candidate": {
             "mode": profile["mode"],
+            "policy": "all",
+            "threshold_percent": 0,
             "two_hop_threshold_percent": profile["two_hop_threshold_percent"],
             "max_two_hop_percent": profile["max_two_hop_percent"],
             "hop_penalty_percent": profile["hop_penalty_percent"],
@@ -114,8 +199,64 @@ def _report(speedup: float = 1.10) -> dict[str, Any]:
         "kernel_config": {
             "num_sms": profile["num_sms"],
             "num_allocated_qps": profile["num_allocated_qps"],
+            "resolved_num_sms": 64,
+            "resolved_num_qps": 129,
+            "resolved_num_allocated_qps": 129,
+            "baseline_resolved": {
+                "num_sms": 64,
+                "num_qps": 129,
+                "num_allocated_qps": 129,
+            },
         },
-        "benchmark_manifest": {"workload_sha256": None},
+        "identity": {
+            "git_commit": _COMMIT,
+            "git_dirty": False,
+            "extension_path": "/tmp/deep_ep.so",
+            "extension_sha256": "a" * 64,
+            "torch": "test",
+            "cuda": "test",
+            "nccl": "test",
+            "gpu": "NVIDIA H200",
+            "compute_capability": [9, 0],
+            "node_count": 2,
+            "local_processes": 8,
+            "config": {
+                "case": "trace",
+                "num_tokens": 4096,
+                "hidden": 7168,
+                "num_topk": 8,
+                "num_experts": 256,
+                "num_sms": 0,
+                "num_allocated_qps": 0,
+                "proxy_slots_per_rank": 512,
+                "rail_balance_policy": "all",
+                "rail_balance_threshold_percent": 0,
+                "candidate_mode": "adaptive",
+                "two_hop_threshold_percent": 5,
+                "max_two_hop_percent": 25,
+                "hop_penalty_percent": 50,
+                "sl_idx": 3,
+                "seed": 106,
+            },
+            "environment": {},
+        },
+        "planner_config": {"planner_seed": 0, "chunk_size": 8},
+        "benchmark_manifest": {
+            "workload_sha256": None,
+            "warmup_iters": 10,
+            "steady_iters": 100,
+            "order_repeats": 1,
+            "expanded_order": [
+                "off",
+                "adaptive",
+                "adaptive",
+                "off",
+                "adaptive",
+                "off",
+                "off",
+                "adaptive",
+            ],
+        },
         "workload": {
             "case": "trace",
             "node_count": 2,
@@ -131,8 +272,17 @@ def _report(speedup: float = 1.10) -> dict[str, Any]:
         "comparison": {
             "roundtrip_cuda_ms": {
                 "speedup_baseline_over_candidate": speedup,
-            }
+            },
+            "paired_roundtrip": [
+                {"speedup_baseline_over_candidate": speedup},
+                {"speedup_baseline_over_candidate": speedup},
+            ],
         },
+        "aggregate": {
+            "off": {"roundtrip_cuda_ms": {"pooled_raw": {"p95": 1.0}}},
+            "adaptive": {"roundtrip_cuda_ms": {"pooled_raw": {"p95": 1.0 / speedup}}},
+        },
+        "blocks": blocks,
     }
 
 
@@ -145,6 +295,10 @@ def _write_report(directory: Path, name: str, report: dict[str, Any]) -> Path:
 class RailBalanceAutotuneTest(unittest.TestCase):
     def test_validate_space_schema_and_v2_auto(self) -> None:
         autotune._validate_space(_space())
+        layout = (
+            _ROOT / "deep_ep/include/deep_ep/common/rail_balance_hybrid_layout.cuh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("kDefaultHopPlannerChunkSize = 8;", layout)
 
         wrong_schema = _space()
         wrong_schema["schema_version"] = 2
@@ -155,6 +309,20 @@ class RailBalanceAutotuneTest(unittest.TestCase):
         non_auto["execution_presets"][0]["num_sms"] = 8
         with self.assertRaises(ValueError):
             autotune._validate_space(non_auto)
+
+        labeled_auto = _space()
+        labeled_auto["execution_presets"][0]["id"] = "auto"
+        autotune._validate_space(labeled_auto)
+
+        wrong_seed = _space()
+        wrong_seed["algorithm"]["planner_seed"] = 1
+        with self.assertRaises(ValueError):
+            autotune._validate_space(wrong_seed)
+
+        wrong_chunk = _space()
+        wrong_chunk["algorithm"]["planner_chunk_size"] = 4
+        with self.assertRaises(ValueError):
+            autotune._validate_space(wrong_chunk)
 
     def test_enumerate_normalizes_one_hop_two_hop_fields(self) -> None:
         configs = autotune._enumerate_algorithm_configs(_space())
@@ -174,27 +342,50 @@ class RailBalanceAutotuneTest(unittest.TestCase):
         self.assertEqual(one_hop[0]["planner_chunk_size"], 8)
         self.assertEqual(len(adaptive), 2 * 2 * 2)
 
-    def test_pareto_frontier_uses_peak_and_extra_hop_bytes(self) -> None:
-        def row(name: str, pair_peak: int, extra_bytes: int) -> dict[str, Any]:
+    def test_pareto_frontier_uses_pair_source_and_hop_cost(self) -> None:
+        def row(
+            name: str, pair_peak: int, source_peak: int, extra_bytes: int
+        ) -> dict[str, Any]:
             return {
-                "algorithm": {"name": name},
+                "algorithm": {"name": name, "mode": "adaptive"},
                 "oracle": {
                     "pair_peak": pair_peak,
+                    "source_peak": source_peak,
                     "extra_local_hop_bytes": extra_bytes,
                 },
             }
 
         rows = [
-            row("low_peak", 8, 100),
-            row("middle", 9, 50),
-            row("low_hops", 10, 0),
-            row("dominated", 11, 100),
+            row("low_pair", 8, 12, 100),
+            row("low_source", 10, 8, 100),
+            row("low_hops", 10, 12, 0),
+            row("dominated", 11, 13, 100),
         ]
         frontier = autotune._pareto_frontier(rows)
         self.assertEqual(
             {item["algorithm"]["name"] for item in frontier},
-            {"low_peak", "middle", "low_hops"},
+            {"low_pair", "low_source", "low_hops"},
         )
+
+    def test_candidate_selection_keeps_one_hop_control(self) -> None:
+        control = {
+            "algorithm": {"mode": "one_hop"},
+            "oracle": {
+                "pair_peak": 100,
+                "source_peak": 100,
+                "extra_local_hop_bytes": 100,
+            },
+        }
+        adaptive = {
+            "algorithm": {"mode": "adaptive"},
+            "oracle": {
+                "pair_peak": 10,
+                "source_peak": 10,
+                "extra_local_hop_bytes": 10,
+            },
+        }
+        selected = autotune._select_candidate_rows([control, adaptive], 2)
+        self.assertIn(control, selected)
 
     def test_v2_auto_benchmark_argv_uses_zero_sms_and_qps(self) -> None:
         workload = {
@@ -225,41 +416,101 @@ class RailBalanceAutotuneTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--num-sms") + 1], "0")
         self.assertEqual(argv[argv.index("--num-allocated-qps") + 1], "0")
 
-    def test_freeze_rejects_bad_evidence_and_accepts_two_real_runs(self) -> None:
+    def test_freeze_rejects_bad_evidence_and_accepts_five_diagnostic_runs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
+            plan = _plan(directory)
+            candidate = _candidate(directory)
 
             def freeze(reports: list[dict[str, Any]]) -> dict[str, Any]:
+                reports = [copy.deepcopy(report) for report in reports]
+                attempts = candidate["attempts"]
+                for index, report in enumerate(reports):
+                    attempt = attempts[index]
+                    report["run_id"] = attempt["run_id"]
+                    report["benchmark_manifest"]["run_id"] = attempt["run_id"]
+                    report["benchmark_manifest"]["output"] = attempt["result_path"]
                 inputs = [
-                    (_write_report(directory, f"run-{index}.json", report), report)
+                    (
+                        _write_report(
+                            directory, Path(attempts[index]["result_path"]).name, report
+                        ),
+                        report,
+                    )
                     for index, report in enumerate(reports)
                 ]
-                return autotune._freeze_profile(
-                    _plan(), "rb_test", inputs, minimum_speedup=1.05
-                )
+                return autotune._freeze_profile(plan, candidate["id"], inputs)
+
+            valid = [_report(value) for value in (1.10, 1.12, 1.14, 1.16, 1.20)]
+
+            with self.assertRaises(ValueError):
+                freeze(valid[:2])
 
             ineligible = _report()
             ineligible["eligibility"]["performance_claim_eligible"] = False
             with self.assertRaises(ValueError):
-                freeze([ineligible, _report(1.11)])
+                freeze([ineligible, *valid[1:]])
 
             mismatch = _report()
             mismatch["candidate"]["max_two_hop_percent"] = 10
             with self.assertRaises(ValueError):
-                freeze([mismatch, _report(1.11)])
+                freeze([mismatch, *valid[1:]])
 
             with self.assertRaises(ValueError):
-                freeze([_report(1.01), _report(1.11)])
+                freeze([_report(1.01), *valid[1:]])
 
-            profile = freeze([_report(1.10), _report(1.20)])
+            false_summary = _report(1.01)
+            false_summary["comparison"]["roundtrip_cuda_ms"][
+                "speedup_baseline_over_candidate"
+            ] = 99.0
+            with self.assertRaises(ValueError):
+                freeze([false_summary, *valid[1:]])
+
+            bad_pairing = _report(1.20)
+            bad_pairing["blocks"][2]["pair_index"] = 0
+            with self.assertRaises(ValueError):
+                freeze([bad_pairing, *valid[1:]])
+
+            p95_regression = _report(1.20)
+            for block in p95_regression["blocks"]:
+                if block["mode"] == "adaptive":
+                    for sample in block["samples"]:
+                        sample["rank_max"]["roundtrip_cuda_ms"] = 1.10
+                        for row in sample["rank_raw"]:
+                            row["roundtrip_cuda_ms"] = 1.10
+            with self.assertRaises(ValueError):
+                freeze([p95_regression, *valid[1:]])
+
+            identity_mismatch = _report()
+            identity_mismatch["identity"]["gpu"] = "different"
+            with self.assertRaises(ValueError):
+                freeze([identity_mismatch, *valid[1:]])
+
+            corrupt_plan = _plan()
+            corrupt_plan["candidates"][0]["id"] = "rb_corrupt"
+            with self.assertRaises(ValueError):
+                autotune._freeze_profile(corrupt_plan, "rb_corrupt", [])
+
+            explicit_plan = _plan()
+            explicit_plan["candidates"][0]["profile"]["execution_strategy"] = (
+                "explicit"
+            )
+            with self.assertRaises(ValueError):
+                autotune._freeze_profile(
+                    explicit_plan, explicit_plan["candidates"][0]["id"], []
+                )
+
+            profile = freeze(valid)
 
         self.assertIs(profile["production_consumed"], False)
+        self.assertIs(profile["production_promotion_eligible"], False)
         self.assertIs(profile["v2_auto_reused"], True)
-        self.assertEqual(profile["candidate_id"], "rb_test")
-        self.assertEqual(len(profile["evidence"]), 2)
+        self.assertEqual(profile["candidate_id"], candidate["id"])
+        self.assertEqual(len(profile["evidence"]), 5)
+        self.assertEqual(profile["resolved_v2_execution"]["num_sms"], 64)
         self.assertEqual(
             profile["speedup_summary"],
-            {"minimum": 1.10, "median": 1.15, "maximum": 1.20},
+            {"minimum": 1.10, "median": 1.14, "maximum": 1.20},
         )
 
 
