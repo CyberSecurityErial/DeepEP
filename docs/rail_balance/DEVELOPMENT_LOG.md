@@ -7857,3 +7857,30 @@ paired samples are bound fail-closed, and endpoint-count/synthetic artifacts
 cannot claim production promotion.  No GPU or multinode run was performed in
 AT001; token-trace v2, runtime counters, held-out confirmation and direct
 one-hop/adaptive pairing remain explicit evidence gaps.
+
+## 2026-08-01 — AT002: cluster Codex execution guide
+
+Added `docs/rail_balance/CLUSTER_CODEX_GUIDE.md` as the short execution entry
+for the future multinode agent.  It does not duplicate the full distributed
+runbook; it connects the actual current runner and autotune CLIs to a staged
+bring-up, correctness, real-trace, direct one-hop/adaptive, strategy-tuning,
+common-fair and profiling workflow.  Every command was checked against the
+current parser rather than inferred from planned APIs.
+
+The guide distinguishes the historical two-node gold `e5d49d`, the frozen
+operator `4e00276`, and the current scaffold `0d87d95`.  It also separates the
+selective-two-hop `candidate-mode=adaptive` from the active-Rail recruitment
+`rail-policy=adaptive`, keeps DeepEP V2 auto as the default execution policy,
+and requires those parameter families to be tuned in separate stages.  The
+existing endpoint-count v1, off/candidate runner, Python path oracle and
+diagnostic freezer remain explicitly bounded; trace v2, direct
+one-hop/adaptive pairing, runtime/physical counters, exact cut certificates
+and common-fair adapters are recorded as missing, not presented as finished.
+
+This checkpoint changes documentation only.  It does not modify production
+Python, C++, CUDA, JIT identity, buffer layout, capability gates or defaults.
+The guide also records the verified ancestry
+`e5d49d -> 5199a04 -> 4e00276 -> 0d87d95`: the current scaffold is the single
+cluster execution branch covering legacy prototype regression, optional
+third-Rail/two-hop, autotune and the experiment protocol.  Prototype remains a
+historical recovery ref, not a second development or test branch.
