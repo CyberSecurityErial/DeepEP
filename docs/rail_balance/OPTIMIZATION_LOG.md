@@ -2946,3 +2946,35 @@ Diagnostic evidence:
 .cache/rail_balance/hop-aware/takeover-20260801/o112-peaks-adaptive-volume-3x20.json
 .cache/rail_balance/hop-aware/takeover-20260801/o112-peaks-adaptive-rot1-3x20.json
 ```
+
+The clean `cd356df` 10+100 checkpoint accepted O112:
+
+```text
+case       initial 32-round finish   final finish   speedup   final decision (Nsys)
+volume                    6.080 ms       2.207 ms     2.75x                 1.300 ms
+rot1                      7.394 ms       4.697 ms     1.57x              not reprofiled
+```
+
+The final volume/rot1 plans remain `[0,1605,4539,2048]` and
+`[6142,44972,994,5236]`; source peaks remain 1405/7194 and pair peaks remain
+256/1344.  Final source-shuffle medians are about 116/140 us, so data movement
+is not the local bottleneck.  The reports are profiler-free and start from
+empty JIT caches with a clean Git tree, but the conservative report flag is
+false because an idle VNC `xterm` title contains the text `ncu-ui`; the raw
+process row is retained and no profiler or foreign GPU process was active.
+
+Matched Nsys places the final adaptive decision median at 1.300 ms, below the
+pre-registered 1.5 ms stop line.  A four-warp rewrite was rejected before
+implementation: it must restructure all block-uniform early exits and the
+single-warp setup, while its remaining upper bound is only a few hundred
+microseconds.  Final direct validation is 20/20 focused CUDA, 12/12 reference,
+and the exact 8-rank LSA transaction PASS.
+
+Final evidence:
+
+```text
+.cache/rail_balance/hop-aware/takeover-20260801/clean-cd356df-adaptive-volume-10x100.json
+.cache/rail_balance/hop-aware/takeover-20260801/clean-cd356df-adaptive-rot1-10x100.json
+.cache/rail_balance/hop-aware/takeover-20260801/post-cd356df-volume.nsys-rep
+.cache/rail_balance/hop-aware/takeover-20260801/post-cd356df-volume.sqlite
+```

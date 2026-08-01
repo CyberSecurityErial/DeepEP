@@ -7811,3 +7811,9 @@ The 3+20 acceptance run kept both plans unchanged and reduced volume/rot1
 20/20.  The patch stays small; the proposed 128-thread planner refactor is not
 introduced because its extra synchronization and audit surface are not yet
 justified by the remaining exposed time.
+The clean `cd356df` result closed the local operator pass: volume/rot1
+`finish` are 2.207/4.697 ms versus the original 6.080/7.394 ms, with unchanged
+final plan statistics.  Matched Nsys reports a 1.300 ms decision median, below
+the 1.5 ms stop line.  The final validation is 20/20 focused CUDA, 12/12 CPU
+reference and the exact 8-rank LSA transaction.  No multi-warp refactor was
+added, and no NIC/RDMA or public capability claim was made.
