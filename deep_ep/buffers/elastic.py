@@ -1,6 +1,7 @@
 import functools
 import os
 import math
+import traceback
 import torch
 import torch.distributed as dist
 from typing import Callable, Optional, Tuple, Union, List, Sequence
@@ -1927,6 +1928,10 @@ class ElasticBuffer:
                     else:
                         prepare_common_fields = tuple(prepare_result[1:])
                 except BaseException:
+                    if os.environ.get(
+                            'EP_RAIL_BALANCE_DEBUG_PREPARE') == '1' and \
+                            self.rank_idx == 0:
+                        traceback.print_exc()
                     local_error_priority = \
                         _RAIL_BALANCE_DISPATCH_PREPARE_ERROR
 
