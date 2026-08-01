@@ -102,6 +102,18 @@ def test_stats_percentiles_and_invalid_samples() -> None:
         raise AssertionError(f"invalid samples were accepted: {values}")
 
 
+def test_runtime_proxy_capacity_covers_retained_token_staging() -> None:
+    assert bench._runtime_proxy_capacity(None, 17, 128) == 128
+    assert bench._runtime_proxy_capacity(None, 256, 128) == 256
+    assert bench._runtime_proxy_capacity(192, 17, 128) == 192
+    try:
+        bench._runtime_proxy_capacity(127, 256, 128)
+    except ValueError as error:
+        assert "at least --num-tokens" in str(error)
+    else:
+        raise AssertionError("undersized explicit runtime capacity was accepted")
+
+
 def test_compare_reports_deepep_v2_over_candidate_speedup() -> None:
     blocks = [
         _block("off", (10, 12)),

@@ -61,6 +61,18 @@ def _require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def _runtime_proxy_capacity(
+    requested: int | None, oracle_capacity: int, num_tokens: int
+) -> int:
+    """Return a runtime-safe proxy capacity for retained-token staging."""
+    if requested is not None and requested < num_tokens:
+        raise ValueError(
+            "--proxy-slots-per-rank must be at least --num-tokens; "
+            "retained-token staging is indexed by the local token index"
+        )
+    return max(num_tokens, oracle_capacity) if requested is None else requested
+
+
 def _gather(value: Any, group: dist.ProcessGroup) -> list[Any]:
     values: list[Any] = [None] * dist.get_world_size(group)
     dist.all_gather_object(values, value, group=group)
@@ -638,10 +650,14 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> 
                 threshold_percent=args.rail_threshold_percent,
             )
         )
-        capacity = (
-            oracle["config"]["proxy_slots_per_rank"]
-            if oracle is not None
-            else args.proxy_slots_per_rank or num_local_ranks * args.num_tokens
+        capacity = _runtime_proxy_capacity(
+            args.proxy_slots_per_rank,
+            (
+                oracle["config"]["proxy_slots_per_rank"]
+                if oracle is not None
+                else num_local_ranks * args.num_tokens
+            ),
+            args.num_tokens,
         )
         candidate_mode = args.candidate_mode
         modes = ("off", candidate_mode)
