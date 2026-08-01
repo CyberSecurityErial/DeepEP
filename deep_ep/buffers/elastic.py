@@ -102,6 +102,14 @@ def _hybrid_auto_qp_limit(allow_hybrid_mode: bool,
     return min(num_scaleout_ranks, 8)
 
 
+def _rail_only_auto_allocated_qps(allow_hybrid_mode: bool,
+                                  gin_cross_nic: Optional[str]) -> Optional[int]:
+    """Return a bounded auto allocation for an explicit rail-only fabric."""
+    if allow_hybrid_mode and gin_cross_nic == '0':
+        return 2
+    return None
+
+
 def _rail_balance_error(code: str, detail: str) -> str:
     return f'[DeepEP rail_balance:{code}] {detail}'
 
@@ -1095,7 +1103,12 @@ class ElasticBuffer:
                         raise ValueError('num_allocated_qps is not an int')
                     if force_num_allocated_qps == 0:
                         force_num_allocated_qps = \
-                            65 if check_fast_rdma_atomic_support() else 129
+                            _rail_only_auto_allocated_qps(
+                                allow_hybrid_mode,
+                                os.environ.get('NCCL_GIN_CROSS_NIC'))
+                        if force_num_allocated_qps is None:
+                            force_num_allocated_qps = \
+                                65 if check_fast_rdma_atomic_support() else 129
                     _validate_rail_balance_force_runtime_config(
                         force_sl_idx, force_num_allocated_qps,
                         num_cpu_timeout_secs, num_gpu_timeout_secs,
@@ -1225,7 +1238,12 @@ class ElasticBuffer:
                 # Hybrid mode will consume more QPs
                 # The extra QP is for notify warps
                 if self.allow_hybrid_mode:
-                    num_allocated_qps = 65 if check_fast_rdma_atomic_support() else 129
+                    num_allocated_qps = _rail_only_auto_allocated_qps(
+                        self.allow_hybrid_mode,
+                        os.environ.get('NCCL_GIN_CROSS_NIC'))
+                    if num_allocated_qps is None:
+                        num_allocated_qps = \
+                            65 if check_fast_rdma_atomic_support() else 129
                 else:
                     num_allocated_qps = 17
         self.num_allocated_qps = num_allocated_qps

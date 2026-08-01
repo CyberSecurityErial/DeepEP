@@ -154,6 +154,10 @@ def _assert_multinode_hybrid_auto_resources_are_bounded() -> None:
     assert elastic_module._hybrid_auto_qp_limit(True, 16) == 8
     assert elastic_module._hybrid_auto_qp_limit(False, 2) is None
     assert elastic_module._hybrid_auto_qp_limit(True, 1) is None
+    assert elastic_module._rail_only_auto_allocated_qps(True, '0') == 2
+    assert elastic_module._rail_only_auto_allocated_qps(True, '1') is None
+    assert elastic_module._rail_only_auto_allocated_qps(True, None) is None
+    assert elastic_module._rail_only_auto_allocated_qps(False, '0') is None
 
 
 class _FakeGroup:
