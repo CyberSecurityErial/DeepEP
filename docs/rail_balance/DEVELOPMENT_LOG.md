@@ -7785,5 +7785,7 @@ The final pre-commit verification passed 20/20 GPU planner tests and 12/12 CPU
 reference tests; randomized destination counts now include D=8/16/32. One
 benchmark attempt failed only because its JIT cache was already populated;
 the fail-closed report builder rejected it and a fresh-cache rerun passed.
+The first clean post-commit run then exposed one stale v7 benchmark identity
+prefix after the launcher moved to v8; the whitelist was corrected directly.
 O110 in `OPTIMIZATION_LOG.md` contains raw metrics and artifact paths. No
 multi-node or NIC performance claim was made.

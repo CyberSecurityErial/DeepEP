@@ -2835,7 +2835,9 @@ volume plan repeated identically                                  PASS
 
 One failed C100 attempt reused a populated JIT directory and was correctly
 rejected by the report builder's empty-pre-JIT identity assertion. It was not
-counted; the rerun used a new empty cache. The next clean checkpoint must
+counted; the rerun used a new empty cache. The first clean v8 report then
+rejected its stale v7 JIT-name whitelist after the kernel had run; the
+whitelist was updated without changing the measurement path. The next clean checkpoint must
 repeat profiler-free volume/rot1 and then collect matched Nsys. A multi-warp
 scan that preserves all 256 rounds remains a separate future experiment; it
 is not mixed into O110.
