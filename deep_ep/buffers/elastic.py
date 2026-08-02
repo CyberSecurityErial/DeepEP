@@ -1,10 +1,11 @@
 import functools
 import os
 import math
+import traceback
 import torch
 import torch.distributed as dist
 from typing import Callable, Optional, Tuple, Union, List, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 # noinspection PyUnresolvedReferences
 import deep_ep._C as _C
@@ -85,6 +86,28 @@ _RAIL_BALANCE_COMBINE_VALIDATION_ERROR = 40
 _RAIL_BALANCE_COMBINE_PREPARE_ERROR = 41
 _RAIL_BALANCE_COMBINE_MANIFEST_ERROR = 42
 _RAIL_BALANCE_COMBINE_ENCODE_ERROR = 43
+
+
+def _hybrid_auto_sm_floor(allow_hybrid_mode: bool,
+                          num_scaleout_ranks: int) -> int:
+    """Return the non-overlap SM floor for the resolved Hybrid topology."""
+    return 32 if allow_hybrid_mode and num_scaleout_ranks > 1 else 64
+
+
+def _hybrid_auto_qp_limit(allow_hybrid_mode: bool,
+                          num_scaleout_ranks: int) -> Optional[int]:
+    """Limit multi-node Hybrid QPs to useful scale-out destinations."""
+    if not allow_hybrid_mode or num_scaleout_ranks <= 1:
+        return None
+    return min(num_scaleout_ranks, 8)
+
+
+def _rail_only_auto_allocated_qps(allow_hybrid_mode: bool,
+                                  gin_cross_nic: Optional[str]) -> Optional[int]:
+    """Return a bounded auto allocation for an explicit rail-only fabric."""
+    if allow_hybrid_mode and gin_cross_nic == '0':
+        return 2
+    return None
 
 
 def _rail_balance_error(code: str, detail: str) -> str:
@@ -1080,7 +1103,12 @@ class ElasticBuffer:
                         raise ValueError('num_allocated_qps is not an int')
                     if force_num_allocated_qps == 0:
                         force_num_allocated_qps = \
-                            65 if check_fast_rdma_atomic_support() else 129
+                            _rail_only_auto_allocated_qps(
+                                allow_hybrid_mode,
+                                os.environ.get('NCCL_GIN_CROSS_NIC'))
+                        if force_num_allocated_qps is None:
+                            force_num_allocated_qps = \
+                                65 if check_fast_rdma_atomic_support() else 129
                     _validate_rail_balance_force_runtime_config(
                         force_sl_idx, force_num_allocated_qps,
                         num_cpu_timeout_secs, num_gpu_timeout_secs,
@@ -1181,6 +1209,11 @@ class ElasticBuffer:
                 constructor_gate_device_words
             self._rail_balance_world_gate_host_words = \
                 constructor_gate_host_words
+            # Control-plane consensus must not drain the caller's compute
+            # stream. The gate still synchronizes this dedicated stream before
+            # decoding its host result, preserving the fail-closed protocol.
+            self._rail_balance_world_gate_stream = torch.cuda.Stream(
+                device=constructor_gate_device_words.device)
             self._rail_balance_owner_token = object()
             self._rail_balance_next_invocation_id = 1
             self._rail_balance_live_ticket = None
@@ -1205,7 +1238,12 @@ class ElasticBuffer:
                 # Hybrid mode will consume more QPs
                 # The extra QP is for notify warps
                 if self.allow_hybrid_mode:
-                    num_allocated_qps = 65 if check_fast_rdma_atomic_support() else 129
+                    num_allocated_qps = _rail_only_auto_allocated_qps(
+                        self.allow_hybrid_mode,
+                        os.environ.get('NCCL_GIN_CROSS_NIC'))
+                    if num_allocated_qps is None:
+                        num_allocated_qps = \
+                            65 if check_fast_rdma_atomic_support() else 129
                 else:
                     num_allocated_qps = 17
         self.num_allocated_qps = num_allocated_qps
@@ -1702,7 +1740,10 @@ class ElasticBuffer:
                 bounded_gbs / bounded_traffic * sm_write / sm_write_gbs,
             )
         num_sms = align(max(4, math.ceil(num_sms * 1.25)), 2)
-        num_sms = num_sms if self.prefer_overlap_with_compute else max(num_sms, 64)
+        num_sms = num_sms if self.prefer_overlap_with_compute else max(
+            num_sms,
+            _hybrid_auto_sm_floor(
+                self.allow_hybrid_mode, self.num_scaleout_ranks))
         num_sms = min(num_sms, num_device_sms)
 
         # Summary
@@ -1730,6 +1771,10 @@ class ElasticBuffer:
         # For hybrid mode, we encourage every channel (and notify) to have an independent QP
         if self.allow_hybrid_mode:
             num_qps = num_sms * 16 + 1
+            qp_limit = _hybrid_auto_qp_limit(
+                self.allow_hybrid_mode, self.num_scaleout_ranks)
+            if qp_limit is not None:
+                num_qps = min(num_qps, qp_limit)
 
         return min(num_qps, self.num_allocated_qps)
 
@@ -1927,6 +1972,10 @@ class ElasticBuffer:
                     else:
                         prepare_common_fields = tuple(prepare_result[1:])
                 except BaseException:
+                    if os.environ.get(
+                            'EP_RAIL_BALANCE_DEBUG_PREPARE') == '1' and \
+                            self.rank_idx == 0:
+                        traceback.print_exc()
                     local_error_priority = \
                         _RAIL_BALANCE_DISPATCH_PREPARE_ERROR
 
@@ -1966,10 +2015,15 @@ class ElasticBuffer:
                     (0,) * _RAIL_BALANCE_DISPATCH_COMMON_FIELDS))
 
         try:
-            gate_result = _run_rail_balance_world_gate(
-                self._rail_balance_world_gate_device_words,
-                self._rail_balance_world_gate_host_words,
-                self.group)
+            gate_stream = getattr(
+                self, '_rail_balance_world_gate_stream', None)
+            gate_context = torch.cuda.stream(gate_stream) \
+                if gate_stream is not None else nullcontext()
+            with gate_context:
+                gate_result = _run_rail_balance_world_gate(
+                    self._rail_balance_world_gate_device_words,
+                    self._rail_balance_world_gate_host_words,
+                    self.group)
         except BaseException:
             self._rail_balance_terminal = True
             raise
@@ -2050,10 +2104,15 @@ class ElasticBuffer:
                     (0,) * _RAIL_BALANCE_DISPATCH_COMMON_FIELDS))
 
         try:
-            gate_result = _run_rail_balance_world_gate(
-                self._rail_balance_world_gate_device_words,
-                self._rail_balance_world_gate_host_words,
-                self.group)
+            gate_stream = getattr(
+                self, '_rail_balance_world_gate_stream', None)
+            gate_context = torch.cuda.stream(gate_stream) \
+                if gate_stream is not None else nullcontext()
+            with gate_context:
+                gate_result = _run_rail_balance_world_gate(
+                    self._rail_balance_world_gate_device_words,
+                    self._rail_balance_world_gate_host_words,
+                    self.group)
         except BaseException:
             self._rail_balance_terminal = True
             raise
@@ -2466,10 +2525,15 @@ class ElasticBuffer:
                     0, 0))
 
         try:
-            gate_result = _run_rail_balance_world_gate(
-                self._rail_balance_world_gate_device_words,
-                self._rail_balance_world_gate_host_words,
-                self.group)
+            gate_stream = getattr(
+                self, '_rail_balance_world_gate_stream', None)
+            gate_context = torch.cuda.stream(gate_stream) \
+                if gate_stream is not None else nullcontext()
+            with gate_context:
+                gate_result = _run_rail_balance_world_gate(
+                    self._rail_balance_world_gate_device_words,
+                    self._rail_balance_world_gate_host_words,
+                    self.group)
         except BaseException:
             self._rail_balance_terminal = True
             raise

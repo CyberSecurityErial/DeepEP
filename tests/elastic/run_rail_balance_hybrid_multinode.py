@@ -42,6 +42,18 @@ def _require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def _runtime_proxy_capacity(
+    requested: int | None, oracle_capacity: int, num_tokens: int
+) -> int:
+    """Return a runtime-safe proxy capacity for retained-token staging."""
+    if requested is not None and requested < num_tokens:
+        raise ValueError(
+            "--proxy-slots-per-rank must be at least --num-tokens; "
+            "retained-token staging is indexed by the local token index"
+        )
+    return max(num_tokens, oracle_capacity) if requested is None else requested
+
+
 def _validate_launch_environment() -> None:
     required = ("WORLD_SIZE", "RANK", "MASTER_ADDR", "MASTER_PORT")
     missing = [name for name in required if not os.environ.get(name)]
@@ -666,7 +678,11 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace) -> 
                 threshold_percent=args.rail_threshold_percent,
             ),
         )
-        capacity = capacity_bundle["config"]["proxy_slots_per_rank"]
+        capacity = _runtime_proxy_capacity(
+            args.proxy_slots_per_rank,
+            capacity_bundle["config"]["proxy_slots_per_rank"],
+            args.num_tokens,
+        )
 
         def enable_validation_capability() -> None:
             elastic_module._RAIL_BALANCE_FORCE_HOST_AVAILABLE = True
