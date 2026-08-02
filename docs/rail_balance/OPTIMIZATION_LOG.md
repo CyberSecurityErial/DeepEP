@@ -2995,3 +2995,33 @@ baseline contract is defined.  Reports record both zero-valued requests and
 V2's resolved SM, used-QP and allocated-QP values.  Planner chunk size 8 and
 seed 0 are frozen identity fields, not search axes.  No CPU timing from AT001
 is an operator-performance claim.
+
+## O113 — compact source-skew activation gate
+
+Hypothesis: balanced traffic was paying endpoint assignment and then moving
+payloads without lowering the already-balanced Rail peak. The existing
+precount already materializes exact `[owner,destination]` load, so a one-warp
+gate can return owner-only quotas before endpoint/two-hop decisions without a
+second top-k scan or new buffer.
+
+Single variable: `activation_threshold_percent`; zero preserves the previous
+planner control flow, while 20 was used only for the diagnostic candidate.
+Correctness checks prove balanced singleton and multi-target inputs produce
+zero moves, and a source hotspot still invokes the unchanged endpoint planner.
+
+Profiler-free private-API diagnostic (`G=8,N=512,K=8,C=8`, 10 warmup, 100
+steady):
+
+```text
+case                threshold   median       p95
+balanced                    0   525.332 us   530.144 us
+balanced                   20   313.121 us   318.715 us
+rotating hotspot            0   385.481 us   392.196 us
+rotating hotspot           20   380.911 us   389.262 us
+```
+
+Balanced median decreases 40.4%; hotspot difference is approximately -1.2%
+and is not claimed beyond run noise. The measurement includes allocation,
+planner and status synchronization, so it is diagnostic rather than a
+multinode dispatch result. Nsys/NCU were not run: no new microarchitectural
+claim is needed before profiler-free two-node confirmation.

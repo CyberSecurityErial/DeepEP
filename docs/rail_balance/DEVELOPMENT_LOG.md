@@ -7884,3 +7884,33 @@ The guide also records the verified ancestry
 cluster execution branch covering legacy prototype regression, optional
 third-Rail/two-hop, autotune and the experiment protocol.  Prototype remains a
 historical recovery ref, not a second development or test branch.
+
+## 2026-08-02 — LB migration comparison and compact hop activation
+
+Created `feat/rail-balance-lb-comparison` from cluster-fix baseline `8a0a37a`.
+The comparison deliberately reuses `legacy_exact` as the LB-hard compact
+quota implementation instead of copying DeepEP-LB's V1 kernel. The
+LB-minimal implementation adds one constructor-fixed activation threshold to
+the existing endpoint-aware decision kernel; threshold zero preserves the
+golden path, while a positive threshold retains every copy on its owner Rail
+when compact `[owner,destination]` source load is already within tolerance.
+Proxy slots, ticket reverse routing, V2 Gin and capability gates are unchanged.
+
+Checkpoints:
+
+- `77ce9d4`: feature trade-off table and implementation boundary;
+- `404f139`: compact activation gate, CUDA ABI and focused tests;
+- `d85d957`: one threshold argument across reference/vnode/multinode entry.
+
+Validation: forced extension build PASS; final hop-aware CUDA suite 23/23
+PASS, including balanced singleton/multi-target gates; public lifecycle PASS;
+unified reference 9/9 PASS; 4+4 vnode balanced and offdiag-hot round trips
+PASS. The first vnode attempt failed before GPU work because its oracle
+rejected `off`; the oracle was extended to accept the owner-retained plan and
+the exact command then passed.
+
+Preserved environment failures: the pinned venv lacks `pytest`, so tests use
+their built-in runners; `test_rail_balance_hybrid_api.py` reaches an existing
+CPU-force case that reports `Expected a cuda device, but got: cpu`. Neither
+failure is counted as a pass. No real NIC/RDMA result or public capability
+claim was made.
