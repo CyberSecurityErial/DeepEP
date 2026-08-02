@@ -567,8 +567,8 @@ def run_hop_vnode_roundtrip(
     g, d = topology.rails_per_node, topology.num_nodes
     if config.num_rails != g or config.num_destinations != d:
         raise ValueError("hop planner topology differs from the vnode case")
-    if config.mode not in ("one_hop", "adaptive"):
-        raise ValueError("hop vnode supports one_hop or adaptive mode")
+    if config.mode not in ("off", "one_hop", "adaptive"):
+        raise ValueError("hop vnode supports off, one_hop, or adaptive mode")
 
     members_by_flow: dict[
         tuple[int, int, tuple[int, ...]], list[tuple[int, int, int]]

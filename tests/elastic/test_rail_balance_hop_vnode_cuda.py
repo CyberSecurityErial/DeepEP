@@ -152,6 +152,21 @@ def _channel_count(case: VnodeRoundTripCase) -> torch.Tensor:
     return count
 
 
+def _activation_required(
+        case: VnodeRoundTripCase, threshold_percent: int) -> bool:
+    if threshold_percent == 0:
+        return True
+    count = _channel_count(case)
+    for destination in range(_D):
+        owner_load = count[:, :, destination].sum(dim=1)
+        total = int(owner_load.sum())
+        target = (total + _G - 1) // _G
+        if total and int(owner_load.max()) * 100 > \
+                target * (100 + threshold_percent):
+            return True
+    return False
+
+
 @torch.inference_mode()
 def _worker(local_rank: int, num_local_ranks: int,
             args: argparse.Namespace) -> None:
@@ -170,12 +185,13 @@ def _worker(local_rank: int, num_local_ranks: int,
 
     case = _case(args.case, args.workload_json)
     baseline = run_vnode_roundtrip(case)
+    activated = _activation_required(case, args.rail_threshold_percent)
     hop_oracle = run_hop_vnode_roundtrip(
         case,
         HopPlannerConfig(
             num_rails=_G,
             num_destinations=_D,
-            mode=args.mode,
+            mode=args.mode if activated else "off",
             chunk_size=_PLANNER_CHUNK_SIZE,
             two_hop_threshold=args.two_hop_threshold_percent / 100,
             max_two_hop_ratio=(
@@ -247,7 +263,7 @@ def _worker(local_rank: int, num_local_ranks: int,
             return int(source_runtime._rail_balance_hybrid_plan_prepare(
                 topk_idx, _HIDDEN, _CHANNELS, _M, case.num_experts, _D, 0,
                 _PROXY_CAPACITY, source_offset, source_invocation,
-                0, 0, 0, True,
+                0, 0, args.rail_threshold_percent, True,
                 args.two_hop_threshold_percent,
                 args.max_two_hop_percent if args.mode == "adaptive" else 0,
                 args.hop_penalty_percent))
@@ -314,7 +330,7 @@ def _worker(local_rank: int, num_local_ranks: int,
                 x, topk_idx, topk_weights, proxy_dispatch, channel_count,
                 world_offset, _M, case.num_experts, _D, _G,
                 _PROXY_CAPACITY, _GENERATION, world_invocation,
-                0, 0, 0, hop_records,
+                0, 0, args.rail_threshold_percent, hop_records,
                 args.two_hop_threshold_percent,
                 args.max_two_hop_percent if args.mode == "adaptive" else 0,
                 args.hop_penalty_percent)))
@@ -391,6 +407,7 @@ def main() -> None:
         default=None,
     )
     parser.add_argument("--workload-json", type=Path)
+    parser.add_argument("--rail-threshold-percent", type=int, default=0)
     parser.add_argument("--two-hop-threshold-percent", type=int, default=0)
     parser.add_argument("--max-two-hop-percent", type=int, default=25)
     parser.add_argument("--hop-penalty-percent", type=int, default=50)
@@ -402,6 +419,8 @@ def main() -> None:
         args.case = "diag_hot" if args.mode == "adaptive" else "offdiag_hot"
     if (args.case == "trace") != (args.workload_json is not None):
         parser.error("case=trace requires --workload-json, and only trace uses it")
+    if not 0 <= args.rail_threshold_percent <= 3100:
+        parser.error("rail threshold percent must be in [0, 3100]")
     if args.worker:
         torch.multiprocessing.spawn(
             _worker, args=(_WORLD_SIZE, args), nprocs=_WORLD_SIZE, join=True)
@@ -418,6 +437,8 @@ def main() -> None:
         args.mode,
         "--case",
         args.case,
+        "--rail-threshold-percent",
+        str(args.rail_threshold_percent),
         "--two-hop-threshold-percent",
         str(args.two_hop_threshold_percent),
         "--max-two-hop-percent",

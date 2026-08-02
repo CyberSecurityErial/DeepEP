@@ -66,6 +66,29 @@ def test_diagonal_hotspot_uses_only_bounded_adaptive_escape() -> None:
     )
 
 
+def test_activation_gate_bypasses_balanced_but_keeps_hot_sources() -> None:
+    balanced = build_reference_report(
+        case="balanced",
+        mode="one_hop",
+        rail_threshold_percent=20,
+        **_COMMON,
+    )
+    hot = build_reference_report(
+        case="offdiag_hot",
+        mode="one_hop",
+        rail_threshold_percent=20,
+        **_COMMON,
+    )
+    assert balanced["planner_config"]["activated_sources"] == 0
+    assert (
+        balanced["rail_load_before_after"]["after_pair_rail_load"]
+        == balanced["rail_load_before_after"]["before_pair_rail_load"]
+    )
+    assert hot["planner_config"]["activated_sources"] == 2
+    assert (
+        hot["rail_load_before_after"]["after_stats"]["max"]
+        < hot["rail_load_before_after"]["before_stats"]["max"]
+    )
 def test_json_schema_is_atomic_and_claim_scope_is_explicit() -> None:
     report = _report("balanced", "adaptive")
     required = {

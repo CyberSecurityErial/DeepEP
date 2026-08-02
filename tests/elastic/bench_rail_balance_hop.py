@@ -58,6 +58,19 @@ def _load_stats(rows: Sequence[Sequence[int]]) -> dict[str, float]:
     }
 
 
+def _activation_required(
+    pair_load: Sequence[Sequence[int]], threshold_percent: int
+) -> bool:
+    if threshold_percent == 0:
+        return True
+    for row in pair_load:
+        total = sum(row)
+        target = (total + len(row) - 1) // len(row)
+        if total and max(row) * 100 > target * (100 + threshold_percent):
+            return True
+    return False
+
+
 def load_workload_routes(
     workload_json: Path,
     *,
@@ -198,6 +211,7 @@ def build_reference_report(
     seed: int,
     proxy_slots_per_rank: int | None = None,
     workload_json: Path | None = None,
+    rail_threshold_percent: int = 0,
 ) -> dict[str, Any]:
     bytes_per_copy = hidden * 2
     routes, sources = _flows_by_source(
@@ -228,6 +242,7 @@ def build_reference_report(
     path_units = {kind: 0 for kind in _KINDS}
     path_chunks = {kind: 0 for kind in _KINDS}
     local_forward_units = extra_forward_units = total_units = 0
+    activated_sources = 0
     started = time.perf_counter_ns()
     for source, flows in enumerate(sources):
         off_plan = build_hop_plan(
@@ -240,7 +255,11 @@ def build_reference_report(
                 planner_seed=seed,
             ),
         )
-        plan = build_hop_plan(flows, config)
+        activated = _activation_required(
+            off_plan.pair_load, rail_threshold_percent
+        )
+        plan = build_hop_plan(flows, config) if activated else off_plan
+        activated_sources += int(activated)
         validate_hop_plan(flows, plan)
         before[source] = [list(row) for row in off_plan.pair_load]
         after[source] = [list(row) for row in plan.pair_load]
@@ -280,6 +299,8 @@ def build_reference_report(
         "planner_config": {
             "mode": mode,
             "chunk_size": chunk_size,
+            "rail_threshold_percent": rail_threshold_percent,
+            "activated_sources": activated_sources,
             "two_hop_threshold_percent": two_hop_threshold_percent,
             "max_two_hop_percent": max_two_hop_percent,
             "hop_penalty_percent": hop_penalty_percent,
@@ -380,6 +401,7 @@ def _vnode(args: argparse.Namespace, report: dict[str, Any]) -> None:
         "--timeout",
         str(args.timeout),
     ]
+    command.extend(("--rail-threshold-percent", str(args.rail_threshold_percent)))
     if args.workload_json is not None:
         command.extend(("--workload-json", str(args.workload_json)))
     environment = dict(os.environ)
@@ -411,6 +433,8 @@ def _multinode(args: argparse.Namespace) -> None:
         str(args.output_json),
         "--candidate-mode",
         args.mode,
+        "--rail-threshold-percent",
+        str(args.rail_threshold_percent),
         "--num-processes",
         str(args.gpus_per_node),
         "--num-tokens",
@@ -459,6 +483,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--num-experts", type=int, default=16)
     parser.add_argument("--hidden", type=int, default=256)
     parser.add_argument("--chunk-size", type=int, default=1)
+    parser.add_argument("--rail-threshold-percent", type=int, default=0)
     parser.add_argument("--two-hop-threshold-percent", type=int, default=0)
     parser.add_argument("--max-two-hop-percent", type=int, default=25)
     parser.add_argument("--hop-penalty-percent", type=int, default=50)
@@ -489,6 +514,10 @@ def _parse_args() -> argparse.Namespace:
         parser.error("case=trace requires --workload-json, and only trace uses it")
     if not 0 <= args.two_hop_threshold_percent <= 10000:
         parser.error("two-hop threshold percent must be in [0, 10000]")
+    if not 0 <= args.rail_threshold_percent <= 3100:
+        parser.error("rail threshold percent must be in [0, 3100]")
+    if args.mode == "off" and args.rail_threshold_percent:
+        parser.error("off mode requires rail threshold percent 0")
     if not 0 <= args.max_two_hop_percent <= 100:
         parser.error("max two-hop percent must be in [0, 100]")
     if not 0 <= args.hop_penalty_percent <= 10000:
@@ -512,6 +541,7 @@ def main() -> None:
         num_experts=args.num_experts,
         hidden=args.hidden,
         chunk_size=args.chunk_size,
+        rail_threshold_percent=args.rail_threshold_percent,
         two_hop_threshold_percent=args.two_hop_threshold_percent,
         max_two_hop_percent=args.max_two_hop_percent,
         hop_penalty_percent=args.hop_penalty_percent,
