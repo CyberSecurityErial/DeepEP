@@ -844,9 +844,11 @@ class ElasticBuffer:
                 clears ``rail_balance_threshold_percent``. This compatibility
                 policy applies to the legacy planner, not selective 2-hop.
             rail_balance_threshold_percent: tolerated integer percentage by
-                which the current peak may exceed the selected-set balanced
-                target. Zero disables the gate and preserves the original
-                exact ``'all'`` plan.
+                which the current source-Rail peak may exceed the balanced
+                target. Zero disables the gate. Legacy modes apply it while
+                building compact quotas; ``'one_hop'``/``'adaptive'`` use the
+                same compact source-load test before endpoint decisions and
+                retain every copy on its owner Rail when the gate stays shut.
             rail_balance_two_hop_threshold_percent: minimum predicted relative
                 gain required for an adaptive third-Rail move.
             rail_balance_max_two_hop_percent: maximum percentage of token-copy

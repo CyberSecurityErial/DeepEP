@@ -298,11 +298,15 @@ public:
         const int& num_topk,
         const int& num_destinations,
         const int& num_channels,
+        const int& activation_threshold_percent,
         const int& two_hop_threshold_percent,
         const int& max_two_hop_percent,
         const int& hop_penalty_percent,
         const int& planner_chunk_size) {
         EP_HOST_ASSERT(planner_chunk_size >= 1);
+        EP_HOST_ASSERT(activation_threshold_percent >= 0 and
+                       activation_threshold_percent <=
+                           rail_balance::kMaxHybridPolicyThresholdPercent);
         const int64_t record_count =
             static_cast<int64_t>(num_max_tokens_per_rank) * num_topk;
         const int64_t record_bytes = rail_balance::checked_mul_i64(
@@ -364,6 +368,7 @@ public:
             .two_hop_threshold_percent = two_hop_threshold_percent,
             .max_two_hop_percent = max_two_hop_percent,
             .hop_penalty_percent = hop_penalty_percent,
+            .activation_threshold_percent = activation_threshold_percent,
             .planner_chunk_size = planner_chunk_size,
             .prepared = prepare_rail_balance_hop_plan(
                 num_channels, planner_chunk_size > 1,
@@ -549,6 +554,7 @@ public:
                 topk_idx, arena_layout, num_rails,
                 num_max_tokens_per_rank, num_topk,
                 num_scaleout_ranks, num_channels,
+                threshold_percent_value,
                 two_hop_threshold_percent, max_two_hop_percent,
                 hop_penalty_percent,
                 rail_balance::kDefaultHopPlannerChunkSize));
@@ -963,6 +969,7 @@ public:
                 topk_idx, arena_layout, num_rails,
                 num_max_tokens_per_rank, num_topk,
                 num_destinations, num_channels,
+                threshold_percent_value,
                 two_hop_threshold_percent, max_two_hop_percent,
                 hop_penalty_percent,
                 rail_balance::kDefaultHopPlannerChunkSize));
@@ -1242,6 +1249,7 @@ public:
                 pending.proxy_capacity_per_egress,
                 pending.normalized_remainder_seed,
                 hop.planner_chunk_size,
+                hop.activation_threshold_percent,
                 hop.two_hop_threshold_percent,
                 hop.max_two_hop_percent,
                 hop.hop_penalty_percent, comm_stream);
@@ -2554,6 +2562,7 @@ public:
                 .two_hop_threshold_percent = two_hop_threshold_percent,
                 .max_two_hop_percent = max_two_hop_percent,
                 .hop_penalty_percent = hop_penalty_percent,
+                .activation_threshold_percent = threshold_percent_value,
                 .planner_chunk_size = planner_chunk_size,
                 .prepared = prepare_rail_balance_hop_plan(
                     num_channels, true, max_two_hop_percent > 0),
@@ -2640,6 +2649,7 @@ public:
                 num_channels, num_destinations, num_max_tokens_per_rank,
                 proxy_capacity, normalized_remainder_seed,
                 hop->planner_chunk_size,
+                hop->activation_threshold_percent,
                 hop->two_hop_threshold_percent,
                 hop->max_two_hop_percent,
                 hop->hop_penalty_percent, comm_stream);

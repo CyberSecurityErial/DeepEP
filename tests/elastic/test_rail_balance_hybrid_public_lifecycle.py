@@ -282,6 +282,7 @@ class _FakeRuntime:
         self._combine_weights: torch.Tensor | None = None
         self._prepared_ticket: object | None = None
         self.hop_aware: bool | None = None
+        self.activation_threshold_percent: int | None = None
         self.two_hop_config: tuple[int, int, int] | None = None
 
     def _rail_balance_hybrid_dispatch_prepare(self, *args: object) -> tuple[int, ...]:
@@ -291,7 +292,9 @@ class _FakeRuntime:
         self._x = args[0]  # type: ignore[assignment]
         self._topk_idx = args[1]  # type: ignore[assignment]
         self._topk_weights = args[2]  # type: ignore[assignment]
-        assert args[-6:-4] == (0, 0)
+        assert args[-6] == 0
+        assert type(args[-5]) is int
+        self.activation_threshold_percent = args[-5]
         assert type(args[-4]) is bool
         self.hop_aware = args[-4]
         self.two_hop_config = args[-3:]  # type: ignore[assignment]
@@ -517,8 +520,10 @@ def _assert_successful_round_trip() -> None:
 
 def _assert_one_hop_selects_endpoint_planner() -> None:
     buffer, runtime, _ = _make_buffer(force=True, mode="one_hop")
+    buffer._rail_balance_threshold_percent = 20
     _force_dispatch(buffer)
     assert runtime.hop_aware is True
+    assert runtime.activation_threshold_percent == 20
 
 
 def _assert_adaptive_does_not_fall_back() -> None:

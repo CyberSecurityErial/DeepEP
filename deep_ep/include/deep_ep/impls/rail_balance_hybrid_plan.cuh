@@ -1319,6 +1319,7 @@ void rail_balance_hop_plan_impl(
         const int proxy_capacity_per_egress,
         const int planner_seed,
         const int planner_chunk_size,
+        const int activation_threshold_percent,
         const int two_hop_threshold_percent,
         const int max_two_hop_percent,
         const int hop_penalty_percent) {
@@ -1340,6 +1341,9 @@ void rail_balance_hop_plan_impl(
         proxy_capacity_per_egress < 0 or planner_seed < 0 or
         planner_chunk_size < 1 or
         kPrecounted != (planner_chunk_size > 1) or
+        activation_threshold_percent < 0 or
+        activation_threshold_percent > kMaxHybridPolicyThresholdPercent or
+        (activation_threshold_percent > 0 and not kPrecounted) or
         two_hop_threshold_percent < 0 or
         two_hop_threshold_percent > 10000 or
         max_two_hop_percent < 0 or max_two_hop_percent > 100 or
@@ -1459,6 +1463,85 @@ void rail_balance_hop_plan_impl(
     const int total_units = ptx::reduce_add(lane_units);
     if (*status != static_cast<int>(HybridPlanError::Success))
         return;
+
+    // LB-minimal activation gate. The precount already owns the compact
+    // [owner, destination] source load, so a balanced call can retain every
+    // copy on its owner Rail without running endpoint or two-hop decisions.
+    // Threshold zero preserves the existing golden path exactly.
+    if constexpr (kPrecounted) {
+        bool should_balance = true;
+        if (lane == 0 and activation_threshold_percent > 0 and
+                not has_unaggregated_multi_target) {
+            should_balance = false;
+            for (int destination = 0;
+                 destination < num_destinations; ++destination) {
+                int64_t total = 0;
+                int maximum = 0;
+                for (int owner = 0; owner < num_rails; ++owner) {
+                    const int count = owner_remaining[
+                        owner * num_destinations + destination];
+                    total += count;
+                    maximum = max(maximum, count);
+                }
+                const int64_t target =
+                    (total + num_rails - 1) / num_rails;
+                if (total > 0 and static_cast<int64_t>(maximum) * 100 >
+                        target * (100 + activation_threshold_percent)) {
+                    should_balance = true;
+                    break;
+                }
+            }
+        }
+        should_balance = __shfl_sync(
+            0xffffffff, static_cast<int>(should_balance), 0) != 0;
+
+        if (not should_balance) {
+            if (lane == 0) {
+                for (int owner = 0; owner < num_rails; ++owner) {
+                    int source_total = 0;
+                    for (int destination = 0;
+                         destination < num_destinations; ++destination) {
+                        const int count = owner_remaining[
+                            owner * num_destinations + destination];
+                        pair_load[destination * num_rails + owner] = count;
+                        source_total += count;
+                    }
+                    source_load[owner] = source_total;
+                }
+
+                for (int group = 0; group < num_endpoint_groups; ++group) {
+                    const int count = endpoint_count[group];
+                    if (count == 0)
+                        continue;
+                    const int owner = group /
+                        (num_destinations * num_rails);
+                    endpoint_egress_quota[
+                        static_cast<int64_t>(group) * num_rails + owner] =
+                            count;
+                }
+
+                if (has_multi_target and num_target_masks > 1) {
+                    for (int64_t group = 0;
+                         group < num_multi_target_groups; ++group) {
+                        int* quota = multi_target_egress_quota +
+                            group * num_rails;
+                        const int count = quota[0];
+                        if (count == 0)
+                            continue;
+                        for (int egress = 0;
+                             egress < num_rails; ++egress)
+                            quota[egress] = 0;
+                        const int owner = static_cast<int>(group /
+                            (static_cast<int64_t>(num_destinations) *
+                             num_target_masks));
+                        quota[owner] = count;
+                    }
+                }
+            }
+            __syncwarp();
+            return;
+        }
+    }
 
     int num_active_groups = 0;
     if (lane == 0 and

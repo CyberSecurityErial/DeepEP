@@ -404,6 +404,7 @@ public:
         int proxy_capacity_per_egress;
         int planner_seed;
         int planner_chunk_size;
+        int activation_threshold_percent;
         int two_hop_threshold_percent;
         int max_two_hop_percent;
         int hop_penalty_percent;
@@ -465,6 +466,7 @@ static void __instantiate_kernel() {
             args.num_max_tokens_per_rank,
             args.proxy_capacity_per_egress, args.planner_seed,
             args.planner_chunk_size,
+            args.activation_threshold_percent,
             args.two_hop_threshold_percent, args.max_two_hop_percent,
             args.hop_penalty_percent));
     }
@@ -531,6 +533,7 @@ static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
         .proxy_capacity_per_egress = 0,
         .planner_seed = 0,
         .planner_chunk_size = 1,
+        .activation_threshold_percent = 0,
         .two_hop_threshold_percent = 0,
         .max_two_hop_percent = 0,
         .hop_penalty_percent = 0,
@@ -560,9 +563,9 @@ static PreparedRailBalanceHopPlan prepare_rail_balance_hop_plan(
             "rail_balance_hop_record_v1",
             RailBalanceHopRecordRuntime::generate(record_args)),
         .plan = jit::compiler->build(
-            aggregate_adaptive ? "rail_balance_hop_adaptive_decision_v10" :
-            precounted ? "rail_balance_hop_decision_v7" :
-                         "rail_balance_hop_plan_v4",
+            aggregate_adaptive ? "rail_balance_hop_adaptive_decision_v11" :
+            precounted ? "rail_balance_hop_decision_v8" :
+                         "rail_balance_hop_plan_v5",
             RailBalanceHopPlanRuntime::generate(plan_args)),
         .precount = precounted ? jit::compiler->build(
             "rail_balance_hop_precount_v2",
@@ -640,6 +643,7 @@ static void launch_prepared_rail_balance_hop_plan(
     const int& proxy_capacity_per_egress,
     const int& planner_seed,
     const int& planner_chunk_size,
+    const int& activation_threshold_percent,
     const int& two_hop_threshold_percent,
     const int& max_two_hop_percent,
     const int& hop_penalty_percent,
@@ -699,6 +703,7 @@ static void launch_prepared_rail_balance_hop_plan(
             .proxy_capacity_per_egress = proxy_capacity_per_egress,
             .planner_seed = planner_seed,
             .planner_chunk_size = planner_chunk_size,
+            .activation_threshold_percent = activation_threshold_percent,
             .two_hop_threshold_percent = two_hop_threshold_percent,
             .max_two_hop_percent = max_two_hop_percent,
             .hop_penalty_percent = hop_penalty_percent,
@@ -1437,6 +1442,7 @@ struct RailBalanceHopPlanState {
     int two_hop_threshold_percent;
     int max_two_hop_percent;
     int hop_penalty_percent;
+    int activation_threshold_percent;
     int planner_chunk_size;
     PreparedRailBalanceHopPlan prepared;
 };
@@ -1962,7 +1968,8 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
     const int& two_hop_threshold_percent,
     const int& max_two_hop_percent,
     const int& hop_penalty_percent,
-    const int& planner_chunk_size) {
+    const int& planner_chunk_size,
+    const int& activation_threshold_percent) {
     EP_HOST_ASSERT(records.dim() == 3);
     EP_HOST_ASSERT(records.is_cuda() and records.is_contiguous());
     EP_HOST_ASSERT(records.scalar_type() == torch::kLong);
@@ -1990,6 +1997,11 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
     EP_HOST_ASSERT(hop_penalty_percent >= 0 and
                    hop_penalty_percent <= 10000);
     EP_HOST_ASSERT(planner_chunk_size >= 1);
+    EP_HOST_ASSERT(activation_threshold_percent >= 0 and
+                   activation_threshold_percent <=
+                       rail_balance::kMaxHybridPolicyThresholdPercent);
+    EP_HOST_ASSERT(activation_threshold_percent == 0 or
+                   planner_chunk_size > 1);
 
     c10::cuda::CUDAGuard device_guard(records.device());
     const int device_index = records.get_device();
@@ -2105,6 +2117,7 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
         .proxy_capacity_per_egress = 0,
         .planner_seed = 0,
         .planner_chunk_size = 1,
+        .activation_threshold_percent = 0,
         .two_hop_threshold_percent = 0,
         .max_two_hop_percent = 0,
         .hop_penalty_percent = 0,
@@ -2113,9 +2126,9 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
         .launch_args = jit::LaunchArgs(1, 32),
     };
     const auto runtime = jit::compiler->build(
-        aggregate_adaptive ? "rail_balance_hop_adaptive_decision_v8" :
-        precounted ? "rail_balance_hop_decision_v7" :
-                     "rail_balance_hop_plan_v4",
+        aggregate_adaptive ? "rail_balance_hop_adaptive_decision_v9" :
+        precounted ? "rail_balance_hop_decision_v8" :
+                     "rail_balance_hop_plan_v5",
         RailBalanceHopPlanRuntime::generate(prototype));
     RailBalanceHopPlanRuntime::launch(
         runtime,
@@ -2151,6 +2164,7 @@ static RailBalanceHopPlanTensors build_rail_balance_hop_plan(
             .proxy_capacity_per_egress = proxy_capacity_per_egress,
             .planner_seed = planner_seed,
             .planner_chunk_size = planner_chunk_size,
+            .activation_threshold_percent = activation_threshold_percent,
             .two_hop_threshold_percent = two_hop_threshold_percent,
             .max_two_hop_percent = max_two_hop_percent,
             .hop_penalty_percent = hop_penalty_percent,
@@ -2371,7 +2385,8 @@ static void register_rail_balance_hybrid_plan_apis(pybind11::module_& m) {
         pybind11::arg("two_hop_threshold_percent") = 0,
         pybind11::arg("max_two_hop_percent") = 0,
         pybind11::arg("hop_penalty_percent") = 0,
-        pybind11::arg("planner_chunk_size") = 1);
+        pybind11::arg("planner_chunk_size") = 1,
+        pybind11::arg("activation_threshold_percent") = 0);
     m.def(
         "_build_rail_balance_hybrid_plan",
         &build_rail_balance_hybrid_plan,

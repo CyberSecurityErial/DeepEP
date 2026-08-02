@@ -29,7 +29,10 @@ def _percentile(values: list[float], percentile: float) -> float:
 
 def _records(tokens: int, pattern: str) -> torch.Tensor:
     records = torch.full((8, tokens, 8), _UNUSED, dtype=torch.int64, device="cuda")
-    if pattern == "singleton":
+    if pattern == "balanced":
+        for owner in range(8):
+            records[owner, :, 0] = (1 << 32) | (1 << ((owner + 1) % 8))
+    elif pattern == "singleton":
         records[0, :, 0] = (1 << 32) | 1
     elif pattern == "multitarget":
         records[:4, :, 0] = (1 << 32) | 0b1111
@@ -40,7 +43,11 @@ def _records(tokens: int, pattern: str) -> torch.Tensor:
 
 
 def _run(
-    records: torch.Tensor, mode: str, channels: int, planner_chunk_size: int
+    records: torch.Tensor,
+    mode: str,
+    channels: int,
+    planner_chunk_size: int,
+    activation_threshold_percent: int,
 ) -> tuple[torch.Tensor, ...]:
     tokens = records.size(1)
     return tuple(
@@ -55,6 +62,7 @@ def _run(
             25 if mode == "adaptive" else 0,
             0,
             planner_chunk_size,
+            activation_threshold_percent,
         )
     )
 
@@ -72,12 +80,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--pattern",
-        choices=("rotating", "singleton", "multitarget"),
+        choices=("balanced", "rotating", "singleton", "multitarget"),
         default="rotating",
     )
     parser.add_argument("--tokens", type=int, nargs="+", default=(8, 32, 128, 512))
     parser.add_argument("--channels", type=int, default=8)
     parser.add_argument("--planner-chunk-size", type=int, default=1)
+    parser.add_argument("--activation-threshold-percent", type=int, default=0)
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--steady", type=int, default=20)
     parser.add_argument("--device", type=int, default=0)
@@ -89,10 +98,16 @@ def main() -> None:
         or args.warmup < 0
         or not 1 <= args.channels <= 256
         or args.planner_chunk_size < 1
+        or not 0 <= args.activation_threshold_percent <= 3100
+        or (
+            args.activation_threshold_percent > 0
+            and args.planner_chunk_size == 1
+        )
     ):
         parser.error(
             "tokens/steady must be positive, warmup nonnegative, and "
-            "channels in [1, 256]"
+            "channels in [1, 256], activation threshold in [0, 3100], and "
+            "a positive activation threshold requires planner chunk > 1"
         )
 
     torch.cuda.set_device(args.device)
@@ -103,7 +118,13 @@ def main() -> None:
         for mode in modes:
             for _ in range(args.warmup):
                 _check_status(
-                    _run(records, mode, args.channels, args.planner_chunk_size)
+                    _run(
+                        records,
+                        mode,
+                        args.channels,
+                        args.planner_chunk_size,
+                        args.activation_threshold_percent,
+                    )
                 )
             samples = []
             for sample in range(args.steady):
@@ -113,7 +134,11 @@ def main() -> None:
                     )
                 started = time.perf_counter_ns()
                 outputs = _run(
-                    records, mode, args.channels, args.planner_chunk_size
+                    records,
+                    mode,
+                    args.channels,
+                    args.planner_chunk_size,
+                    args.activation_threshold_percent,
                 )
                 samples.append((time.perf_counter_ns() - started) / 1000)
                 _check_status(outputs)
@@ -129,6 +154,8 @@ def main() -> None:
                     "D": 2,
                     "workload_pattern": args.pattern,
                     "planner_chunk_size": args.planner_chunk_size,
+                    "activation_threshold_percent":
+                        args.activation_threshold_percent,
                     "samples_us": samples,
                     "median_us": statistics.median(samples),
                     "p95_us": _percentile(samples, 95),
@@ -146,6 +173,7 @@ def main() -> None:
         "steady": args.steady,
         "status_checked": True,
         "nvtx": args.nvtx,
+        "activation_threshold_percent": args.activation_threshold_percent,
         "rows": rows,
     }
     _write_json(args.output_json, report)

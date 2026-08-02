@@ -52,6 +52,7 @@ def _build(
     max_two_hop_percent=0,
     hop_penalty_percent=0,
     planner_chunk_size=1,
+    activation_threshold_percent=0,
 ):
     tensor = torch.tensor(records, device="cuda", dtype=torch.int64)
     outputs = _C._build_rail_balance_hop_one_hop_plan(
@@ -65,6 +66,7 @@ def _build(
         max_two_hop_percent,
         hop_penalty_percent,
         planner_chunk_size,
+        activation_threshold_percent,
     )
     return tensor, tuple(output.cpu() for output in outputs)
 
@@ -910,6 +912,87 @@ def test_chunk_groups_preserve_invariants_and_determinism() -> None:
     )
     assert first[1].max().item() <= exact[1].max().item() + 8
     assert first[2].max().item() <= exact[2].max().item() + 8
+
+
+def test_activation_gate_keeps_balanced_source_load_on_owner_rails() -> None:
+    records = tuple(
+        tuple((_record(1, 1 << ((owner + 1) % 4)),) for _ in range(8))
+        for owner in range(4)
+    )
+    tensor, outputs = _build(
+        records,
+        channels=4,
+        destinations=2,
+        capacity=32,
+        planner_chunk_size=8,
+        activation_threshold_percent=20,
+    )
+    _validate(
+        tensor,
+        outputs,
+        channels=4,
+        destinations=2,
+        planner_chunk_size=8,
+    )
+    assert outputs[1][1].tolist() == [8, 8, 8, 8]
+    assert outputs[7].tolist() == [0, 32, 0, 0]
+    assert outputs[8].tolist() == [0]
+
+
+def test_activation_gate_still_plans_a_real_source_hotspot() -> None:
+    active = tuple(
+        (_record(1, 1 << (1 + token % 3)),) for token in range(24)
+    )
+    padding = tuple((_UNUSED,) for _ in range(24))
+    tensor, outputs = _build(
+        (active, padding, padding, padding),
+        channels=4,
+        destinations=2,
+        capacity=96,
+        planner_chunk_size=8,
+        activation_threshold_percent=20,
+    )
+    _validate(
+        tensor,
+        outputs,
+        channels=4,
+        destinations=2,
+        planner_chunk_size=8,
+    )
+    assert outputs[8].item() > 0
+    assert outputs[1][1].max().item() < 24
+
+
+def test_activation_gate_preserves_balanced_multitarget_payloads() -> None:
+    records = tuple(
+        tuple(
+            (
+                _record(
+                    1,
+                    (1 << ((owner + 1) % 4)) | (1 << ((owner + 2) % 4)),
+                ),
+            )
+            for _ in range(8)
+        )
+        for owner in range(4)
+    )
+    tensor, outputs = _build(
+        records,
+        channels=4,
+        destinations=2,
+        capacity=32,
+        planner_chunk_size=8,
+        activation_threshold_percent=20,
+    )
+    _validate(
+        tensor,
+        outputs,
+        channels=4,
+        destinations=2,
+        planner_chunk_size=8,
+    )
+    assert outputs[1][1].tolist() == [8, 8, 8, 8]
+    assert outputs[8].tolist() == [0]
 
 
 def test_adaptive_multitarget_fails_closed_above_dense_mask_limit() -> None:
