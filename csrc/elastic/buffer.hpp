@@ -631,7 +631,8 @@ public:
     static int64_t get_combine_buffer_size(const int& num_max_tokens_per_rank, const int& hidden, const int& num_topk,
                                            const int& num_scaleout_ranks, const int& num_scaleup_ranks,
                                            const bool& is_scaleup_nvlink,
-                                           const bool& allow_multiple_reduction) {
+                                           const bool& allow_multiple_reduction,
+                                           const bool& rail_balance) {
         const auto num_ranks = num_scaleup_ranks * num_scaleout_ranks;
         const auto token_layout = get_combine_token_layout(hidden, sizeof(nv_bfloat16), num_topk);
 
@@ -648,10 +649,12 @@ public:
             return send_buffer_layout.get_num_bytes() + recv_buffer_layout.get_num_bytes();
         } else {
             // Hybrid combine
-            const int num_tokens_in_scaleup_layout = allow_multiple_reduction ? std::min(num_scaleup_ranks, num_topk) : num_topk;
+            const int num_tokens_in_scaleup_layout = rail_balance ? num_scaleup_ranks :
+                (allow_multiple_reduction ? std::min(num_scaleup_ranks, num_topk) : num_topk);
             const int num_tokens_in_scaleout_layout = allow_multiple_reduction ? std::min(num_scaleout_ranks, num_topk) : num_topk;
             const auto scaleup_recv_buffer = layout::BufferLayout<false>(
-                token_layout, num_tokens_in_scaleup_layout, num_scaleout_ranks * num_max_tokens_per_rank);
+                token_layout, num_tokens_in_scaleup_layout,
+                num_scaleout_ranks * num_max_tokens_per_rank);
             const auto scaleout_recv_buffer = layout::BufferLayout<false>(
                 token_layout, num_tokens_in_scaleout_layout, num_max_tokens_per_rank);
             const auto scaleout_send_buffer = layout::BufferLayout<false>(
@@ -679,7 +682,7 @@ public:
         const auto combine_bytes = get_combine_buffer_size(
             num_max_tokens_per_rank, hidden, num_topk,
             num_scaleout_ranks, num_scaleup_ranks,
-            is_scaleup_nvlink, allow_multiple_reduction);
+            is_scaleup_nvlink, allow_multiple_reduction, true);
         return rail_balance::checked_align(
             std::max(dispatch_bytes, combine_bytes), ptx::kNumTMAAlignBytes);
     }
@@ -735,7 +738,8 @@ public:
         const auto num_combine_bytes = get_combine_buffer_size(
             num_max_tokens_per_rank, hidden, num_topk,
             num_scaleout_ranks, num_scaleup_ranks,
-            is_scaleup_nvlink, allow_multiple_reduction);
+            is_scaleup_nvlink, allow_multiple_reduction,
+            rail_balance::is_enabled(rail_balance_policy));
 
         auto required_bytes = std::max(num_dispatch_bytes, num_combine_bytes);
         if (rail_balance::is_enabled(rail_balance_policy)) {
@@ -1366,7 +1370,8 @@ public:
         // Check buffer size
         EP_HOST_ASSERT(get_combine_buffer_size(num_max_tokens_per_rank, hidden, num_topk,
                                                nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks,
-                                               nccl_context->is_scaleup_nvlink, allow_multiple_reduction) <= num_buffer_bytes);
+                                               nccl_context->is_scaleup_nvlink, allow_multiple_reduction,
+                                               use_rail_balance) <= num_buffer_bytes);
 
         // Optional configs and metadata for hybrid combine
         int num_channels = 1;

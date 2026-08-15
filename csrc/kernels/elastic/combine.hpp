@@ -191,7 +191,7 @@ static void* launch_combine(void* x,
 
     // For hybrid mode, we have to skip the scale-up buffer
     const bool is_scaleup_buffer_rank_layout =
-        allow_multiple_reduction ? (num_scaleup_ranks <= num_topk) : false;
+        rail_balance or (allow_multiple_reduction ? (num_scaleup_ranks <= num_topk) : false);
     const auto scaleup_buffer = layout::BufferLayout<false>(
         token_layout, 
         is_scaleup_buffer_rank_layout ? num_scaleup_ranks : num_topk,

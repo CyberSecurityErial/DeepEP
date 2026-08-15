@@ -27,9 +27,10 @@ template <bool kUseExpandedLayout, bool kAllowMultipleReduction, bool kRailBalan
           int kNumThreads = kNumWarps * 32,
           int kNumHiddenBytes = kHidden * sizeof(nv_bfloat16),
           bool kUseScaleoutRankLayout = use_rank_layout<kAllowMultipleReduction, kNumScaleoutRanks, kNumTopk>(),
-          bool kUseScaleupRankLayout = use_rank_layout<kAllowMultipleReduction, kNumScaleupRanks, kNumTopk>(),
+          bool kUseScaleupRankLayout = kRailBalance or use_rank_layout<kAllowMultipleReduction, kNumScaleupRanks, kNumTopk>(),
           int kNumTokensInScaleoutLayout = get_num_tokens_in_layout<kAllowMultipleReduction, kNumScaleoutRanks, kNumTopk>(),
-          int kNumTokensInScaleupLayout = get_num_tokens_in_layout<kAllowMultipleReduction, kNumScaleupRanks, kNumTopk>()>
+          int kNumTokensInScaleupLayout = kRailBalance ? kNumScaleupRanks :
+              get_num_tokens_in_layout<kAllowMultipleReduction, kNumScaleupRanks, kNumTopk>()>
 __global__ void __launch_bounds__(kNumThreads, 1)
 hybrid_combine_impl(nv_bfloat16* x,
                     float* topk_weights,
