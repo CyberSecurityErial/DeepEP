@@ -16,6 +16,7 @@ public:
         // Templated arguments
         bool is_scaleup_nvlink;
         bool use_expanded_layout, allow_multiple_reduction;
+        bool rail_balance;
         int num_scaleup_warps, num_forward_warps;
         int num_scaleout_ranks, num_scaleup_ranks;
         int hidden;
@@ -36,6 +37,7 @@ public:
         ncclWindow_t nccl_window;
         void* buffer;
         void* workspace;
+        void* rail_balance_arena;
         int scaleout_rank_idx, scaleup_rank_idx;
         int num_reduced_tokens;
 
@@ -59,8 +61,9 @@ public:
                                     args.num_qps, args.num_timeout_cycles);
         } else {
             header_name = "hybrid_combine";
-            func_name = fmt::format("hybrid_combine_impl<{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}>",
+            func_name = fmt::format("hybrid_combine_impl<{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}>",
                                     args.use_expanded_layout, args.allow_multiple_reduction,
+                                    args.rail_balance,
                                     args.launch_args.grid_dim.first,
                                     args.num_scaleup_warps, args.num_forward_warps,
                                     args.num_scaleout_ranks, args.num_scaleup_ranks,
@@ -100,6 +103,7 @@ static void __instantiate_kernel() {{
                                                      args.channel_linked_list,
                                                      args.nccl_dev_comm, args.nccl_window,
                                                      args.buffer, args.workspace,
+                                                     args.rail_balance_arena,
                                                      args.scaleout_rank_idx, args.scaleup_rank_idx,
                                                      args.num_reduced_tokens));
         }
@@ -129,6 +133,8 @@ static void* launch_combine(void* x,
                             const int& num_sms, const int& num_smem_bytes,
                             const int& num_channels,
                             const bool& use_expanded_layout, const bool& allow_multiple_reduction,
+                            const bool& rail_balance,
+                            void* rail_balance_arena,
                             const at::cuda::CUDAStream& stream) {
     // Maximize shared memory utilization
     const auto token_layout = get_combine_token_layout(hidden, sizeof(nv_bfloat16), num_topk);
@@ -153,6 +159,7 @@ static void* launch_combine(void* x,
         .is_scaleup_nvlink = is_scaleup_nvlink,
         .use_expanded_layout = use_expanded_layout,
         .allow_multiple_reduction = allow_multiple_reduction,
+        .rail_balance = rail_balance,
         .num_scaleup_warps = num_scaleup_warps, .num_forward_warps = num_forward_warps,
         .num_scaleout_ranks = num_scaleout_ranks, .num_scaleup_ranks = num_scaleup_ranks,
         .hidden = hidden,
@@ -168,6 +175,7 @@ static void* launch_combine(void* x,
         .channel_linked_list = channel_linked_list,
         .nccl_dev_comm = nccl_dev_comm, .nccl_window = nccl_window,
         .buffer = buffer, .workspace = workspace,
+        .rail_balance_arena = rail_balance_arena,
         .scaleout_rank_idx = scaleout_rank_idx, .scaleup_rank_idx = scaleup_rank_idx,
         .num_reduced_tokens = num_reduced_tokens,
         // NOTES: make cluster dim 2 to overlap with clustered computation kernels

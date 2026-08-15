@@ -6,12 +6,14 @@
 #include <deep_ep/common/layout.cuh>
 #include <deep_ep/common/math.cuh>
 #include <deep_ep/common/ptx.cuh>
+#include <deep_ep/common/rail_balance.cuh>
 
 
 namespace deep_ep::elastic {
 
 template <bool kDoCPUSync,
           bool kReuseSlotIndices,
+          bool kRailBalance,
           int kNumSMs,
           int kNumNotifyWarps, int kNumScaleoutWarps, int kNumForwardWarps,
           int kNumScaleoutRanks, int kNumScaleupRanks,
@@ -46,12 +48,21 @@ hybrid_dispatch_impl(
     const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_window,
     void* buffer,
     void* workspace, void* mapped_host_workspace,
+    void* rail_balance_arena,
+    const int* rail_balance_all_count,
+    const int* rail_balance_quota,
     const int scaleout_rank_idx, const int scaleup_rank_idx) {
     constexpr int kNumExpertsPerRank = kNumExperts / kNumRanks;
     constexpr int kNumExpertsPerScaleout = kNumExperts / kNumScaleoutRanks;
     EP_STATIC_ASSERT(kNumExperts % kNumScaleupRanks == 0, "Invalid number of experts or ranks");
     EP_STATIC_ASSERT(kNumNotifyWarps % 4 == 0, "Invalid warpgroup size");
     EP_STATIC_ASSERT(kNumScaleoutWarps == kNumForwardWarps, "Invalid warp size");
+    EP_STATIC_ASSERT(not kRailBalance or not kReuseSlotIndices,
+                     "Rail balance does not support cached dispatch");
+    EP_STATIC_ASSERT(not kRailBalance or kNumSFPacks == 0,
+                     "Rail balance currently supports BF16 dispatch only");
+    EP_STATIC_ASSERT(not kRailBalance or (kNumScaleoutRanks <= 32 and kNumScaleupRanks <= 32),
+                     "Rail balance supports at most 32 nodes and 32 local rails");
 
     // Utils
     // NOTES: a warp is a channel (different channels may share QPs)
@@ -151,9 +162,21 @@ hybrid_dispatch_impl(
                 comm::timeout_while<kNumTimeoutCycles>([=](const bool& is_last_check) {
                     const auto status = ptx::ld_volatile<int64_t>(workspace_layout.get_notify_reduction_workspace_ptr() + i);
                     if ((status >> 32) == kNumSMs) {
+                        int count = static_cast<int>(status & 0xffffffffll);
+                        if constexpr (kRailBalance) {
+                            if (i < kNumRanks) {
+                                const auto arena_layout = rail_balance::ArenaLayout(
+                                    kNumHiddenBytes / static_cast<int>(sizeof(nv_bfloat16)),
+                                    kNumTopk, kNumMaxTokensPerRank, kNumChannels,
+                                    kNumScaleoutRanks, kNumScaleupRanks,
+                                    rail_balance_arena);
+                                count += __ldg(arena_layout.get_rank_delta_ptr() + i);
+                            }
+                        }
+                        EP_DEVICE_ASSERT(count >= 0);
                         // Encode and write into the send buffer
                         workspace_layout.get_scaleout_rank_expert_count_ptr<true>()[i] =
-                            math::encode_decode_positive<int>(status & 0xffffffffll);
+                            math::encode_decode_positive<int>(count);
 
                         // Clean for the next usage
                         workspace_layout.get_notify_reduction_workspace_ptr()[i] = 0;
@@ -329,6 +352,7 @@ hybrid_dispatch_impl(
     } else if (warp_idx < kNumNotifyWarps + kNumScaleoutWarps) {
         const int scaleout_warp_idx = warp_idx - kNumNotifyWarps;
         const int channel_idx = sm_idx * kNumChannelsPerSM + scaleout_warp_idx;
+        if constexpr (not kRailBalance) {
         scaleout_recv_buffer = scaleout_recv_buffer.get_rank_buffer(scaleout_rank_idx);
         scaleout_recv_buffer = scaleout_recv_buffer.get_channel_buffer<kNumMaxTokensPerChannel>(channel_idx);
 
@@ -461,6 +485,157 @@ hybrid_dispatch_impl(
 
         // Flush unflushed tails
         update_scaleout_tail(true);
+        } else {
+            const auto arena_layout = rail_balance::ArenaLayout(
+                kNumHiddenBytes / static_cast<int>(sizeof(nv_bfloat16)), kNumTopk,
+                kNumMaxTokensPerRank, kNumChannels, kNumScaleoutRanks,
+                kNumScaleupRanks, rail_balance_arena);
+            scaleout_recv_buffer = scaleout_recv_buffer.get_rank_buffer(scaleout_rank_idx);
+            scaleout_recv_buffer = scaleout_recv_buffer.get_channel_buffer<kNumMaxTokensPerChannel>(channel_idx);
+
+            int stored_owner_tail = 0;
+            int stored_sent_tail = 0, stored_old_sent_tail = 0;
+            const auto update_scaleout_tail = [&](const bool& finish_flag = false) {
+                if (lane_idx < kNumScaleoutRanks and
+                    (stored_sent_tail >= stored_old_sent_tail + kScaleoutUpdateInterval or finish_flag)) {
+                    const auto signaled_tail = math::pack2<int, int64_t>(finish_flag, stored_sent_tail);
+                    const auto old_signaled_tail = math::pack2<int, int64_t>(0, stored_old_sent_tail);
+                    const auto ptr = workspace_layout.get_scaleout_channel_signaled_tail_ptr(
+                        channel_idx, scaleout_rank_idx);
+                    gin.red_add_rel<ncclTeamTagRail>(
+                        ptr, signaled_tail - old_signaled_tail, lane_idx);
+                    stored_old_sent_tail = stored_sent_tail;
+                }
+                __syncwarp();
+            };
+
+            const auto preload_next_token = [&](const int& token_idx) {
+                if (token_idx >= num_tokens)
+                    return;
+                if (ptx::elect_one_sync()) {
+                    ptx::tma_load_1d(
+                        tma_buffer.get_hidden_ptr(),
+                        math::advance_ptr(x, static_cast<int64_t>(token_idx) * kNumHiddenBytes),
+                        mbarrier_ptr, kNumHiddenBytes);
+                }
+                __syncwarp();
+            };
+
+            preload_next_token(channel_idx);
+            for (int token_idx = channel_idx; token_idx < num_tokens; token_idx += kNumChannels) {
+                int stored_dst_scaleout_rank_idx = -1;
+                if (lane_idx < kNumTopk) {
+                    const auto uncasted_dst_expert_idx =
+                        __ldg(topk_idx + token_idx * kNumTopk + lane_idx);
+                    const auto dst_expert_idx = static_cast<int>(uncasted_dst_expert_idx);
+                    stored_dst_scaleout_rank_idx = dst_expert_idx >= 0 ?
+                        dst_expert_idx / kNumExpertsPerScaleout : -1;
+                    tma_buffer.get_topk_idx_ptr()[lane_idx] = dst_expert_idx;
+                    if (topk_weights != nullptr)
+                        tma_buffer.get_topk_weights_ptr()[lane_idx] =
+                            __ldg(topk_weights + token_idx * kNumTopk + lane_idx);
+                    if (copied_topk_idx != nullptr)
+                        copied_topk_idx[token_idx * kNumTopk + lane_idx] =
+                            uncasted_dst_expert_idx;
+                }
+                __syncwarp();
+
+                if (ptx::elect_one_sync()) {
+                    *tma_buffer.get_src_token_global_idx_ptr() =
+                        rank_idx * kNumMaxTokensPerRank + token_idx;
+                    *tma_buffer.get_linked_list_idx_ptr() = -1;
+                }
+                ptx::tma_store_fence();
+                __syncwarp();
+
+                int stored_dst_slot_idx = -1;
+                const int stored_owner_ordinal = ptx::exchange(
+                    stored_owner_tail,
+                    stored_dst_scaleout_rank_idx >= 0 ? stored_dst_scaleout_rank_idx : 0);
+                const bool owns_destination =
+                    ptx::deduplicate(stored_dst_scaleout_rank_idx, lane_idx) and
+                    stored_dst_scaleout_rank_idx >= 0;
+                if (owns_destination) {
+                    if (stored_dst_scaleout_rank_idx == scaleout_rank_idx) {
+                        stored_dst_slot_idx = stored_owner_ordinal;
+                    } else {
+                        const int offset = arena_layout.get_plan_offset(
+                            channel_idx, stored_dst_scaleout_rank_idx, scaleup_rank_idx);
+                        if (stored_owner_ordinal < __ldg(rail_balance_quota + offset))
+                            stored_dst_slot_idx = stored_owner_ordinal;
+                    }
+                }
+
+                const auto destination_mask = ptx::reduce_or(
+                    stored_dst_scaleout_rank_idx >= 0 ?
+                        (1u << stored_dst_scaleout_rank_idx) : 0u);
+                const auto retained_mask = ptx::reduce_or(
+                    stored_dst_slot_idx >= 0 ?
+                        (1u << stored_dst_scaleout_rank_idx) : 0u);
+                stored_owner_tail += (destination_mask >> lane_idx) & 1u;
+                stored_sent_tail += (retained_mask >> lane_idx) & 1u;
+                const auto retained_remote_mask =
+                    retained_mask & ~(1u << scaleout_rank_idx);
+
+                if (ptx::elect_one_sync()) {
+                    ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, kNumHiddenBytes);
+                    ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
+                    if (retained_remote_mask != 0) {
+                        ptx::tma_store_1d(
+                            scaleout_send_buffer.get_token_buffer(token_idx).get_base_ptr(),
+                            tma_buffer.get_base_ptr(), tma_buffer.get_num_bytes<false>());
+                    }
+                }
+                __syncwarp();
+
+                if (stored_dst_slot_idx >= 0 and
+                    stored_dst_scaleout_rank_idx == scaleout_rank_idx) {
+                    ptx::tma_store_1d(
+                        scaleout_recv_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(),
+                        tma_buffer.get_base_ptr(), tma_buffer.get_num_bytes<false>());
+                }
+                ptx::tma_store_commit();
+                ptx::tma_store_wait();
+                __syncwarp();
+
+                preload_next_token(token_idx + kNumChannels);
+                if (stored_dst_slot_idx >= 0 and
+                    stored_dst_scaleout_rank_idx != scaleout_rank_idx) {
+                    gin.put<ncclTeamTagRail>(
+                        scaleout_recv_buffer.get_token_buffer(stored_dst_slot_idx).get_base_ptr(),
+                        scaleout_send_buffer.get_token_buffer(token_idx).get_base_ptr(),
+                        tma_buffer.get_num_bytes<false>(),
+                        stored_dst_scaleout_rank_idx,
+                        ncclGinOptFlagsAggregateRequests);
+                }
+                __syncwarp();
+                update_scaleout_tail();
+            }
+
+            int moved_begin = 0, moved_count = 0;
+            if (lane_idx < kNumScaleoutRanks and lane_idx != scaleout_rank_idx) {
+                const int offset = arena_layout.get_plan_offset(
+                    channel_idx, lane_idx, scaleup_rank_idx);
+                moved_begin = __ldg(rail_balance_all_count + offset);
+                moved_count = max(__ldg(rail_balance_quota + offset) - moved_begin, 0);
+            }
+            for (int step = 0; ptx::any(step < moved_count); ++ step) {
+                if (step < moved_count) {
+                    const int ordinal = moved_begin + step;
+                    const int proxy_slot = arena_layout.get_proxy_slot(
+                        scaleout_rank_idx, lane_idx, channel_idx, ordinal);
+                    const auto proxy = arena_layout.get_proxy_dispatch_layout(proxy_slot);
+                    gin.put<ncclTeamTagRail>(
+                        scaleout_recv_buffer.get_token_buffer(ordinal).get_base_ptr(),
+                        proxy.get_base_ptr(), proxy.get_num_bytes<false>(), lane_idx,
+                        ncclGinOptFlagsAggregateRequests);
+                    stored_sent_tail += 1;
+                }
+                __syncwarp();
+                update_scaleout_tail();
+            }
+            update_scaleout_tail(true);
+        }
     } else {
         const int forward_warp_idx = warp_idx - (kNumNotifyWarps + kNumScaleoutWarps);
         const int channel_idx = sm_idx * kNumChannelsPerSM + forward_warp_idx;
@@ -468,7 +643,8 @@ hybrid_dispatch_impl(
         scaleup_buffer = scaleup_buffer.get_rank_buffer(scaleup_rank_idx);
 
         // Shape of `token_metadata_at_forward`: `[kNumChannels, kNumScaleoutRanks * kNumMaxTokensPerChannel + 1, kNumForwardMetadataDims]`
-        constexpr int kNumForwardMetadataDims = 2 + kNumTopk * 2;
+        constexpr int kNumForwardMetadataDims =
+            (kRailBalance ? rail_balance::get_forward_metadata_dims(kNumTopk) : 2 + kNumTopk * 2);
         token_metadata_at_forward += channel_idx * ((kNumScaleoutRanks * kNumMaxTokensPerChannel + 1) * kNumForwardMetadataDims);
 
         // Shape of `dst_buffer_slot_idx`: `[kNumChannels, kNumScaleoutRanks, kNumMaxTokensPerChannel, kNumTopk]`
@@ -551,6 +727,12 @@ hybrid_dispatch_impl(
                 }
                 __syncwarp();
 
+                int stored_proxy_slot = -1;
+                if constexpr (kRailBalance) {
+                    if (ptx::elect_one_sync())
+                        stored_proxy_slot = *tma_buffer.get_linked_list_idx_ptr();
+                }
+
                 // Read top-k indices
                 EP_STATIC_ASSERT(kNumTopk <= 32, "Too many top-k selections");
                 int stored_dst_scaleup_rank_idx = -1;
@@ -619,12 +801,16 @@ hybrid_dispatch_impl(
                     if (ptx::elect_one_sync()) {
                         metadata_ptr[0] = tma_buffer.get_src_token_global_idx_ptr()[0];
                         metadata_ptr[1] = slot_idx == (end_slot_idx - 1);
+                        if constexpr (kRailBalance)
+                            metadata_ptr[rail_balance::kForwardProxySlotDim] = stored_proxy_slot;
                     }
 
                     // Second, original top-k indices and destination slots
                     if (lane_idx < kNumTopk) {
-                        metadata_ptr[2 + lane_idx] = stored_dst_scaleup_rank_idx;
-                        metadata_ptr[2 + kNumTopk + lane_idx] = stored_dst_slot_idx;
+                        constexpr int kRouteBase = kRailBalance ?
+                            rail_balance::kForwardRouteBaseDim : 2;
+                        metadata_ptr[kRouteBase + lane_idx] = stored_dst_scaleup_rank_idx;
+                        metadata_ptr[kRouteBase + kNumTopk + lane_idx] = stored_dst_slot_idx;
                         dst_slot_idx_ptr[lane_idx] = stored_dst_slot_idx;
                     }
                 }

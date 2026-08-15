@@ -4,11 +4,12 @@
 #include <deep_ep/common/layout.cuh>
 #include <deep_ep/common/math.cuh>
 #include <deep_ep/common/ptx.cuh>
+#include <deep_ep/common/rail_balance.cuh>
 #include <deep_ep/impls/combine_utils.cuh>
 
 namespace deep_ep::elastic {
 
-template <bool kUseExpandedLayout, bool kAllowMultipleReduction,
+template <bool kUseExpandedLayout, bool kAllowMultipleReduction, bool kRailBalance,
           int kNumSMs,
           int kNumScaleupWarps, int kNumForwardWarps,
           int kNumScaleoutRanks, int kNumScaleupRanks,
@@ -38,6 +39,7 @@ hybrid_combine_impl(nv_bfloat16* x,
                     int* channel_linked_list,
                     const ncclDevComm_t nccl_dev_comm, const ncclWindow_t nccl_window,
                     void* buffer, void* workspace,
+                    void* rail_balance_arena,
                     const int scaleout_rank_idx, const int scaleup_rank_idx,
                     int num_reduced_tokens) {
     // Utils
@@ -46,6 +48,8 @@ hybrid_combine_impl(nv_bfloat16* x,
     const auto warp_idx = ptx::get_warp_idx();
     const auto lane_idx = ptx::get_lane_idx();
     constexpr bool kDoExpandedSend = not kAllowMultipleReduction and kUseExpandedLayout;
+    EP_STATIC_ASSERT(not kRailBalance or (kAllowMultipleReduction and not kUseExpandedLayout),
+                     "Rail balance requires non-expanded multiple reduction");
 
     // Combine vector type selection
     using combine_vec_t = typename CombineVecTraits<kNumHiddenBytes>::vec_t;
@@ -360,8 +364,12 @@ hybrid_combine_impl(nv_bfloat16* x,
         scaleout_send_buffer = scaleout_send_buffer.get_channel_buffer<kNumScaleoutRanks * kNumMaxTokensPerChannel>(channel_idx);
 
         // Shape of `token_metadata_at_forward`: `[kNumChannels, kNumScaleoutRanks * kNumMaxTokensPerChannel + 1, kNumForwardMetadataDims]`
-        constexpr int kNumForwardMetadataDims = 2 + kNumTopk * 2;
+        constexpr int kNumForwardMetadataDims =
+            kRailBalance ? rail_balance::get_forward_metadata_dims(kNumTopk) : 2 + kNumTopk * 2;
         token_metadata_at_forward += channel_idx * ((kNumScaleoutRanks * kNumMaxTokensPerChannel + 1) * kNumForwardMetadataDims);
+        const auto rail_arena = rail_balance::ArenaLayout(
+            kHidden, kNumTopk, kNumMaxTokensPerRank, kNumChannels,
+            kNumScaleoutRanks, kNumScaleupRanks, rail_balance_arena);
 
         // Overlap TMA stores and reduction
         int last_src_scaleout_rank_idx = -1;
@@ -394,10 +402,15 @@ hybrid_combine_impl(nv_bfloat16* x,
             const auto src_rank_idx = src_token_global_idx / kNumMaxTokensPerRank;
             const auto src_scaleout_rank_idx = src_rank_idx / kNumScaleupRanks;
             const auto src_token_idx = src_token_global_idx % kNumMaxTokensPerRank;
+            const int proxy_slot = kRailBalance ?
+                __ldg(token_metadata_at_forward + i * kNumForwardMetadataDims +
+                      rail_balance::kForwardProxySlotDim) : -1;
+            constexpr int kRouteBase = kRailBalance ?
+                rail_balance::kForwardRouteBaseDim : 2;
             auto stored_src_scaleup_rank_idx = lane_idx < kNumTopk ?
-                __ldg(token_metadata_at_forward + i * kNumForwardMetadataDims + 2 + lane_idx) : -1;
+                __ldg(token_metadata_at_forward + i * kNumForwardMetadataDims + kRouteBase + lane_idx) : -1;
             auto stored_src_slot_idx = lane_idx < kNumTopk ?
-                __ldg(token_metadata_at_forward + i * kNumForwardMetadataDims + 2 + kNumTopk + lane_idx) : -1;
+                __ldg(token_metadata_at_forward + i * kNumForwardMetadataDims + kRouteBase + kNumTopk + lane_idx) : -1;
             if (src_token_global_idx < 0)
                 break;
 
@@ -550,7 +563,12 @@ hybrid_combine_impl(nv_bfloat16* x,
                     const int src_topk_idx = ptx::get_master_lane_idx(ptx::gather(stored_src_scaleup_rank_idx >= 0));
                     scaleout_recv_buffer_rank_idx = src_topk_idx;
                 }
-                const auto recv_token_buffer = scaleout_recv_buffer.get_rank_buffer(scaleout_recv_buffer_rank_idx).get_token_buffer(src_token_idx);
+                auto recv_token_buffer = scaleout_recv_buffer.get_rank_buffer(
+                    scaleout_recv_buffer_rank_idx).get_token_buffer(src_token_idx);
+                if constexpr (kRailBalance) {
+                    if (proxy_slot >= 0)
+                        recv_token_buffer = rail_arena.get_proxy_return_layout(proxy_slot);
+                }
                 const auto send_token_buffer = src_scaleout_rank_idx == scaleout_rank_idx ?
                     recv_token_buffer :
                     scaleout_send_buffer.get_token_buffer(i);

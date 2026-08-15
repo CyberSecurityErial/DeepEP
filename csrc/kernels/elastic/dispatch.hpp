@@ -18,6 +18,7 @@ public:
         bool is_scaleup_nvlink;
         bool do_cpu_sync;
         bool reuse_slot_indices;
+        bool rail_balance;
         int num_notify_warps;
         int num_dispatch_warps; // For hybrid dispatch
         int num_scaleout_warps, num_forward_warps; // For direct dispatch
@@ -43,6 +44,9 @@ public:
         ncclWindow_t nccl_window;
         void* buffer;
         void* workspace; void* mapped_host_workspace;
+        void* rail_balance_arena;
+        const int* rail_balance_all_count;
+        const int* rail_balance_quota;
         int scaleout_rank_idx, scaleup_rank_idx;
 
         jit::LaunchArgs launch_args;
@@ -65,9 +69,10 @@ public:
                 args.num_qps, args.num_timeout_cycles);
         } else {
             header_name = "hybrid_dispatch";
-            func_name = fmt::format("hybrid_dispatch_impl<{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}>",
+            func_name = fmt::format("hybrid_dispatch_impl<{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}>",
                 args.do_cpu_sync,
                 args.reuse_slot_indices,
+                args.rail_balance,
                 args.launch_args.grid_dim.first,
                 args.num_notify_warps, args.num_scaleout_warps, args.num_forward_warps,
                 args.num_scaleout_ranks, args.num_scaleup_ranks,
@@ -121,6 +126,9 @@ static void __instantiate_kernel() {{
                 args.nccl_dev_comm, args.nccl_window,
                 args.buffer,
                 args.workspace, args.mapped_host_workspace,
+                args.rail_balance_arena,
+                args.rail_balance_all_count,
+                args.rail_balance_quota,
                 args.scaleout_rank_idx, args.scaleup_rank_idx
             ));
         }
@@ -162,6 +170,10 @@ static void launch_dispatch(void* x, void* sf,
                             const int& num_qps, const int64_t& num_timeout_cycles,
                             const bool& cached_mode,
                             const bool& do_cpu_sync,
+                            const bool& rail_balance,
+                            void* rail_balance_arena,
+                            const int* rail_balance_all_count,
+                            const int* rail_balance_quota,
                             const at::cuda::CUDAStream& stream) {
     // Cached mode does not support expert token counting
     if (cached_mode)
@@ -200,6 +212,7 @@ static void launch_dispatch(void* x, void* sf,
         .is_scaleup_nvlink = is_scaleup_nvlink,
         .do_cpu_sync = do_cpu_sync,
         .reuse_slot_indices = reuse_slot_indices,
+        .rail_balance = rail_balance,
         .num_notify_warps = num_notify_warps,
         .num_dispatch_warps = num_dispatch_warps,
         .num_scaleout_warps = num_scaleout_warps, .num_forward_warps = num_forward_warps,
@@ -221,6 +234,9 @@ static void launch_dispatch(void* x, void* sf,
         .nccl_dev_comm = nccl_dev_comm, .nccl_window = nccl_window,
         .buffer = buffer,
         .workspace = workspace, .mapped_host_workspace = mapped_host_workspace,
+        .rail_balance_arena = rail_balance_arena,
+        .rail_balance_all_count = rail_balance_all_count,
+        .rail_balance_quota = rail_balance_quota,
         .scaleout_rank_idx = scaleout_rank_idx, .scaleup_rank_idx = scaleup_rank_idx,
         // NOTES: make cluster dim 2 to overlap with clustered computation kernels
         .launch_args = jit::LaunchArgs(num_sms, num_threads, num_smem_bytes, 2 - (num_sms % 2), true)};

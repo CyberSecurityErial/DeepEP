@@ -46,6 +46,9 @@ class ElasticBuffer {
     // Whether to prefer overlapping communication with compute (use more SMs and channels if false)
     bool prefer_overlap_with_compute;
 
+    // Optional source-node rank-to-NIC balancing policy
+    int rail_balance_policy;
+
     // Timeout settings
     int num_cpu_timeout_secs;
     int64_t num_gpu_timeout_cycles;
@@ -86,14 +89,16 @@ public:
                   const bool& prefer_overlap_with_compute,
                   const int& sl_idx, const int& num_allocated_qps,
                   const int& num_cpu_timeout_secs, const int& num_gpu_timeout_secs,
-                  const bool& explicitly_destroy):
+                  const bool& explicitly_destroy,
+                  const int& rail_balance_policy):
         num_buffer_bytes(num_buffer_bytes),
         num_cpu_buffer_bytes(num_cpu_buffer_bytes),
         explicitly_destroy(explicitly_destroy),
         comm_stream(get_global_comm_stream()),
         allow_hybrid_mode(allow_hybrid_mode),
         allow_multiple_reduction(allow_multiple_reduction),
-        prefer_overlap_with_compute(prefer_overlap_with_compute) {
+        prefer_overlap_with_compute(prefer_overlap_with_compute),
+        rail_balance_policy(rail_balance_policy) {
         // Check buffer bytes alignment (2 MB)
         EP_HOST_ASSERT(num_buffer_bytes > 0 and num_buffer_bytes % symmetric::kNumAlignmentBytes == 0);
         EP_HOST_ASSERT(num_cpu_buffer_bytes >= 0 and num_cpu_buffer_bytes % symmetric::kNumAlignmentBytes == 0);
@@ -112,6 +117,16 @@ public:
             nccl_comm, cpu_comm, num_ranks, rank_idx,
             num_sym_bytes, num_cpu_buffer_bytes,
             allow_hybrid_mode, sl_idx, num_allocated_qps);
+
+        EP_HOST_ASSERT(rail_balance::is_valid_policy(rail_balance_policy));
+        if (rail_balance::is_enabled(rail_balance_policy)) {
+            EP_HOST_ASSERT(allow_hybrid_mode and
+                           nccl_context->num_scaleout_ranks > 1 and
+                           nccl_context->num_scaleup_ranks > 1 and
+                           "Rail balance requires multi-node Hybrid mode with at least two local rails");
+            EP_HOST_ASSERT(allow_multiple_reduction and
+                           "Rail balance currently requires allow_multiple_reduction=True");
+        }
 
         // Verify the symmetric memory layout matches our expectations
         EP_HOST_ASSERT(num_workspace_bytes + num_gpu_buffer_bytes == nccl_context->num_gpu_bytes);
@@ -649,12 +664,53 @@ public:
         }
     }
 
+    static int64_t get_rail_balance_arena_offset(
+            const int& num_max_tokens_per_rank,
+            const int& hidden,
+            const int& num_topk,
+            const int& num_scaleout_ranks,
+            const int& num_scaleup_ranks,
+            const bool& is_scaleup_nvlink,
+            const bool& allow_multiple_reduction) {
+        const auto dispatch_bytes = get_dispatch_buffer_size(
+            num_max_tokens_per_rank, hidden, 0, num_topk,
+            sizeof(nv_bfloat16), num_scaleout_ranks, num_scaleup_ranks,
+            is_scaleup_nvlink);
+        const auto combine_bytes = get_combine_buffer_size(
+            num_max_tokens_per_rank, hidden, num_topk,
+            num_scaleout_ranks, num_scaleup_ranks,
+            is_scaleup_nvlink, allow_multiple_reduction);
+        return rail_balance::checked_align(
+            std::max(dispatch_bytes, combine_bytes), ptx::kNumTMAAlignBytes);
+    }
+
+    static int64_t get_rail_balance_required_buffer_size(
+            const int& num_max_tokens_per_rank,
+            const int& hidden,
+            const int& num_topk,
+            const int& num_channels,
+            const int& num_scaleout_ranks,
+            const int& num_scaleup_ranks,
+            const bool& is_scaleup_nvlink,
+            const bool& allow_multiple_reduction) {
+        const auto arena_offset = get_rail_balance_arena_offset(
+            num_max_tokens_per_rank, hidden, num_topk,
+            num_scaleout_ranks, num_scaleup_ranks,
+            is_scaleup_nvlink, allow_multiple_reduction);
+        const auto arena = rail_balance::ArenaLayout(
+            hidden, num_topk, num_max_tokens_per_rank, num_channels,
+            num_scaleout_ranks, num_scaleup_ranks);
+        return rail_balance::checked_add(arena_offset, arena.raw_bytes);
+    }
+
     static int64_t calculate_buffer_size(const int64_t& nccl_comm,
                                          const int& num_max_tokens_per_rank, const int& hidden,
                                          int num_topk, const bool& use_fp8_dispatch,
                                          const bool& allow_hybrid_mode,
-                                         const bool& allow_multiple_reduction) {
+                                         const bool& allow_multiple_reduction,
+                                         const int& rail_balance_policy) {
         EP_HOST_ASSERT(num_max_tokens_per_rank > 0 and hidden > 0);
+        EP_HOST_ASSERT(rail_balance::is_valid_policy(rail_balance_policy));
 
         // The worst case SF bytes must be less than the main part
         EP_HOST_ASSERT(math::ceil_div(hidden, 32) * sizeof(float) <= hidden);
@@ -681,8 +737,19 @@ public:
             num_scaleout_ranks, num_scaleup_ranks,
             is_scaleup_nvlink, allow_multiple_reduction);
 
-        // Return the maximum of those layouts, aligned to 2 MB
-        return math::align(std::max(num_dispatch_bytes, num_combine_bytes), symmetric::kNumAlignmentBytes);
+        auto required_bytes = std::max(num_dispatch_bytes, num_combine_bytes);
+        if (rail_balance::is_enabled(rail_balance_policy)) {
+            EP_HOST_ASSERT(not use_fp8_dispatch and allow_hybrid_mode and allow_multiple_reduction);
+            EP_HOST_ASSERT(num_scaleout_ranks > 1 and num_scaleup_ranks > 1);
+            required_bytes = get_rail_balance_required_buffer_size(
+                num_max_tokens_per_rank, hidden, num_topk,
+                deep_ep::kNumMaxChannels,
+                num_scaleout_ranks, num_scaleup_ranks,
+                is_scaleup_nvlink, allow_multiple_reduction);
+        }
+
+        // Return the maximum layout plus optional rail arena, aligned to 2 MB
+        return math::align(required_bytes, symmetric::kNumAlignmentBytes);
     }
 
     static symmetric::cpu_handle_t create_cpu_handle(const int64_t& num_cpu_bytes) {
@@ -732,6 +799,7 @@ public:
 
         // Cached mode must have responding handles
         const bool cached_mode = cached_num_recv_tokens.has_value();
+        const bool use_rail_balance = rail_balance::is_enabled(rail_balance_policy);
         if (cached_mode) {
             EP_HOST_ASSERT(cached_num_recv_tokens.has_value());
             EP_HOST_ASSERT(cached_num_recv_tokens_per_expert_list.has_value());
@@ -776,6 +844,15 @@ public:
         EP_HOST_ASSERT(num_tokens == num_tokens_);
         EP_HOST_ASSERT(topk_idx.scalar_type() == c10::CppTypeToScalarType<topk_idx_t>::value);
         EP_HOST_ASSERT(topk_idx.is_cuda() and topk_idx.is_contiguous());
+
+        if (use_rail_balance) {
+            EP_HOST_ASSERT(not cached_mode and not do_expand and
+                           "Rail balance currently supports non-cached, non-expanded dispatch only");
+            EP_HOST_ASSERT(x.scalar_type() == torch::kBFloat16 and not sf.has_value() and
+                           "Rail balance currently supports BF16 dispatch only");
+            EP_HOST_ASSERT(num_topk >= 1 and num_topk <= 32);
+            EP_HOST_ASSERT(num_hidden_bytes % ptx::kNumTMAAlignBytes == 0);
+        }
 
         // Weights are optional for training backward
         float* topk_weights_ptr = nullptr;
@@ -912,7 +989,8 @@ public:
             //   - cached top-k scaleup peer indices (top-k)
             //   - each selections' destination slot indices (top-k)
             const auto num_max_forwarded_tokens = nccl_context->num_scaleout_ranks * num_max_tokens_per_channel + 1;
-            const auto num_forward_metadata_dims = 2 + num_topk * 2;
+            const auto num_forward_metadata_dims = use_rail_balance ?
+                rail_balance::get_forward_metadata_dims(num_topk) : 2 + num_topk * 2;
             if (cached_mode) {
                 token_metadata_at_forward = cached_token_metadata_at_forward;
                 const auto [num_channels_, num_max_forwarded_tokens_, num_forward_metadata_dims_] = get_shape<3>(token_metadata_at_forward.value());
@@ -977,6 +1055,33 @@ public:
 
         // Do dispatch into the buffers (with SM limitation)
         EP_HOST_ASSERT(num_sms <= jit::device_runtime->get_num_sms());
+        void* rail_balance_arena = nullptr;
+        const int* rail_balance_all_count = nullptr;
+        const int* rail_balance_quota = nullptr;
+        if (use_rail_balance) {
+            EP_HOST_ASSERT(num_channels <= deep_ep::kNumMaxChannels);
+            const auto arena_offset = get_rail_balance_arena_offset(
+                num_max_tokens_per_rank, hidden, num_topk,
+                nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks,
+                nccl_context->is_scaleup_nvlink, allow_multiple_reduction);
+            rail_balance_arena = math::advance_ptr(buffer, arena_offset);
+            const auto arena = rail_balance::ArenaLayout(
+                hidden, num_topk, num_max_tokens_per_rank, num_channels,
+                nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks,
+                rail_balance_arena);
+            EP_HOST_ASSERT(rail_balance::checked_add(arena_offset, arena.raw_bytes) <=
+                           num_gpu_buffer_bytes and
+                           "Insufficient buffer for rail balance; use get_buffer_size_hint(..., rail_balance=...)");
+            launch_rail_balance_prepare(
+                nccl_context->dev_comm, nccl_context->window, workspace,
+                static_cast<const nv_bfloat16*>(x.data_ptr()),
+                topk_idx.data_ptr<topk_idx_t>(), topk_weights_ptr,
+                arena, num_tokens, num_experts,
+                nccl_context->scaleout_rank_idx, nccl_context->scaleup_rank_idx,
+                rail_balance_policy, num_gpu_timeout_cycles, comm_stream);
+            rail_balance_all_count = arena.get_all_count_ptr();
+            rail_balance_quota = arena.get_quota_ptr();
+        }
         launch_dispatch(x.data_ptr(), sf_ptr,
                         topk_idx.data_ptr<topk_idx_t>(), topk_weights_ptr,
                         copied_topk_idx_ptr,
@@ -1000,6 +1105,10 @@ public:
                         num_smem_bytes,
                         num_qps, num_gpu_timeout_cycles,
                         cached_mode, do_cpu_sync,
+                        use_rail_balance,
+                        rail_balance_arena,
+                        rail_balance_all_count,
+                        rail_balance_quota,
                         comm_stream);
 
         // Received token counters
@@ -1196,6 +1305,10 @@ public:
             const bool& use_expanded_layout) const {
         // Check SM count
         EP_HOST_ASSERT(num_sms > 0);
+        const bool use_rail_balance = rail_balance::is_enabled(rail_balance_policy);
+        if (use_rail_balance)
+            EP_HOST_ASSERT(not use_expanded_layout and allow_multiple_reduction and
+                           "Rail balance requires non-expanded multiple reduction");
 
         // Check data
         const auto [num_tokens, hidden] = get_shape<2>(x);
@@ -1266,7 +1379,9 @@ public:
             num_channels = num_channels_;
             token_metadata_at_forward_ptr = token_metadata_at_forward->data_ptr<int>();
             EP_HOST_ASSERT(d1 == nccl_context->num_scaleout_ranks * num_max_tokens_per_channel + 1);
-            EP_HOST_ASSERT(d2 == 2 + num_topk * 2);
+            const int expected_forward_dims = use_rail_balance ?
+                rail_balance::get_forward_metadata_dims(num_topk) : 2 + num_topk * 2;
+            EP_HOST_ASSERT(d2 == expected_forward_dims);
             EP_HOST_ASSERT(token_metadata_at_forward->is_cuda() and token_metadata_at_forward->is_contiguous());
             EP_HOST_ASSERT(token_metadata_at_forward->scalar_type() == torch::kInt);
 
@@ -1278,6 +1393,24 @@ public:
             EP_HOST_ASSERT(d2_ == nccl_context->num_scaleup_ranks);
             EP_HOST_ASSERT(channel_linked_list->is_cuda() and channel_linked_list->is_contiguous());
             EP_HOST_ASSERT(channel_linked_list->scalar_type() == torch::kInt);
+        }
+
+        void* rail_balance_arena = nullptr;
+        std::optional<rail_balance::ArenaLayout> rail_balance_layout;
+        if (use_rail_balance) {
+            EP_HOST_ASSERT(num_channels <= deep_ep::kNumMaxChannels);
+            const auto arena_offset = get_rail_balance_arena_offset(
+                num_max_tokens_per_rank, hidden, num_topk,
+                nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks,
+                nccl_context->is_scaleup_nvlink, allow_multiple_reduction);
+            rail_balance_arena = math::advance_ptr(buffer, arena_offset);
+            rail_balance_layout.emplace(
+                hidden, num_topk, num_max_tokens_per_rank, num_channels,
+                nccl_context->num_scaleout_ranks, nccl_context->num_scaleup_ranks,
+                rail_balance_arena);
+            EP_HOST_ASSERT(rail_balance::checked_add(
+                               arena_offset, rail_balance_layout->raw_bytes) <=
+                           num_gpu_buffer_bytes);
         }
 
         // Push data into remote buffers
@@ -1300,7 +1433,16 @@ public:
             num_sms, jit::device_runtime->get_num_smem_bytes(),
             num_channels,
             use_expanded_layout, allow_multiple_reduction,
+            use_rail_balance, rail_balance_arena,
             comm_stream);
+
+        if (use_rail_balance) {
+            launch_rail_balance_return_unshuffle(
+                nccl_context->dev_comm, nccl_context->window, workspace,
+                rail_balance_layout.value(), reduce_buffer, num_experts,
+                nccl_context->scaleout_rank_idx, nccl_context->scaleup_rank_idx,
+                num_gpu_timeout_cycles, comm_stream);
+        }
 
         // Allocate output tensors
         auto combined_x = torch::empty({num_combined_tokens, hidden}, x.options());
@@ -1345,7 +1487,7 @@ public:
 
 static void register_apis(pybind11::module_& m) {
     pybind11::class_<ElasticBuffer>(m, "ElasticBuffer")
-        .def(pybind11::init<int, int, int64_t, symmetric::cpu_comm_t, int64_t, int64_t, bool, bool, bool, int, int, int, int, bool>())
+        .def(pybind11::init<int, int, int64_t, symmetric::cpu_comm_t, int64_t, int64_t, bool, bool, bool, int, int, int, int, bool, int>())
         .def("destroy", &ElasticBuffer::destroy)
         .def("get_comm_stream", &ElasticBuffer::get_comm_stream)
         .def("get_physical_domain_size", &ElasticBuffer::get_physical_domain_size)

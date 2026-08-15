@@ -21,6 +21,15 @@ from ..utils.envs import (
 )
 from ..utils.comm import get_nccl_comm_handle
 
+_RAIL_BALANCE_POLICIES = {'off': 0, 'active': 1, 'all': 2}
+
+
+def _parse_rail_balance_policy(policy: str) -> int:
+    if policy not in _RAIL_BALANCE_POLICIES:
+        choices = ', '.join(_RAIL_BALANCE_POLICIES)
+        raise ValueError(f'rail_balance must be one of: {choices}; got {policy!r}')
+    return _RAIL_BALANCE_POLICIES[policy]
+
 
 class EPHandle:
     """
@@ -243,7 +252,8 @@ class ElasticBuffer:
                  sl_idx: int = 3,
                  num_allocated_qps: int = 0,
                  num_cpu_timeout_secs: int = 300, num_gpu_timeout_secs: int = 100,
-                 explicitly_destroy: bool = False):
+                 explicitly_destroy: bool = False,
+                 rail_balance: str = 'off'):
         """
         Initialize the elastic communication buffer.
 
@@ -266,6 +276,10 @@ class ElasticBuffer:
             num_gpu_timeout_secs: GPU-side timeout in seconds for GPU operations.
             explicitly_destroy: If this flag is set to True, you need to explicitly call `destroy()` to release resources;
                 otherwise, the resources will be released by the destructor.
+            rail_balance: source-node rank-to-NIC policy. ``'active'`` balances across ranks that currently
+                route traffic to the destination node; ``'all'`` balances across every local rank; ``'off'``
+                preserves the native path. The balanced path currently supports BF16, non-cached,
+                non-expanded Hybrid dispatch with multiple reduction.
         """
         # Some useful utilities
         self.group = group
@@ -275,6 +289,8 @@ class ElasticBuffer:
         self.allow_multiple_reduction = allow_multiple_reduction
         self.prefer_overlap_with_compute = prefer_overlap_with_compute
         self.deterministic = deterministic
+        self.rail_balance = rail_balance
+        self.rail_balance_policy = _parse_rail_balance_policy(rail_balance)
 
         if os.environ.get('NCCL_GIN_CROSS_NIC') == '0':
             # TODO: move this variable into NCCL runtime
@@ -306,7 +322,8 @@ class ElasticBuffer:
             num_bytes = _C.calculate_elastic_buffer_size(
                 self.nccl_comm_handle.get(),
                 num_max_tokens_per_rank, hidden, num_topk, use_fp8_dispatch,
-                allow_hybrid_mode, allow_multiple_reduction)
+                allow_hybrid_mode, allow_multiple_reduction,
+                self.rail_balance_policy)
 
         if os.environ.get('EP_BUFFER_DEBUG', 0):
             print(f'Initializing EP elastic buffer with {num_bytes} bytes '
@@ -351,7 +368,8 @@ class ElasticBuffer:
                                         prefer_overlap_with_compute,
                                         sl_idx, num_allocated_qps,
                                         num_cpu_timeout_secs, num_gpu_timeout_secs,
-                                        self.explicitly_destroy)
+                                        self.explicitly_destroy,
+                                        self.rail_balance_policy)
 
         # Logical rank indices
         self.num_scaleout_ranks, self.num_scaleup_ranks = self.get_logical_domain_size()
@@ -382,7 +400,8 @@ class ElasticBuffer:
                              num_max_tokens_per_rank: int, hidden: int,
                              num_topk: int = 0, use_fp8_dispatch: bool = False,
                              allow_hybrid_mode: bool = True,
-                             allow_multiple_reduction: bool = True) -> int:
+                             allow_multiple_reduction: bool = True,
+                             rail_balance: str = 'off') -> int:
         """
         Get a recommended buffer size (in bytes) for the given MoE settings, without constructing the buffer.
         The returned value is aligned to 2 MB.
@@ -395,6 +414,7 @@ class ElasticBuffer:
             use_fp8_dispatch: whether to use FP8 for dispatch.
             allow_hybrid_mode: whether to enable hybrid mode.
             allow_multiple_reduction: whether to allow multiple reductions in combine.
+            rail_balance: source-node rank-to-NIC policy: ``'off'``, ``'active'``, or ``'all'``.
 
         Returns:
             size: the recommended buffer size in bytes (2 MB-aligned).
@@ -403,7 +423,8 @@ class ElasticBuffer:
         return _C.calculate_elastic_buffer_size(
             get_nccl_comm_handle(group).get(),
             num_max_tokens_per_rank, hidden, num_topk, use_fp8_dispatch,
-            allow_hybrid_mode, allow_multiple_reduction)
+            allow_hybrid_mode, allow_multiple_reduction,
+            _parse_rail_balance_policy(rail_balance))
 
     @staticmethod
     def get_engram_storage_size_hint(num_entries: int, hidden: int,
