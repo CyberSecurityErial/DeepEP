@@ -52,6 +52,7 @@ public:
         const int* local_count;
         int* all_count;
         int* quota;
+        const int* incast_rail_masks;
         int num_channels, num_destinations, num_rails;
         int local_destination, policy;
         jit::LaunchArgs launch_args;
@@ -73,6 +74,7 @@ static void __instantiate_kernel() {
         EP_CUDA_UNIFIED_CHECK(jit::launch_kernel(
             kernel, config, args.nccl_dev_comm, args.nccl_window,
             args.local_count, args.all_count, args.quota,
+            args.incast_rail_masks,
             args.num_channels, args.num_destinations, args.num_rails,
             args.local_destination, args.policy));
     }
@@ -224,6 +226,7 @@ static void launch_rail_balance_prepare(
         const topk_idx_t* topk_idx,
         const float* topk_weights,
         const rail_balance::ArenaLayout& arena,
+        const int* incast_rail_masks,
         const int& num_tokens,
         const int& num_experts,
         const int& local_destination,
@@ -257,6 +260,7 @@ static void launch_rail_balance_prepare(
         .local_count = arena.get_local_count_ptr(),
         .all_count = arena.get_all_count_ptr(),
         .quota = arena.get_quota_ptr(),
+        .incast_rail_masks = incast_rail_masks,
         .num_channels = arena.num_channels,
         .num_destinations = arena.num_destinations,
         .num_rails = arena.num_rails,

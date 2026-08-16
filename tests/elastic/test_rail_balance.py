@@ -11,10 +11,20 @@ def _channel_count(num_tokens: int, channel: int, num_channels: int) -> int:
     return max(0, (num_tokens - channel + num_channels - 1) // num_channels)
 
 
-def _reference_targets(counts, num_channels: int, destination: int, policy: str):
+def _reference_targets(
+        counts, num_channels: int, destination: int, policy: str,
+        rail_mask: int | None = None):
     if policy == 'off':
         return list(counts)
-    selected = list(range(len(counts))) if policy == 'all' else [i for i, count in enumerate(counts) if count > 0]
+    if policy == 'incast' and rail_mask:
+        selected = [
+            rail for rail in range(len(counts))
+            if (rail_mask >> rail) & 1
+        ]
+    elif policy == 'all':
+        selected = list(range(len(counts)))
+    else:
+        selected = [i for i, count in enumerate(counts) if count > 0]
     targets = [0] * len(counts)
     for channel in range(num_channels):
         channel_counts = [_channel_count(count, channel, num_channels) for count in counts]
@@ -37,6 +47,7 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 
     counts = [800, 50, 50] + [0] * (num_local_ranks - 3)
     num_tokens = counts[rail] if rail < 3 else 1
+    destination_node = remote_node if rail < 3 else node
     num_max_tokens_per_rank = 800
     hidden = args.hidden
     num_experts = world_size
@@ -56,12 +67,34 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     )
     assert buffer.get_logical_domain_size() == (2, num_local_ranks)
 
+    incast_rail_mask = None
+    if args.rail_balance == 'incast':
+        local_demand = torch.zeros((2,), dtype=torch.float64, device='cpu')
+        local_demand[destination_node] = num_tokens
+        plan, observed_demand = buffer.update_incast_rail_masks(local_demand)
+        assert observed_demand[0, 1].item() == sum(counts)
+        assert observed_demand[1, 0].item() == sum(counts)
+        assert observed_demand[0, 0].item() == num_local_ranks - 3
+        assert observed_demand[1, 1].item() == num_local_ranks - 3
+        if args.incast_mask >= 0:
+            valid_mask = (1 << num_local_ranks) - 1
+            if args.incast_mask == 0 or args.incast_mask & ~valid_mask:
+                raise ValueError(
+                    f'incast mask must select Rails in [0, {num_local_ranks})')
+            plan[0, 1] = args.incast_mask
+            plan[1, 0] = args.incast_mask
+        buffer.set_incast_rail_masks(plan)
+        installed = buffer.get_incast_rail_masks().cpu()
+        assert torch.equal(installed, plan[node])
+        incast_rail_mask = int(plan[node, remote_node].item()) & 0xFFFFFFFF
+        if args.incast_mask < 0:
+            assert incast_rail_mask == (1 << num_local_ranks) - 1
+
     token = torch.arange(num_tokens, device='cuda', dtype=torch.int64)
     src_global = rank * num_max_tokens_per_rank + token
     x_value = (src_global % 97 + 1).to(torch.bfloat16)
     x = x_value[:, None].expand(num_tokens, hidden).contiguous()
 
-    destination_node = remote_node if rail < 3 else node
     expert = destination_node * num_local_ranks + rail
     topk_idx = torch.full(
         (num_tokens, 1), expert, dtype=deep_ep.topk_idx_t, device='cuda')
@@ -137,12 +170,24 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 
     num_channels = handle.token_metadata_at_forward.shape[0]
     targets = _reference_targets(
-        counts, num_channels, remote_node, args.rail_balance)
+        counts, num_channels, remote_node, args.rail_balance,
+        incast_rail_mask)
     assert sum(targets) == sum(counts)
     if args.rail_balance == 'off':
         assert targets == counts
     else:
-        selected_targets = targets if args.rail_balance == 'all' else targets[:3]
+        if args.rail_balance == 'incast':
+            selected_targets = [
+                target for rail_idx, target in enumerate(targets)
+                if (incast_rail_mask >> rail_idx) & 1
+            ]
+            assert all(
+                target == 0 for rail_idx, target in enumerate(targets)
+                if not ((incast_rail_mask >> rail_idx) & 1)
+            )
+        else:
+            selected_targets = (
+                targets if args.rail_balance == 'all' else targets[:3])
         assert max(selected_targets) - min(selected_targets) <= 2
     if args.rail_balance == 'active':
         assert targets[3:] == [0] * (num_local_ranks - 3)
@@ -163,7 +208,11 @@ if __name__ == '__main__':
     parser.add_argument('--num-processes', type=int, default=8)
     parser.add_argument('--num-sms', type=int, default=16)
     parser.add_argument('--hidden', type=int, default=1024)
-    parser.add_argument('--rail-balance', choices=('off', 'active', 'all'), required=True)
+    parser.add_argument(
+        '--rail-balance', choices=('off', 'active', 'all', 'incast'), required=True)
+    parser.add_argument(
+        '--incast-mask', type=lambda value: int(value, 0), default=-1,
+        help='optional explicit Rail bitmask for the two-node incast test')
     args = parser.parse_args()
     torch.multiprocessing.spawn(
         _worker,

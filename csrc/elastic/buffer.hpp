@@ -48,6 +48,7 @@ class ElasticBuffer {
 
     // Optional source-node rank-to-NIC balancing policy
     int rail_balance_policy;
+    torch::Tensor incast_rail_masks;
 
     // Timeout settings
     int num_cpu_timeout_secs;
@@ -127,6 +128,13 @@ public:
             EP_HOST_ASSERT(allow_multiple_reduction and
                            "Rail balance currently requires allow_multiple_reduction=True");
         }
+        if (rail_balance::is_incast_policy(rail_balance_policy)) {
+            // A zero mask makes the kernel fall back to the active-Rail
+            // policy until the first control-plane plan is installed.
+            incast_rail_masks = torch::zeros(
+                {nccl_context->num_scaleout_ranks},
+                torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt));
+        }
 
         // Verify the symmetric memory layout matches our expectations
         EP_HOST_ASSERT(num_workspace_bytes + num_gpu_buffer_bytes == nccl_context->num_gpu_bytes);
@@ -178,6 +186,22 @@ public:
 
         // Cannot use anymore
         destroyed = true;
+    }
+
+    void set_incast_rail_masks(const torch::Tensor& rail_masks) {
+        EP_HOST_ASSERT(not destroyed);
+        EP_HOST_ASSERT(rail_balance::is_incast_policy(rail_balance_policy) and
+                       "set_incast_rail_masks requires rail_balance='incast'");
+        const auto [num_destinations] = get_shape<1>(rail_masks);
+        EP_HOST_ASSERT(num_destinations == nccl_context->num_scaleout_ranks);
+        EP_HOST_ASSERT(rail_masks.is_cuda() and rail_masks.is_contiguous());
+        EP_HOST_ASSERT(rail_masks.scalar_type() == torch::kInt);
+        incast_rail_masks.copy_(rail_masks);
+    }
+
+    torch::Tensor get_incast_rail_masks() const {
+        EP_HOST_ASSERT(rail_balance::is_incast_policy(rail_balance_policy));
+        return incast_rail_masks;
     }
 
     torch::Stream get_comm_stream() const {
@@ -1080,7 +1104,10 @@ public:
                 nccl_context->dev_comm, nccl_context->window, workspace,
                 static_cast<const nv_bfloat16*>(x.data_ptr()),
                 topk_idx.data_ptr<topk_idx_t>(), topk_weights_ptr,
-                arena, num_tokens, num_experts,
+                arena,
+                rail_balance::is_incast_policy(rail_balance_policy) ?
+                    incast_rail_masks.data_ptr<int>() : nullptr,
+                num_tokens, num_experts,
                 nccl_context->scaleout_rank_idx, nccl_context->scaleup_rank_idx,
                 rail_balance_policy, num_gpu_timeout_cycles, comm_stream);
             rail_balance_all_count = arena.get_all_count_ptr();
@@ -1497,6 +1524,8 @@ static void register_apis(pybind11::module_& m) {
         .def("get_comm_stream", &ElasticBuffer::get_comm_stream)
         .def("get_physical_domain_size", &ElasticBuffer::get_physical_domain_size)
         .def("get_logical_domain_size", &ElasticBuffer::get_logical_domain_size)
+        .def("set_incast_rail_masks", &ElasticBuffer::set_incast_rail_masks)
+        .def("get_incast_rail_masks", &ElasticBuffer::get_incast_rail_masks)
         .def("barrier", &ElasticBuffer::barrier)
         .def("engram_write", &ElasticBuffer::engram_write)
         .def("engram_fetch", &ElasticBuffer::engram_fetch)

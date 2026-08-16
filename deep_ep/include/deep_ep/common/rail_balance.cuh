@@ -15,6 +15,7 @@ enum class Policy : int {
     Off = 0,
     Active = 1,
     All = 2,
+    Incast = 3,
 };
 
 static constexpr int kNumMaxDestinations = 32;
@@ -25,11 +26,15 @@ static constexpr int kForwardRouteBaseDim = 3;
 
 __forceinline__ __device__ __host__ constexpr bool is_valid_policy(const int policy) {
     return policy >= static_cast<int>(Policy::Off) and
-           policy <= static_cast<int>(Policy::All);
+           policy <= static_cast<int>(Policy::Incast);
 }
 
 __forceinline__ __device__ __host__ constexpr bool is_enabled(const int policy) {
     return policy != static_cast<int>(Policy::Off);
+}
+
+__forceinline__ __device__ __host__ constexpr bool is_incast_policy(const int policy) {
+    return policy == static_cast<int>(Policy::Incast);
 }
 
 __forceinline__ __device__ __host__ constexpr int get_forward_metadata_dims(const int num_topk) {

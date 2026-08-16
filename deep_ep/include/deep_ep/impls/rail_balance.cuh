@@ -56,6 +56,7 @@ void rail_balance_plan_impl(const ncclDevComm_t nccl_dev_comm,
                             const int* local_count,
                             int* all_count,
                             int* quota,
+                            const int* incast_rail_masks,
                             const int num_channels,
                             const int num_destinations,
                             const int num_rails,
@@ -67,14 +68,25 @@ void rail_balance_plan_impl(const ncclDevComm_t nccl_dev_comm,
         return;
 
     const auto gin = handle::NCCLGin(nccl_dev_comm, nccl_window, 0);
+    unsigned incast_rail_mask = 0;
+    if (lane == 0 and incast_rail_masks != nullptr)
+        incast_rail_mask = static_cast<unsigned>(__ldg(incast_rail_masks + destination));
+    incast_rail_mask = ptx::exchange(incast_rail_mask, 0);
+    const unsigned valid_rail_mask = num_rails == 32 ? 0xffffffffu : ((1u << num_rails) - 1u);
+    incast_rail_mask &= valid_rail_mask;
+
     int owner_total = 0;
     if (lane < num_rails) {
         const auto peer_count = gin.get_sym_ptr<ncclTeamTagLsa>(local_count, lane);
         for (int channel = 0; channel < num_channels; ++ channel)
             owner_total += __ldg(peer_count + channel * num_destinations + destination);
     }
-    const bool selected = lane < num_rails and
-        (policy == static_cast<int>(rail_balance::Policy::All) or owner_total > 0);
+    const bool use_incast_mask =
+        policy == static_cast<int>(rail_balance::Policy::Incast) and
+        destination != local_destination and incast_rail_mask != 0;
+    const bool selected = lane < num_rails and (
+        use_incast_mask ? ((incast_rail_mask >> lane) & 1u) :
+        (policy == static_cast<int>(rail_balance::Policy::All) or owner_total > 0));
     const unsigned selected_mask = ptx::gather(selected);
     const int num_selected = __popc(selected_mask);
 

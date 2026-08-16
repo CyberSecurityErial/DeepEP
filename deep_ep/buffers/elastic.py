@@ -20,8 +20,9 @@ from ..utils.envs import (
     get_nvlink_gbs, get_rdma_gbs
 )
 from ..utils.comm import get_nccl_comm_handle
+from ..utils.incast import plan_incast_rail_masks
 
-_RAIL_BALANCE_POLICIES = {'off': 0, 'active': 1, 'all': 2}
+_RAIL_BALANCE_POLICIES = {'off': 0, 'active': 1, 'all': 2, 'incast': 3}
 
 
 def _parse_rail_balance_policy(policy: str) -> int:
@@ -277,9 +278,10 @@ class ElasticBuffer:
             explicitly_destroy: If this flag is set to True, you need to explicitly call `destroy()` to release resources;
                 otherwise, the resources will be released by the destructor.
             rail_balance: source-node rank-to-NIC policy. ``'active'`` balances across ranks that currently
-                route traffic to the destination node; ``'all'`` balances across every local rank; ``'off'``
-                preserves the native path. The balanced path currently supports BF16, non-cached,
-                non-expanded Hybrid dispatch with multiple reduction.
+                route traffic to the destination node; ``'all'`` balances across every local rank;
+                ``'incast'`` balances within per-node-pair Rail masks installed with
+                :meth:`set_incast_rail_masks`; ``'off'`` preserves the native path. The balanced path
+                currently supports BF16, non-cached, non-expanded Hybrid dispatch with multiple reduction.
         """
         # Some useful utilities
         self.group = group
@@ -395,6 +397,98 @@ class ElasticBuffer:
             self.runtime = None  # Cannot use anymore
             self.nccl_comm_handle = None
 
+    def set_incast_rail_masks(self, rail_masks: torch.Tensor) -> None:
+        """Install the Rail subsets used by the cross-node incast policy.
+
+        ``rail_masks`` may be either this source node's row with shape
+        ``[num_nodes]`` or a full ``[num_nodes, num_nodes]`` plan. Bit ``r``
+        selects local egress Rail ``r`` for the corresponding destination.
+        A zero mask falls back to the active-Rail policy.
+        """
+        if self.rail_balance != 'incast':
+            raise RuntimeError("set_incast_rail_masks requires rail_balance='incast'")
+        if rail_masks.ndim == 2:
+            expected = (self.num_scaleout_ranks, self.num_scaleout_ranks)
+            if tuple(rail_masks.shape) != expected:
+                raise ValueError(f'expected full Rail mask plan with shape {expected}')
+            rail_masks = rail_masks[self.scaleout_rank_idx]
+        elif rail_masks.ndim != 1 or rail_masks.shape[0] != self.num_scaleout_ranks:
+            raise ValueError(
+                f'expected Rail masks with shape [{self.num_scaleout_ranks}] or '
+                f'[{self.num_scaleout_ranks}, {self.num_scaleout_ranks}]')
+
+        # Validate on the caller's device. Planner output is CPU-resident, so
+        # this avoids an H2D copy followed immediately by a GPU sync.
+        rail_masks = rail_masks.to(dtype=torch.int64).contiguous()
+        valid_mask = (1 << self.num_scaleup_ranks) - 1
+        unsigned_masks = torch.bitwise_and(rail_masks, 0xFFFFFFFF)
+        invalid_bits = torch.bitwise_and(
+            unsigned_masks, (~valid_mask) & 0xFFFFFFFF)
+        if bool(torch.any(invalid_bits != 0).item()):
+            raise ValueError(
+                f'Rail masks contain bits outside {self.num_scaleup_ranks} local Rails')
+        rail_masks = unsigned_masks.to(
+            device='cuda', dtype=torch.int32).contiguous()
+        self.runtime.set_incast_rail_masks(rail_masks)
+
+    def get_incast_rail_masks(self) -> torch.Tensor:
+        """Return the currently installed source-node Rail mask row."""
+        if self.rail_balance != 'incast':
+            raise RuntimeError("get_incast_rail_masks requires rail_balance='incast'")
+        return self.runtime.get_incast_rail_masks()
+
+    def update_incast_rail_masks(
+            self, local_demand: torch.Tensor, *,
+            epoch: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
+        """Collectively build and install a global incast Rail plan.
+
+        ``local_demand[d]`` is this GPU rank's predicted token or byte volume
+        to destination node ``d``. Every rank in ``self.group`` must call this
+        method with the same ``epoch``. Rank rows are summed into a global
+        node-pair matrix on GPU and passed to the deterministic CPU planner.
+
+        This is a low-frequency control-plane operation, not a per-dispatch
+        hot-path call. Upstream routers should normally aggregate a window and
+        invoke it every tens of steps. The method returns ``(plan, demand)`` as
+        CPU tensors for logging and reproducibility.
+        """
+        if self.rail_balance != 'incast':
+            raise RuntimeError("update_incast_rail_masks requires rail_balance='incast'")
+        if not isinstance(local_demand, torch.Tensor):
+            raise TypeError('local_demand must be a torch.Tensor')
+        if local_demand.ndim != 1 or local_demand.shape[0] != self.num_scaleout_ranks:
+            raise ValueError(
+                f'expected local_demand with shape [{self.num_scaleout_ranks}]')
+
+        local_demand = local_demand.to(dtype=torch.float64).contiguous()
+        valid = torch.isfinite(local_demand) & (local_demand >= 0)
+        if not bool(valid.all().item()):
+            if not bool(torch.isfinite(local_demand).all().item()):
+                raise ValueError('local_demand must contain only finite values')
+            raise ValueError('local_demand must be non-negative')
+        local_demand = local_demand.to(device='cuda')
+
+        world_size = dist.get_world_size(group=self.group)
+        expected_world_size = self.num_scaleout_ranks * self.num_scaleup_ranks
+        if world_size != expected_world_size:
+            raise RuntimeError(
+                f'group size {world_size} does not match logical domain '
+                f'{self.num_scaleout_ranks}x{self.num_scaleup_ranks}')
+
+        # Each rank contributes only its source-node row. A single N-by-N
+        # all-reduce is smaller than gathering N values from all N*R ranks and
+        # does not depend on node-major global-rank ordering.
+        demand = torch.zeros(
+            (self.num_scaleout_ranks, self.num_scaleout_ranks),
+            dtype=local_demand.dtype, device=local_demand.device)
+        demand[self.scaleout_rank_idx].copy_(local_demand)
+        dist.all_reduce(demand, group=self.group)
+        demand = demand.cpu()
+        plan = plan_incast_rail_masks(
+            demand, self.num_scaleup_ranks, epoch=epoch)
+        self.set_incast_rail_masks(plan)
+        return plan, demand
+
     @staticmethod
     def get_buffer_size_hint(group: dist.ProcessGroup,
                              num_max_tokens_per_rank: int, hidden: int,
@@ -414,7 +508,7 @@ class ElasticBuffer:
             use_fp8_dispatch: whether to use FP8 for dispatch.
             allow_hybrid_mode: whether to enable hybrid mode.
             allow_multiple_reduction: whether to allow multiple reductions in combine.
-            rail_balance: source-node rank-to-NIC policy: ``'off'``, ``'active'``, or ``'all'``.
+            rail_balance: source-node rank-to-NIC policy: ``'off'``, ``'active'``, ``'all'``, or ``'incast'``.
 
         Returns:
             size: the recommended buffer size in bytes (2 MB-aligned).
