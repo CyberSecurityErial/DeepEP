@@ -9,6 +9,7 @@ import argparse
 import itertools
 import json
 import math
+import os
 import random
 import statistics
 import time
@@ -17,6 +18,7 @@ import torch
 import torch.distributed as dist
 
 import deep_ep
+from deep_ep.buffers.elastic import _pack_incast_weighted_quotas
 from deep_ep.utils.envs import init_dist
 
 
@@ -35,18 +37,40 @@ def _parse_float_csv(value: str) -> list[float]:
     return result
 
 
-def _zipf_counts(total: int, alpha: float, size: int) -> list[int]:
-    weights = [(index + 1) ** (-alpha) for index in range(size)]
+def _policy_variant(
+        policy: str, weighted_quotas: bool,
+        pairwise_peer_budget: int = 0) -> str:
+    if pairwise_peer_budget > 0:
+        if policy == 'off':
+            return 'fanin_only'
+        if policy in ('active', 'all'):
+            return 'joint'
+    if policy == 'off':
+        return 'native'
+    if policy == 'active':
+        return 'rail_only'
+    if policy == 'incast':
+        return 'joint' if weighted_quotas else 'fanin_only'
+    return policy
+
+
+def _proportional_counts(total: int, weights: list[float]) -> list[int]:
     weight_sum = sum(weights)
     exact = [total * weight / weight_sum for weight in weights]
     counts = [math.floor(value) for value in exact]
     remainder = total - sum(counts)
     order = sorted(
-        range(size), key=lambda index: (-(exact[index] - counts[index]), index))
+        range(len(weights)),
+        key=lambda index: (-(exact[index] - counts[index]), index))
     for index in order[:remainder]:
         counts[index] += 1
     assert sum(counts) == total
     return counts
+
+
+def _zipf_counts(total: int, alpha: float, size: int) -> list[int]:
+    return _proportional_counts(
+        total, [(index + 1) ** (-alpha) for index in range(size)])
 
 
 def _rail_counts(
@@ -74,9 +98,22 @@ def _active_incast_sources(num_nodes: int, sink: int, fan_in: int) -> list[int]:
 
 def _balanced_destinations(
         num_nodes: int, source: int, total: int, fan_in: int,
-        flow_alpha: float) -> list[tuple[int, int]]:
+        flow_alpha: float,
+        flow_shape: str = 'directed-zipf') -> list[tuple[int, int]]:
     """Build a regular directed graph with equal send/receive node totals."""
-    counts = _zipf_counts(total, flow_alpha, fan_in)
+    if flow_shape == 'directed-zipf':
+        counts = _zipf_counts(total, flow_alpha, fan_in)
+    elif flow_shape == 'symmetric-distance':
+        # Equal weights for opposite directions make every physical node-pair
+        # bidirectionally symmetric.  For four nodes this produces two hot
+        # ring neighbors and one cold diagonal while preserving exactly equal
+        # send totals, receive totals, and aggregate expert load.
+        counts = _proportional_counts(total, [
+            min(offset, num_nodes - offset) ** (-flow_alpha)
+            for offset in range(1, fan_in + 1)
+        ])
+    else:
+        raise ValueError(f'unsupported All-to-All flow shape: {flow_shape}')
     return [
         ((source + offset) % num_nodes, count)
         for offset, count in enumerate(counts, start=1)
@@ -140,7 +177,8 @@ def _source_node_totals(
 def _traffic_demand(
         case: str, num_nodes: int, total: int, sink: int,
         fan_in: int, source_alpha: float,
-        incast_total_mode: str) -> torch.Tensor:
+        incast_total_mode: str,
+        alltoall_flow_shape: str = 'directed-zipf') -> torch.Tensor:
     demand = torch.zeros(
         (num_nodes, num_nodes), dtype=torch.float64, device='cpu')
     source_totals = _source_node_totals(
@@ -152,7 +190,8 @@ def _traffic_demand(
     elif case == 'balanced-alltoall':
         for source in range(num_nodes):
             for destination, count in _balanced_destinations(
-                    num_nodes, source, total, fan_in, source_alpha):
+                    num_nodes, source, total, fan_in, source_alpha,
+                    alltoall_flow_shape):
                 demand[source, destination] = count
     else:
         for source, source_total in enumerate(source_totals):
@@ -164,7 +203,8 @@ def _rank_targets(
         case: str, num_nodes: int, num_rails: int, source_node: int,
         source_rail: int, total: int, rail_alpha: float,
         expert_alpha: float, source_alpha: float, sink: int, fan_in: int,
-        incast_total_mode: str, rail_phase: str) -> list[int]:
+        incast_total_mode: str, rail_phase: str,
+        alltoall_flow_shape: str = 'directed-zipf') -> list[int]:
     """Return deterministic expert targets for one physical source rank."""
     if case == 'rail-ring':
         destination = (source_node + 1) % num_nodes
@@ -193,7 +233,8 @@ def _rank_targets(
     if case == 'balanced-alltoall':
         targets = []
         flows = _balanced_destinations(
-            num_nodes, source_node, total, fan_in, source_alpha)
+            num_nodes, source_node, total, fan_in, source_alpha,
+            alltoall_flow_shape)
         flow_totals = [flow_total for _, flow_total in flows]
         for flow_index, (target_node, flow_total) in enumerate(flows):
             expert_counts = (
@@ -239,14 +280,15 @@ def _expected_source_ids(
         target_rank: int, case: str, num_nodes: int, num_rails: int,
         total: int, rail_alpha: float, expert_alpha: float, sink: int,
         source_alpha: float, fan_in: int, incast_total_mode: str,
-        num_max_tokens_per_rank: int, rail_phase: str) -> list[int]:
+        num_max_tokens_per_rank: int, rail_phase: str,
+        alltoall_flow_shape: str = 'directed-zipf') -> list[int]:
     result = []
     for source_node in range(num_nodes):
         for source_rail in range(num_rails):
             targets = _rank_targets(
                 case, num_nodes, num_rails, source_node, source_rail,
                 total, rail_alpha, expert_alpha, source_alpha, sink, fan_in,
-                incast_total_mode, rail_phase)
+                incast_total_mode, rail_phase, alltoall_flow_shape)
             source_rank = source_node * num_rails + source_rail
             result.extend(
                 source_rank * num_max_tokens_per_rank + token
@@ -259,12 +301,14 @@ def _expected_source_ids(
 def _target_expert_counts(
         case: str, num_nodes: int, num_rails: int, total: int,
         rail_alpha: float, expert_alpha: float, source_alpha: float,
-        sink: int, fan_in: int, incast_total_mode: str) -> list[int]:
+        sink: int, fan_in: int, incast_total_mode: str,
+        alltoall_flow_shape: str = 'directed-zipf') -> list[int]:
     if case == 'balanced-alltoall':
         counts = [0] * (num_nodes * num_rails)
         for source in range(num_nodes):
             flows = _balanced_destinations(
-                num_nodes, source, total, fan_in, source_alpha)
+                num_nodes, source, total, fan_in, source_alpha,
+                alltoall_flow_shape)
             flow_totals = [flow_total for _, flow_total in flows]
             for flow_index, (destination, flow_total) in enumerate(flows):
                 expert_counts = (
@@ -294,20 +338,21 @@ def _source_to_sink_rail_counts(
         case: str, num_nodes: int, num_rails: int, total: int,
         rail_alpha: float, expert_alpha: float, source_alpha: float,
         sink: int, fan_in: int, incast_total_mode: str,
-        rail_phase: str) -> list[list[int]]:
+        rail_phase: str,
+        alltoall_flow_shape: str = 'directed-zipf') -> list[list[int]]:
     counts = [[0] * num_rails for _ in range(num_nodes)]
     for source in range(num_nodes):
         for rail in range(num_rails):
             targets = _rank_targets(
                 case, num_nodes, num_rails, source, rail, total,
                 rail_alpha, expert_alpha, source_alpha, sink, fan_in,
-                incast_total_mode, rail_phase)
+                incast_total_mode, rail_phase, alltoall_flow_shape)
             counts[source][rail] = sum(
                 target // num_rails == sink for target in targets)
     return counts
 
 
-def _max_rank_tokens(num_nodes: int, num_rails: int, args) -> int:
+def _max_input_rank_tokens(num_nodes: int, num_rails: int, args) -> int:
     result = 1
     for fan_in in args.fan_ins:
         if fan_in >= num_nodes:
@@ -333,6 +378,48 @@ def _max_rank_tokens(num_nodes: int, num_rails: int, args) -> int:
     return result
 
 
+def _max_source_node_tokens(
+        num_nodes: int, args: argparse.Namespace) -> int:
+    """Return the largest exact source-node total in the requested matrix."""
+    result = 1
+    sink = args.sink if args.sink >= 0 else num_nodes - 1
+    for fan_in in args.fan_ins:
+        if fan_in >= num_nodes:
+            continue
+        source_alphas = (
+            args.source_alphas if args.case != 'rail-ring'
+            else args.source_alphas[:1])
+        for total in args.totals:
+            for source_alpha in source_alphas:
+                source_totals = _source_node_totals(
+                    args.case, num_nodes, total, sink, fan_in,
+                    source_alpha, args.incast_total_mode)
+                result = max(result, max(source_totals))
+    return result
+
+
+def _buffer_token_capacity(
+        max_input_tokens: int, max_source_node_tokens: int, num_rails: int,
+        args: argparse.Namespace) -> int:
+    """Reserve enough per-channel slots for Rail-subset concentration.
+
+    In one channel, a destination can receive at most all source-node tokens
+    assigned to that channel.  Tokens are striped independently by each owner
+    Rail, so summing their rounded-up channel counts adds at most one tail per
+    owner.  Therefore ``source_node_total + num_rails * num_channels`` is a
+    deterministic bound even for an adversarial destination ordering or a
+    strict one-Rail mask.  This is much tighter than pretending every owner
+    Rail simultaneously contains the hottest rank's token count.  Every
+    policy receives the same capacity.
+    """
+    if args.case == 'rail-ring':
+        return max_input_tokens
+    max_runtime_channels = args.num_sms * 8
+    proxy_capacity = (
+        max_source_node_tokens + num_rails * max_runtime_channels)
+    return max(max_input_tokens, proxy_capacity)
+
+
 def _percentile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
     return ordered[max(0, math.ceil(fraction * len(ordered)) - 1)]
@@ -347,13 +434,16 @@ def _measure_global_us(fn, warmups: int, iterations: int, group) -> dict[str, fl
         del result
 
     samples = []
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
     for _ in range(iterations):
         dist.barrier(group=group)
         torch.cuda.synchronize()
-        start = time.perf_counter()
+        start_event.record()
         result = fn()
-        torch.cuda.synchronize()
-        elapsed_us = (time.perf_counter() - start) * 1e6
+        end_event.record()
+        end_event.synchronize()
+        elapsed_us = start_event.elapsed_time(end_event) * 1e3
         del result
 
         global_us = torch.tensor(elapsed_us, dtype=torch.float64, device='cuda')
@@ -370,6 +460,25 @@ def _measure_global_us(fn, warmups: int, iterations: int, group) -> dict[str, fl
         'min_us': min(samples),
         'samples_us': samples,
     }
+
+
+def _profile_global_once(fn, trace_path: str, group, rank: int) -> None:
+    """Capture one correctness-equivalent roundtrip for kernel attribution."""
+    dist.barrier(group=group)
+    torch.cuda.synchronize()
+    with torch.profiler.profile(
+            activities=[torch.profiler.ProfilerActivity.CUDA]) as profiler:
+        result = fn()
+        torch.cuda.synchronize()
+        del result
+    if rank == 0:
+        os.makedirs(os.path.dirname(trace_path), exist_ok=True)
+        profiler.export_chrome_trace(trace_path)
+        print('PROFILE_TABLE_BEGIN ' + trace_path, flush=True)
+        print(profiler.key_averages().table(
+            sort_by='cuda_time_total', max_name_column_width=120), flush=True)
+        print('PROFILE_TABLE_END ' + trace_path, flush=True)
+    dist.barrier(group=group)
 
 
 def _measure_control_us(
@@ -412,9 +521,25 @@ def _balanced_counts(total: int, selected: list[int], num_rails: int) -> list[in
     return result
 
 
+def _weighted_counts(total: int, control: int, num_rails: int) -> list[int]:
+    weights = [(control >> (4 * rail)) & 0xF for rail in range(num_rails)]
+    weight_sum = sum(weights)
+    if weight_sum == 0:
+        return [0] * num_rails
+    result = [total * weight // weight_sum for weight in weights]
+    remainder = total - sum(result)
+    order = sorted(
+        range(num_rails),
+        key=lambda rail: (-(total * weights[rail] % weight_sum), rail))
+    for rail in order[:remainder]:
+        result[rail] += 1
+    return result
+
+
 def _planned_sink_metrics(
         policy: str, source_counts: list[list[int]], demand: torch.Tensor,
-        plan: torch.Tensor | None, sink: int, num_rails: int) -> dict[str, object]:
+        plan: torch.Tensor | None, sink: int, num_rails: int,
+        weighted_quotas: bool = False) -> dict[str, object]:
     """Predict aggregate sink Rail pressure from the exact quota policy."""
     sink_tokens = [0] * num_rails
     sink_fan_in = [0] * num_rails
@@ -438,7 +563,12 @@ def _planned_sink_metrics(
                 ]
                 if masked:
                     selected = masked
-            target = _balanced_counts(total, selected, num_rails)
+            if weighted_quotas and policy == 'incast' and plan is not None:
+                control = int(_pack_incast_weighted_quotas(
+                    plan, num_rails, source)[sink].item()) & 0xFFFFFFFF
+                target = _weighted_counts(total, control, num_rails)
+            else:
+                target = _balanced_counts(total, selected, num_rails)
         moved += sum(max(before - after, 0) for before, after in zip(original, target))
         for rail, count in enumerate(target):
             sink_tokens[rail] += count
@@ -469,10 +599,21 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         raise ValueError(f'sink must be in [0, {num_nodes})')
     if args.case == 'balanced-alltoall' and args.plan_state != 'fresh':
         raise ValueError('balanced-alltoall currently requires plan_state=fresh')
-
+    if args.pairwise_peer_budget > 0:
+        if args.case != 'balanced-alltoall':
+            raise ValueError(
+                'pairwise waves currently require case=balanced-alltoall')
+        if args.rail_balance not in ('off', 'active', 'all'):
+            raise ValueError(
+                'pairwise waves require rail_balance=off/active/all')
     num_experts = world_size
-    num_max_tokens_per_rank = _max_rank_tokens(
+    max_input_tokens_per_rank = _max_input_rank_tokens(
         num_nodes, num_local_ranks, args)
+    max_source_node_tokens = _max_source_node_tokens(
+        num_nodes, args)
+    num_max_tokens_per_rank = _buffer_token_capacity(
+        max_input_tokens_per_rank, max_source_node_tokens,
+        num_local_ranks, args)
     buffer = deep_ep.ElasticBuffer(
         group,
         num_max_tokens_per_rank=num_max_tokens_per_rank,
@@ -492,6 +633,9 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         print('CONFIG ' + json.dumps({
             'case': args.case,
             'policy': args.rail_balance,
+            'variant': _policy_variant(
+                args.rail_balance, args.incast_weighted_quotas,
+                args.pairwise_peer_budget),
             'num_nodes': num_nodes,
             'num_rails_per_node': num_local_ranks,
             'totals_parameter': args.totals,
@@ -499,6 +643,7 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 None if args.case == 'rail-ring' else
                 'per-node-fixed' if args.case == 'balanced-alltoall' else
                 args.incast_total_mode),
+            'alltoall_flow_shape': args.alltoall_flow_shape,
             'source_alphas': args.source_alphas,
             'rail_alphas': args.rail_alphas,
             'rail_phase': args.rail_phase,
@@ -506,12 +651,18 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             'fan_ins': args.fan_ins,
             'sink': sink,
             'plan_state': args.plan_state,
+            'incast_rail_overlap': args.incast_rail_overlap,
+            'incast_weighted_quotas': args.incast_weighted_quotas,
+            'pairwise_peer_budget': args.pairwise_peer_budget,
             'hidden': args.hidden,
             'dtype': 'bfloat16',
             'topk': 1,
+            'num_qps': args.num_qps,
             'warmups': args.warmups,
             'iterations': args.iterations,
             'control_interval_steps': args.control_interval,
+            'max_input_tokens_per_rank': max_input_tokens_per_rank,
+            'max_source_node_tokens': max_source_node_tokens,
             'num_max_tokens_per_rank': num_max_tokens_per_rank,
             'buffer_gib_per_rank': buffer.num_bytes / (1024 ** 3),
         }), flush=True)
@@ -545,14 +696,17 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                         args.rail_alphas, expert_alphas):
                     demand = _traffic_demand(
                         args.case, num_nodes, total, sink, fan_in,
-                        source_alpha, args.incast_total_mode)
+                        source_alpha, args.incast_total_mode,
+                        args.alltoall_flow_shape)
                     plan_demand = _traffic_demand(
                         args.case, num_nodes, total, plan_sink, plan_fan_in,
-                        source_alpha, args.incast_total_mode)
+                        source_alpha, args.incast_total_mode,
+                        args.alltoall_flow_shape)
                     local_targets = _rank_targets(
                         args.case, num_nodes, num_local_ranks, node, rail,
                         total, rail_alpha, expert_alpha, source_alpha, sink,
-                        fan_in, args.incast_total_mode, args.rail_phase)
+                        fan_in, args.incast_total_mode, args.rail_phase,
+                        args.alltoall_flow_shape)
                     plan = None
                     plan_us = 0.0
                     install_us = 0.0
@@ -562,7 +716,7 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                             args.case, num_nodes, num_local_ranks, node, rail,
                             total, rail_alpha, expert_alpha, source_alpha,
                             plan_sink, plan_fan_in, args.incast_total_mode,
-                            args.rail_phase)
+                            args.rail_phase, args.alltoall_flow_shape)
                         plan_local_demand = torch.bincount(
                             torch.tensor(
                                 plan_local_targets, dtype=torch.int64) //
@@ -572,14 +726,20 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                         plan, plan_us = _measure_control_us(
                             lambda: deep_ep.utils.plan_incast_rail_masks(
                                 plan_demand, num_local_ranks,
-                                epoch=args.plan_epoch),
+                                epoch=args.plan_epoch,
+                                rail_overlap=args.incast_rail_overlap),
                             group,
                         )
                         _, install_us = _measure_control_us(
-                            lambda: buffer.set_incast_rail_masks(plan), group)
+                            lambda: buffer.set_incast_rail_masks(
+                                plan,
+                                weighted_quotas=args.incast_weighted_quotas),
+                            group)
                         update_result, update_us = _measure_control_us(
                             lambda: buffer.update_incast_rail_masks(
-                                plan_local_demand, epoch=args.plan_epoch),
+                                plan_local_demand, epoch=args.plan_epoch,
+                                rail_overlap=args.incast_rail_overlap,
+                                weighted_quotas=args.incast_weighted_quotas),
                             group,
                         )
                         collective_plan, observed_demand = update_result
@@ -605,6 +765,273 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                     topk_weights = torch.ones(
                         (num_tokens, 1), dtype=torch.float, device='cuda')
 
+                    if args.pairwise_peer_budget > 0:
+                        def make_pairwise_waves():
+                            plain_waves = (
+                                deep_ep.utils.plan_pairwise_incast_waves(
+                                    num_nodes,
+                                    max_peers_per_wave=(
+                                        args.pairwise_peer_budget),
+                                    epoch=args.plan_epoch))
+                            return tuple(tuple(
+                                (lhs, rhs, 0, 1) for lhs, rhs in wave)
+                                for wave in plain_waves)
+
+                        pairwise_waves, pairwise_plan_us = _measure_control_us(
+                            make_pairwise_waves, group)
+                        covered_positions = []
+                        timed_wave_dispatch_args = []
+                        reconstructed_x = torch.empty_like(x)
+                        reconstructed_weights = torch.empty_like(topk_weights)
+                        max_wave_fan_in = 0
+
+                        for wave in pairwise_waves:
+                            degrees = [0] * num_nodes
+                            peer_chunks = []
+                            for lhs, rhs, chunk_index, num_chunks in wave:
+                                degrees[lhs] += 1
+                                degrees[rhs] += 1
+                                if lhs == node:
+                                    peer_chunks.append(
+                                        (rhs, chunk_index, num_chunks))
+                                elif rhs == node:
+                                    peer_chunks.append(
+                                        (lhs, chunk_index, num_chunks))
+                            max_wave_fan_in = max(
+                                max_wave_fan_in, max(degrees))
+                            assert (1 <= len(peer_chunks) <=
+                                    args.pairwise_peer_budget)
+                            positions = []
+                            for peer, chunk_index, num_chunks in peer_chunks:
+                                peer_positions = [
+                                    position
+                                    for position, target in enumerate(
+                                        local_targets)
+                                    if target // num_local_ranks == peer
+                                ]
+                                positions.extend(
+                                    peer_positions[chunk_index::num_chunks])
+                            positions.sort()
+                            # The four-node hardware experiment uses large,
+                            # expert-balanced flows, so every physical source
+                            # rank contributes to its paired peer in every wave.
+                            assert positions
+                            covered_positions.extend(positions)
+                            index = torch.tensor(
+                                positions, dtype=torch.int64, device='cuda')
+                            wave_x = x.index_select(0, index)
+                            wave_topk_idx = topk_idx.index_select(0, index)
+                            wave_topk_weights = topk_weights.index_select(
+                                0, index)
+                            wave_dispatch_args = dict(
+                                x=wave_x,
+                                topk_idx=wave_topk_idx,
+                                topk_weights=wave_topk_weights,
+                                num_experts=num_experts,
+                                num_max_tokens_per_rank=(
+                                    num_max_tokens_per_rank),
+                                expert_alignment=1,
+                                num_sms=args.num_sms,
+                                num_qps=args.num_qps,
+                                do_cpu_sync=True,
+                            )
+                            (wave_recv_x, _, wave_recv_weights,
+                             wave_handle, _) = buffer.dispatch(
+                                 **wave_dispatch_args)
+                            wave_num_recv = (
+                                wave_handle.
+                                psum_num_recv_tokens_per_scaleup_rank[-1].
+                                item())
+                            (wave_combined_x, wave_combined_weights,
+                             _) = buffer.combine(
+                                 wave_recv_x, handle=wave_handle,
+                                 topk_weights=wave_recv_weights,
+                                 num_sms=args.num_sms,
+                                 num_qps=args.num_qps)
+                            assert torch.equal(wave_combined_x, wave_x)
+                            assert torch.equal(
+                                wave_combined_weights, wave_topk_weights)
+                            reconstructed_x.index_copy_(
+                                0, index, wave_combined_x)
+                            reconstructed_weights.index_copy_(
+                                0, index, wave_combined_weights)
+
+                            timed_wave_args = dict(wave_dispatch_args)
+                            timed_wave_args['do_cpu_sync'] = False
+                            timed_wave_args['num_recv_tokens_hint'] = (
+                                wave_num_recv)
+                            (async_wave_x, _, async_wave_weights,
+                             async_wave_handle, _) = buffer.dispatch(
+                                 **timed_wave_args)
+                            (async_wave_combined_x,
+                             async_wave_combined_weights, _) = buffer.combine(
+                                 async_wave_x, handle=async_wave_handle,
+                                 topk_weights=async_wave_weights,
+                                 num_sms=args.num_sms,
+                                 num_qps=args.num_qps)
+                            assert torch.equal(
+                                async_wave_combined_x, wave_x)
+                            assert torch.equal(
+                                async_wave_combined_weights,
+                                wave_topk_weights)
+                            timed_wave_dispatch_args.append(timed_wave_args)
+                            del index, wave_recv_x, wave_recv_weights
+                            del wave_combined_x, wave_combined_weights
+                            del async_wave_x, async_wave_weights
+                            del async_wave_combined_x
+                            del async_wave_combined_weights
+
+                        assert sorted(covered_positions) == list(
+                            range(num_tokens))
+                        assert torch.equal(reconstructed_x, x)
+                        assert torch.equal(
+                            reconstructed_weights, topk_weights)
+
+                        def pairwise_roundtrip_once():
+                            outputs = []
+                            for timed_wave_args in timed_wave_dispatch_args:
+                                (wave_recv_x, _, wave_recv_weights,
+                                 wave_handle, _) = buffer.dispatch(
+                                     **timed_wave_args)
+                                outputs.append(buffer.combine(
+                                    wave_recv_x, handle=wave_handle,
+                                    topk_weights=wave_recv_weights,
+                                    num_sms=args.num_sms,
+                                    num_qps=args.num_qps))
+                            return outputs
+
+                        roundtrip_stats = _measure_global_us(
+                            pairwise_roundtrip_once, args.warmups,
+                            args.iterations, group)
+
+                        if rank == 0:
+                            remote_tokens = int(demand.sum().item())
+                            source_node_counts = demand.sum(
+                                dim=1).to(torch.int64).tolist()
+                            source_rail_counts_by_node = [
+                                _rail_counts(
+                                    count, rail_alpha, num_local_ranks,
+                                    source, 0, args.rail_phase)
+                                if count else [0] * num_local_ranks
+                                for source, count in enumerate(
+                                    source_node_counts)
+                            ]
+                            source_to_sink_rail_counts = (
+                                _source_to_sink_rail_counts(
+                                    args.case, num_nodes, num_local_ranks,
+                                    total, rail_alpha, expert_alpha,
+                                    source_alpha, sink, fan_in,
+                                    args.incast_total_mode,
+                                    args.rail_phase,
+                                    args.alltoall_flow_shape))
+                            base_sink_metrics = _planned_sink_metrics(
+                                args.rail_balance,
+                                source_to_sink_rail_counts, demand, None,
+                                sink, num_local_ranks, False)
+                            phase_max_over_mean = 1.0
+                            if args.rail_balance == 'off':
+                                phase_max_over_mean = max(
+                                    max(row) / (sum(row) / num_local_ranks)
+                                    for source, row in enumerate(
+                                        source_to_sink_rail_counts)
+                                    if source != sink and sum(row) > 0)
+                            payload_bytes = (
+                                remote_tokens * args.hidden * 2)
+                            result = {
+                                'case': args.case,
+                                'policy': args.rail_balance,
+                                'variant': _policy_variant(
+                                    args.rail_balance,
+                                    args.incast_weighted_quotas,
+                                    args.pairwise_peer_budget),
+                                'fanin_strategy': 'pairwise-waves',
+                                'latency_timing': 'gpu-event',
+                                'component_timing': (
+                                    'all-waves-roundtrip-total'),
+                                'tokens_parameter': total,
+                                'incast_total_mode': 'per-node-fixed',
+                                'tokens_per_active_source_node': total,
+                                'remote_tokens_global': remote_tokens,
+                                'payload_mib_global': (
+                                    payload_bytes / (1024 ** 2)),
+                                'source_alpha': source_alpha,
+                                'alltoall_flow_shape': (
+                                    args.alltoall_flow_shape),
+                                'rail_alpha': rail_alpha,
+                                'rail_phase': args.rail_phase,
+                                'expert_alpha': expert_alpha,
+                                'fan_in': fan_in,
+                                'plan_state': args.plan_state,
+                                'pairwise_peer_budget': (
+                                    args.pairwise_peer_budget),
+                                'num_qps': args.num_qps,
+                                'pairwise_num_waves': len(pairwise_waves),
+                                'pairwise_waves': pairwise_waves,
+                                'node_fan_in_after_policy': (
+                                    max_wave_fan_in),
+                                'source_node_counts': source_node_counts,
+                                'source_rail_counts_by_node': (
+                                    source_rail_counts_by_node),
+                                'source_to_sink_rail_counts_by_node': (
+                                    source_to_sink_rail_counts),
+                                'target_expert_counts': (
+                                    _target_expert_counts(
+                                        args.case, num_nodes,
+                                        num_local_ranks, total, rail_alpha,
+                                        expert_alpha, source_alpha, sink,
+                                        fan_in, args.incast_total_mode,
+                                        args.alltoall_flow_shape)),
+                                'demand': demand.to(torch.int64).tolist(),
+                                'plan_cpu_median_max_us': pairwise_plan_us,
+                                'control_interval_steps': (
+                                    args.control_interval),
+                                'control_amortized_us_per_step': (
+                                    pairwise_plan_us /
+                                    args.control_interval),
+                                'roundtrip_us': (
+                                    roundtrip_stats['median_us']),
+                                'roundtrip_p90_us': (
+                                    roundtrip_stats['p90_us']),
+                                'roundtrip_p99_us': (
+                                    roundtrip_stats['p99_us']),
+                                'roundtrip_plus_amortized_control_us': (
+                                    roundtrip_stats['median_us'] +
+                                    pairwise_plan_us /
+                                    args.control_interval),
+                                'roundtrip_samples_us': (
+                                    roundtrip_stats['samples_us']),
+                                'ep_total_us': (
+                                    roundtrip_stats['median_us']),
+                                'ep_total_plus_amortized_control_us': (
+                                    roundtrip_stats['median_us'] +
+                                    pairwise_plan_us /
+                                    args.control_interval),
+                                'ep_total_gbps_global': (
+                                    2 * payload_bytes /
+                                    roundtrip_stats['median_us'] / 1e3),
+                                'sink_rail_tokens_after_policy': (
+                                    base_sink_metrics[
+                                        'sink_rail_tokens_after_policy']),
+                                'sink_rail_source_fan_in_after_policy': (
+                                    [max_wave_fan_in] * num_local_ranks),
+                                'sink_rail_max_over_mean_after_policy': (
+                                    phase_max_over_mean),
+                                'predicted_moved_tokens': (
+                                    base_sink_metrics[
+                                        'predicted_moved_tokens']),
+                                'predicted_moved_ratio': (
+                                    base_sink_metrics[
+                                        'predicted_moved_ratio']),
+                            }
+                            print(
+                                'RESULT ' + json.dumps(result), flush=True)
+
+                        del reconstructed_x, reconstructed_weights
+                        del timed_wave_dispatch_args
+                        del x, topk_idx, topk_weights
+                        dist.barrier(group=group)
+                        continue
+
                     dispatch_args = dict(
                         x=x,
                         topk_idx=topk_idx,
@@ -613,14 +1040,15 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                         num_max_tokens_per_rank=num_max_tokens_per_rank,
                         expert_alignment=1,
                         num_sms=args.num_sms,
+                        num_qps=args.num_qps,
                         do_cpu_sync=True,
                     )
 
-                    def dispatch_once():
+                    def dispatch_uncached_once():
                         return buffer.dispatch(**dispatch_args)
 
                     recv_x, recv_topk_idx, recv_topk_weights, handle, _ = \
-                        dispatch_once()
+                        dispatch_uncached_once()
                     num_recv = handle.psum_num_recv_tokens_per_scaleup_rank[-1].item()
                     src_ids = handle.recv_src_metadata[:num_recv, 0].to(torch.int64)
                     actual_sources = torch.sort(src_ids).values
@@ -629,7 +1057,8 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                             rank, args.case, num_nodes, num_local_ranks,
                             total, rail_alpha, expert_alpha, sink,
                             source_alpha, fan_in, args.incast_total_mode,
-                            num_max_tokens_per_rank, args.rail_phase),
+                            num_max_tokens_per_rank, args.rail_phase,
+                            args.alltoall_flow_shape),
                         dtype=torch.int64, device='cuda')
                     assert num_recv == expected_sources.numel()
                     if not torch.equal(actual_sources, expected_sources):
@@ -654,9 +1083,37 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                     combined_x, combined_weights, _ = buffer.combine(
                         recv_x, handle=handle,
                         topk_weights=recv_topk_weights,
-                        num_sms=args.num_sms)
+                        num_sms=args.num_sms,
+                        num_qps=args.num_qps)
                     assert torch.equal(combined_x, x)
                     assert torch.equal(combined_weights, topk_weights)
+
+                    # Keep the dynamic GPU layout/data path, but do not wait on
+                    # the CPU for exact receive sizes.  In production this host
+                    # work runs ahead of (and overlaps with) the GPU step.  Rail
+                    # balance intentionally does not use DeepEP's cached-layout
+                    # mode because its routing decision may change every step.
+                    timed_dispatch_args = dict(dispatch_args)
+                    timed_dispatch_args['do_cpu_sync'] = False
+                    timed_dispatch_args['num_recv_tokens_hint'] = num_recv
+
+                    def dispatch_once():
+                        return buffer.dispatch(**timed_dispatch_args)
+
+                    async_recv_x, _, async_recv_weights, async_handle, _ = \
+                        dispatch_once()
+                    assert async_recv_x.shape[0] == num_recv
+                    assert async_handle.recv_src_metadata.shape[0] == num_recv
+                    async_combined_x, async_combined_weights, _ = \
+                        buffer.combine(
+                            async_recv_x, handle=async_handle,
+                            topk_weights=async_recv_weights,
+                            num_sms=args.num_sms,
+                            num_qps=args.num_qps)
+                    assert torch.equal(async_combined_x, x)
+                    assert torch.equal(async_combined_weights, topk_weights)
+                    del async_recv_x, async_recv_weights
+                    del async_combined_x, async_combined_weights
 
                     dispatch_stats = _measure_global_us(
                         dispatch_once, args.warmups, args.iterations, group)
@@ -666,21 +1123,32 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                         return buffer.combine(
                             recv_x, handle=handle,
                             topk_weights=recv_topk_weights,
-                            num_sms=args.num_sms)
+                            num_sms=args.num_sms,
+                            num_qps=args.num_qps)
 
                     combine_stats = _measure_global_us(
                         combine_once, args.warmups, args.iterations, group)
 
                     def roundtrip_once():
                         rt_recv_x, _, rt_recv_weights, rt_handle, _ = \
-                            buffer.dispatch(**dispatch_args)
+                            buffer.dispatch(**timed_dispatch_args)
                         return buffer.combine(
                             rt_recv_x, handle=rt_handle,
                             topk_weights=rt_recv_weights,
-                            num_sms=args.num_sms)
+                            num_sms=args.num_sms,
+                            num_qps=args.num_qps)
 
                     roundtrip_stats = _measure_global_us(
                         roundtrip_once, args.warmups, args.iterations, group)
+
+                    if args.profile_dir:
+                        profile_name = (
+                            f'{_policy_variant(args.rail_balance, args.incast_weighted_quotas, args.pairwise_peer_budget)}'
+                            f'_s{total}_ra{rail_alpha}_rank0.json')
+                        _profile_global_once(
+                            roundtrip_once,
+                            os.path.join(args.profile_dir, profile_name),
+                            group, rank)
 
                     if rank == 0:
                         remote_tokens = int(demand.sum().item())
@@ -702,10 +1170,12 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                                 args.case, num_nodes, num_local_ranks, total,
                                 rail_alpha, expert_alpha, source_alpha, sink,
                                 fan_in, args.incast_total_mode,
-                                args.rail_phase))
+                                args.rail_phase,
+                                args.alltoall_flow_shape))
                         sink_metrics = _planned_sink_metrics(
                             args.rail_balance, source_to_sink_rail_counts,
-                            demand, plan, sink, num_local_ranks)
+                            demand, plan, sink, num_local_ranks,
+                            args.incast_weighted_quotas)
                         payload_bytes = remote_tokens * args.hidden * 2
                         ep_total_us = (
                             dispatch_stats['median_us'] +
@@ -713,6 +1183,11 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                         result = {
                             'case': args.case,
                             'policy': args.rail_balance,
+                            'variant': _policy_variant(
+                                args.rail_balance,
+                                args.incast_weighted_quotas,
+                                args.pairwise_peer_budget),
+                            'latency_timing': 'gpu-event',
                             'tokens_parameter': total,
                             'incast_total_mode': (
                                 None if args.case == 'rail-ring' else
@@ -728,12 +1203,18 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                             'remote_tokens_global': remote_tokens,
                             'payload_mib_global': payload_bytes / (1024 ** 2),
                             'source_alpha': source_alpha,
+                            'alltoall_flow_shape': (
+                                args.alltoall_flow_shape),
                             'rail_alpha': rail_alpha,
                             'rail_phase': args.rail_phase,
                             'expert_alpha': expert_alpha,
                             'fan_in': (
                                 1 if args.case == 'rail-ring' else fan_in),
                             'plan_state': args.plan_state,
+                            'incast_rail_overlap': args.incast_rail_overlap,
+                            'incast_weighted_quotas': (
+                                args.incast_weighted_quotas),
+                            'num_qps': args.num_qps,
                             'plan_sink': plan_sink,
                             'plan_fan_in': plan_fan_in,
                             'source_node_counts': source_node_counts,
@@ -744,7 +1225,8 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                             'target_expert_counts': _target_expert_counts(
                                 args.case, num_nodes, num_local_ranks, total,
                                 rail_alpha, expert_alpha, source_alpha, sink,
-                                fan_in, args.incast_total_mode),
+                                fan_in, args.incast_total_mode,
+                                args.alltoall_flow_shape),
                             'demand': demand.to(torch.int64).tolist(),
                             'plan_demand': plan_demand.to(
                                 torch.int64).tolist(),
@@ -796,6 +1278,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--num-processes', type=int, default=8)
     parser.add_argument('--num-sms', type=int, default=16)
+    parser.add_argument(
+        '--num-qps', type=int, default=0,
+        help=(
+            'RDMA QPs used by dispatch/combine; 0 keeps the DeepEP '
+            'automatic setting'))
     parser.add_argument('--hidden', type=int, default=7168)
     parser.add_argument(
         '--case', choices=(
@@ -821,6 +1308,13 @@ if __name__ == '__main__':
         '--source-alphas', type=_parse_float_csv,
         default=_parse_float_csv('0,1.5'))
     parser.add_argument(
+        '--alltoall-flow-shape',
+        choices=('directed-zipf', 'symmetric-distance'),
+        default='directed-zipf',
+        help=(
+            'node-pair demand pattern for balanced-alltoall; symmetric-distance '
+            'keeps opposite directions equal and all node/expert totals balanced'))
+    parser.add_argument(
         '--fan-ins', type=_parse_int_csv,
         default=_parse_int_csv('1,2,3'))
     parser.add_argument(
@@ -838,12 +1332,34 @@ if __name__ == '__main__':
             'fresh uses the current demand; previous-sink models a moved '
             'hotspot; lower-fan-in models a sudden extra source'))
     parser.add_argument('--plan-epoch', type=int, default=0)
+    parser.add_argument(
+        '--incast-rail-overlap', type=float, default=1.0,
+        help=(
+            'Rail-membership budget: 1 is strict disjoint partition; '
+            '1.5 trades bounded overlap for more source Rail parallelism'))
+    parser.add_argument(
+        '--incast-weighted-quotas', action='store_true',
+        help=(
+            'use packed per-Rail weights to remove residual overlap-2 '
+            'destination imbalance without adding a data-path kernel'))
+    parser.add_argument(
+        '--pairwise-peer-budget', type=int, default=0,
+        help=(
+            'split balanced All-to-All into round-robin node-pair waves; '
+            '0 disables temporal scheduling, 1 makes node fan-in one'))
     parser.add_argument('--control-interval', type=int, default=32)
+    parser.add_argument(
+        '--profile-dir', type=str, default='',
+        help='optional directory for one rank-0 CUDA kernel trace per point')
     parser.add_argument('--warmups', type=int, default=5)
     parser.add_argument('--iterations', type=int, default=10)
     args = parser.parse_args()
     if args.control_interval <= 0:
         parser.error('--control-interval must be positive')
+    if args.pairwise_peer_budget < 0:
+        parser.error('--pairwise-peer-budget must be non-negative')
+    if args.num_qps < 0 or args.num_qps == 1:
+        parser.error('--num-qps must be 0 (automatic) or at least 2')
     torch.multiprocessing.spawn(
         _worker,
         args=(args.num_processes, args),

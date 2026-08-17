@@ -32,6 +32,66 @@ def _parse_rail_balance_policy(policy: str) -> int:
     return _RAIL_BALANCE_POLICIES[policy]
 
 
+def _pack_incast_weighted_quotas(
+        rail_masks: torch.Tensor, num_rails: int,
+        source_node: int) -> torch.Tensor:
+    """Pack exact overlap-2 quotas into eight four-bit Rail weights.
+
+    For equal three-source traffic, a 6/5/5 membership allocation with two
+    sources per Rail is the minimum-movement binary solution. Equal splitting
+    leaves the two 5-Rail sources 6.7% hotter on their shared Rails. Weights
+    8/10/9 give every source a row sum of 48 and every Rail a column sum of 18,
+    removing that residual hotspot without changing masks or moved volume.
+    """
+    if num_rails != 8:
+        return rail_masks[source_node].clone()
+
+    num_nodes = rail_masks.shape[0]
+    masks = [
+        [int(value) & 0xFF for value in row]
+        for row in rail_masks.detach().cpu().tolist()
+    ]
+    packed = list(masks[source_node])
+    for destination in range(num_nodes):
+        active = [
+            source for source in range(num_nodes)
+            if source != destination and masks[source][destination] != 0
+        ]
+        if source_node not in active or len(active) != 3:
+            continue
+        widths = {
+            source: masks[source][destination].bit_count()
+            for source in active
+        }
+        if sorted(widths.values()) != [5, 5, 6]:
+            continue
+        memberships = [
+            sum((masks[source][destination] >> rail) & 1
+                for source in active)
+            for rail in range(num_rails)
+        ]
+        if memberships != [2] * num_rails:
+            continue
+
+        wide = next(source for source in active if widths[source] == 6)
+        narrow = [source for source in active if widths[source] == 5]
+        control = 0
+        for rail in range(num_rails):
+            if not (masks[source_node][destination] & (1 << rail)):
+                continue
+            if source_node == wide:
+                weight = 8
+            else:
+                other_narrow = narrow[1 - narrow.index(source_node)]
+                weight = (
+                    9 if masks[other_narrow][destination] & (1 << rail)
+                    else 10)
+            control |= weight << (4 * rail)
+        packed[destination] = control
+
+    return torch.tensor(packed, dtype=torch.int64)
+
+
 class EPHandle:
     """
     Communication handle returned by `ElasticBuffer.dispatch`.
@@ -397,29 +457,41 @@ class ElasticBuffer:
             self.runtime = None  # Cannot use anymore
             self.nccl_comm_handle = None
 
-    def set_incast_rail_masks(self, rail_masks: torch.Tensor) -> None:
+    def set_incast_rail_masks(
+            self, rail_masks: torch.Tensor, *,
+            weighted_quotas: bool = False) -> None:
         """Install the Rail subsets used by the cross-node incast policy.
 
         ``rail_masks`` may be either this source node's row with shape
         ``[num_nodes]`` or a full ``[num_nodes, num_nodes]`` plan. Bit ``r``
         selects local egress Rail ``r`` for the corresponding destination.
-        A zero mask falls back to the active-Rail policy.
+        A zero mask falls back to the active-Rail policy. ``weighted_quotas``
+        requires a full plan and packs exact per-Rail overlap-2 weights into
+        the same compact int32 control word.
         """
         if self.rail_balance != 'incast':
             raise RuntimeError("set_incast_rail_masks requires rail_balance='incast'")
+        full_plan = None
         if rail_masks.ndim == 2:
             expected = (self.num_scaleout_ranks, self.num_scaleout_ranks)
             if tuple(rail_masks.shape) != expected:
                 raise ValueError(f'expected full Rail mask plan with shape {expected}')
-            rail_masks = rail_masks[self.scaleout_rank_idx]
+            full_plan = rail_masks
+            local_masks = rail_masks[self.scaleout_rank_idx]
         elif rail_masks.ndim != 1 or rail_masks.shape[0] != self.num_scaleout_ranks:
             raise ValueError(
                 f'expected Rail masks with shape [{self.num_scaleout_ranks}] or '
                 f'[{self.num_scaleout_ranks}, {self.num_scaleout_ranks}]')
+        else:
+            local_masks = rail_masks
+        if weighted_quotas and full_plan is None:
+            raise ValueError(
+                'weighted_quotas requires a full Rail mask plan')
 
         # Validate on the caller's device. Planner output is CPU-resident, so
         # this avoids an H2D copy followed immediately by a GPU sync.
         rail_masks = rail_masks.to(dtype=torch.int64).contiguous()
+        local_masks = local_masks.to(dtype=torch.int64).contiguous()
         valid_mask = (1 << self.num_scaleup_ranks) - 1
         unsigned_masks = torch.bitwise_and(rail_masks, 0xFFFFFFFF)
         invalid_bits = torch.bitwise_and(
@@ -427,19 +499,41 @@ class ElasticBuffer:
         if bool(torch.any(invalid_bits != 0).item()):
             raise ValueError(
                 f'Rail masks contain bits outside {self.num_scaleup_ranks} local Rails')
-        rail_masks = unsigned_masks.to(
+        if weighted_quotas:
+            local_masks = _pack_incast_weighted_quotas(
+                unsigned_masks, self.num_scaleup_ranks,
+                self.scaleout_rank_idx)
+        else:
+            local_masks = torch.bitwise_and(local_masks, 0xFFFFFFFF)
+        local_masks = local_masks.to(
             device='cuda', dtype=torch.int32).contiguous()
-        self.runtime.set_incast_rail_masks(rail_masks)
+        self.runtime.set_incast_rail_masks(local_masks)
 
     def get_incast_rail_masks(self) -> torch.Tensor:
         """Return the currently installed source-node Rail mask row."""
         if self.rail_balance != 'incast':
             raise RuntimeError("get_incast_rail_masks requires rail_balance='incast'")
-        return self.runtime.get_incast_rail_masks()
+        rail_masks = self.runtime.get_incast_rail_masks()
+        if self.num_scaleup_ranks == 32:
+            return rail_masks
+        valid_mask = (1 << self.num_scaleup_ranks) - 1
+        unsigned = torch.bitwise_and(rail_masks.to(torch.int64), 0xFFFFFFFF)
+        result = torch.bitwise_and(unsigned, valid_mask)
+        if self.num_scaleup_ranks == 8:
+            weighted = unsigned > valid_mask
+            weighted_mask = torch.zeros_like(unsigned)
+            for rail in range(self.num_scaleup_ranks):
+                weight = torch.bitwise_and(
+                    torch.bitwise_right_shift(unsigned, 4 * rail), 0xF)
+                weighted_mask |= (weight > 0).to(torch.int64) << rail
+            result = torch.where(weighted, weighted_mask, result)
+        return result.to(torch.int32)
 
     def update_incast_rail_masks(
             self, local_demand: torch.Tensor, *,
-            epoch: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
+            epoch: int = 0,
+            rail_overlap: float = 1.0,
+            weighted_quotas: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
         """Collectively build and install a global incast Rail plan.
 
         ``local_demand[d]`` is this GPU rank's predicted token or byte volume
@@ -485,8 +579,10 @@ class ElasticBuffer:
         dist.all_reduce(demand, group=self.group)
         demand = demand.cpu()
         plan = plan_incast_rail_masks(
-            demand, self.num_scaleup_ranks, epoch=epoch)
-        self.set_incast_rail_masks(plan)
+            demand, self.num_scaleup_ranks, epoch=epoch,
+            rail_overlap=rail_overlap)
+        self.set_incast_rail_masks(
+            plan, weighted_quotas=weighted_quotas)
         return plan, demand
 
     @staticmethod
@@ -985,7 +1081,8 @@ class ElasticBuffer:
                  do_cpu_sync: Optional[bool] = None,
                  do_expand: bool = False,
                  do_zero_padding: bool = False,
-                 use_tma_aligned_col_major_sf: bool = False) \
+                 use_tma_aligned_col_major_sf: bool = False,
+                 num_recv_tokens_hint: Optional[int] = None) \
             -> Tuple[Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]],
                      Optional[torch.Tensor], Optional[torch.Tensor],
                      EPHandle, EventOverlap]:
@@ -1028,6 +1125,9 @@ class ElasticBuffer:
             do_zero_padding: whether to zero out the alignment padding slots in the expanded output.
                 Only valid when `do_expand` is True. Ensures alignment gaps between experts are zeroed.
             use_tma_aligned_col_major_sf: whether to use TMA-aligned column-major layout for scale factors.
+            num_recv_tokens_hint: the exact number of tokens this rank will receive. This may only be set for
+                non-cached, non-expanded dispatch with ``do_cpu_sync=False``. It avoids allocating the worst-case
+                receive tensors while keeping received-count discovery off the CPU critical path.
 
         Returns:
             recv_x: received tokens, the same type and tuple as the input `x`
@@ -1074,6 +1174,18 @@ class ElasticBuffer:
         num_max_tokens_per_rank = value_or(num_max_tokens_per_rank, self.num_max_tokens_per_rank)
         expert_alignment = value_or(expert_alignment, 1)
         do_cpu_sync = value_or(do_cpu_sync, True)
+        if num_recv_tokens_hint is not None:
+            if handle is not None:
+                raise ValueError('num_recv_tokens_hint is not supported with a cached handle')
+            if do_cpu_sync:
+                raise ValueError('num_recv_tokens_hint requires do_cpu_sync=False')
+            if do_expand:
+                raise ValueError('num_recv_tokens_hint is not supported with do_expand=True')
+            worst_case_num_recv_tokens = num_max_tokens_per_rank * self.num_ranks
+            if not 0 <= num_recv_tokens_hint <= worst_case_num_recv_tokens:
+                raise ValueError(
+                    'num_recv_tokens_hint must be in [0, '
+                    f'{worst_case_num_recv_tokens}]')
 
         # Do dispatch
         (recv_x, recv_sf,
@@ -1108,7 +1220,8 @@ class ElasticBuffer:
                                         async_with_compute_stream, allocate_on_comm_stream,
                                         do_handle_copy, do_cpu_sync, do_expand,
                                         do_zero_padding,
-                                        use_tma_aligned_col_major_sf)
+                                        use_tma_aligned_col_major_sf,
+                                        num_recv_tokens_hint)
 
         # Create handle
         is_cached_dispatch = handle is not None

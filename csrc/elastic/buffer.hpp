@@ -818,7 +818,8 @@ public:
              const bool& allocate_on_comm_stream,
              const bool& do_handle_copy, const bool& do_cpu_sync,
              const bool& do_expand, const bool& do_zero_padding,
-             const bool& use_tma_aligned_col_major_sf) const {
+             const bool& use_tma_aligned_col_major_sf,
+             const std::optional<int>& num_recv_tokens_hint) const {
         // Check SM count
         EP_HOST_ASSERT(num_sms > 0);
 
@@ -828,6 +829,14 @@ public:
         // Cached mode must have responding handles
         const bool cached_mode = cached_num_recv_tokens.has_value();
         const bool use_rail_balance = rail_balance::is_enabled(rail_balance_policy);
+        const int worst_case_num_recv_tokens = num_max_tokens_per_rank * nccl_context->num_ranks;
+        if (num_recv_tokens_hint.has_value()) {
+            EP_HOST_ASSERT(not cached_mode and not do_cpu_sync and not do_expand and
+                           "num_recv_tokens_hint requires non-cached, non-expanded dispatch without CPU sync");
+            EP_HOST_ASSERT(0 <= num_recv_tokens_hint.value() and
+                           num_recv_tokens_hint.value() <= worst_case_num_recv_tokens and
+                           "num_recv_tokens_hint exceeds the worst-case receive count");
+        }
         if (cached_mode) {
             EP_HOST_ASSERT(cached_num_recv_tokens.has_value());
             EP_HOST_ASSERT(cached_num_recv_tokens_per_expert_list.has_value());
@@ -1203,8 +1212,9 @@ public:
                     throw EPExceptionWithLineInfo("Dispatch CPU wait", get_buffer_info());
             }
         } else {
-            // Non-cached mode without CPU sync, allocate with the worst case
-            num_recv_tokens = num_max_tokens_per_rank * nccl_context->num_ranks;
+            // Non-cached mode without CPU sync. An exact caller-provided count
+            // avoids allocating the worst-case receive tensors.
+            num_recv_tokens = num_recv_tokens_hint.value_or(worst_case_num_recv_tokens);
             num_expanded_tokens = nccl_context->num_ranks * num_max_tokens_per_rank * std::min(num_topk, num_local_experts);
             num_expanded_tokens += (expert_alignment - 1) * num_local_experts;
             num_expanded_tokens = math::align(num_expanded_tokens, expert_alignment);

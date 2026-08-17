@@ -68,12 +68,15 @@ void rail_balance_plan_impl(const ncclDevComm_t nccl_dev_comm,
         return;
 
     const auto gin = handle::NCCLGin(nccl_dev_comm, nccl_window, 0);
-    unsigned incast_rail_mask = 0;
+    unsigned incast_rail_control = 0;
     if (lane == 0 and incast_rail_masks != nullptr)
-        incast_rail_mask = static_cast<unsigned>(__ldg(incast_rail_masks + destination));
-    incast_rail_mask = ptx::exchange(incast_rail_mask, 0);
+        incast_rail_control = static_cast<unsigned>(__ldg(incast_rail_masks + destination));
+    incast_rail_control = ptx::exchange(incast_rail_control, 0);
     const unsigned valid_rail_mask = num_rails == 32 ? 0xffffffffu : ((1u << num_rails) - 1u);
-    incast_rail_mask &= valid_rail_mask;
+    const unsigned incast_rail_mask = incast_rail_control & valid_rail_mask;
+    // Values above an ordinary 8-bit mask encode eight four-bit Rail weights.
+    const bool use_weighted_quotas =
+        num_rails == 8 and incast_rail_control > valid_rail_mask;
 
     int owner_total = 0;
     if (lane < num_rails) {
@@ -81,16 +84,27 @@ void rail_balance_plan_impl(const ncclDevComm_t nccl_dev_comm,
         for (int channel = 0; channel < num_channels; ++ channel)
             owner_total += __ldg(peer_count + channel * num_destinations + destination);
     }
+    int static_weight = 0;
+    if (lane < num_rails and use_weighted_quotas)
+        static_weight = static_cast<int>(
+            (incast_rail_control >> (4 * lane)) & 0xFu);
+    const int static_weight_sum = ptx::reduce_add(static_weight);
     const bool use_incast_mask =
         policy == static_cast<int>(rail_balance::Policy::Incast) and
-        destination != local_destination and incast_rail_mask != 0;
-    const bool selected = lane < num_rails and (
-        use_incast_mask ? ((incast_rail_mask >> lane) & 1u) :
+        destination != local_destination and
+        (use_weighted_quotas ? static_weight_sum > 0 : incast_rail_mask != 0);
+    const bool static_selected = lane < num_rails and (
+        use_incast_mask ? (
+            use_weighted_quotas ? static_weight > 0 :
+            ((incast_rail_mask >> lane) & 1u)) :
         (policy == static_cast<int>(rail_balance::Policy::All) or owner_total > 0));
-    const unsigned selected_mask = ptx::gather(selected);
-    const int num_selected = __popc(selected_mask);
+    const unsigned static_selected_mask = ptx::gather(static_selected);
 
     for (int channel = 0; channel < num_channels; ++ channel) {
+        const unsigned selected_mask = static_selected_mask;
+        const bool selected = static_selected;
+        const int num_selected = __popc(selected_mask);
+
         int count = 0;
         if (lane < num_rails) {
             const auto peer_count = gin.get_sym_ptr<ncclTeamTagLsa>(local_count, lane);
@@ -102,14 +116,23 @@ void rail_balance_plan_impl(const ncclDevComm_t nccl_dev_comm,
         int target = count;
         if (destination != local_destination and num_selected > 0) {
             const int total = ptx::reduce_add(count);
-            const int base = total / num_selected;
-            const int remainder = total - base * num_selected;
             const unsigned lower_lanes = lane == 0 ? 0u : (0xffffffffu >> (32 - lane));
             const int selected_position = __popc(selected_mask & lower_lanes);
             const int rotation = (channel + destination) % num_selected;
             const int rotated_position =
                 (selected_position - rotation + num_selected) % num_selected;
-            target = selected ? base + static_cast<int>(rotated_position < remainder) : 0;
+            if (use_weighted_quotas) {
+                target = total * static_weight / static_weight_sum;
+                const int assigned = ptx::reduce_add(target);
+                const int remainder = total - assigned;
+                target += static_cast<int>(
+                    selected and rotated_position < remainder);
+            } else {
+                const int base = total / num_selected;
+                const int remainder = total - base * num_selected;
+                target = selected ?
+                    base + static_cast<int>(rotated_position < remainder) : 0;
+            }
         }
         if (lane < num_rails)
             quota[(channel * num_destinations + destination) * num_rails + lane] = target;
@@ -160,36 +183,15 @@ void rail_balance_source_shuffle_impl(
     int next_ordinal = 0;
 
     for (int token = channel; token < num_tokens; token += num_channels) {
-        if (ptx::elect_one_sync())
-            ptx::tma_load_1d(tma_buffer.get_hidden_ptr(),
-                             x + static_cast<int64_t>(token) * (kNumHiddenBytes / sizeof(nv_bfloat16)),
-                             mbarrier_ptr, kNumHiddenBytes);
-
         const int expert = lane < kNumTopk ?
             static_cast<int>(__ldg(topk_idx + token * kNumTopk + lane)) : -1;
         const int destination = expert >= 0 ? expert / experts_per_destination : -1;
-        if (lane < kNumTopk) {
-            tma_buffer.get_topk_idx_ptr()[lane] = expert;
-            tma_buffer.get_topk_weights_ptr()[lane] = topk_weights == nullptr ?
-                0.0f : __ldg(topk_weights + token * kNumTopk + lane);
-        }
-        if (ptx::elect_one_sync())
-            *tma_buffer.get_src_token_global_idx_ptr() =
-                (local_destination * num_rails + owner) * num_max_tokens_per_rank + token;
-        ptx::tma_store_fence();
-        __syncwarp();
-
-        if (ptx::elect_one_sync()) {
-            ptx::mbarrier_arrive_and_set_tx(mbarrier_ptr, kNumHiddenBytes);
-            ptx::mbarrier_wait_and_flip_phase(mbarrier_ptr, phase);
-        }
-        __syncwarp();
-
         unsigned destination_mask = ptx::reduce_or(
             destination >= 0 and destination < num_destinations ?
                 (1u << destination) : 0u);
         destination_mask &= ~(1u << local_destination);
         unsigned remaining = destination_mask;
+        bool staged = false;
         while (remaining != 0) {
             const int dst = ptx::ffs(remaining);
             remaining ^= 1u << dst;
@@ -223,6 +225,36 @@ void rail_balance_source_shuffle_impl(
             egress = ptx::exchange(egress, 0);
             egress_ordinal = ptx::exchange(egress_ordinal, 0);
             if (egress >= 0) {
+                // Most overlap-2 tokens stay on their owner Rail. Do not read
+                // and stage the full hidden vector until a move is certain.
+                if (not staged) {
+                    if (ptx::elect_one_sync())
+                        ptx::tma_load_1d(
+                            tma_buffer.get_hidden_ptr(),
+                            x + static_cast<int64_t>(token) *
+                                (kNumHiddenBytes / sizeof(nv_bfloat16)),
+                            mbarrier_ptr, kNumHiddenBytes);
+                    if (lane < kNumTopk) {
+                        tma_buffer.get_topk_idx_ptr()[lane] = expert;
+                        tma_buffer.get_topk_weights_ptr()[lane] =
+                            topk_weights == nullptr ? 0.0f :
+                            __ldg(topk_weights + token * kNumTopk + lane);
+                    }
+                    if (ptx::elect_one_sync())
+                        *tma_buffer.get_src_token_global_idx_ptr() =
+                            (local_destination * num_rails + owner) *
+                                num_max_tokens_per_rank + token;
+                    ptx::tma_store_fence();
+                    __syncwarp();
+                    if (ptx::elect_one_sync()) {
+                        ptx::mbarrier_arrive_and_set_tx(
+                            mbarrier_ptr, kNumHiddenBytes);
+                        ptx::mbarrier_wait_and_flip_phase(
+                            mbarrier_ptr, phase);
+                    }
+                    __syncwarp();
+                    staged = true;
+                }
                 const int proxy_slot = arena_layout.get_proxy_slot(
                     local_destination, dst, channel, egress_ordinal);
                 const int dst_rank = expert >= 0 ? expert / experts_per_rank : -1;

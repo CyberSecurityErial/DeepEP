@@ -44,6 +44,15 @@ def _rail(args: argparse.Namespace) -> list[list[str]]:
 
 
 def _incast(args: argparse.Namespace) -> list[list[str]]:
+    variants = (
+        ('off', []),
+        ('active', []),
+        ('incast', ['--incast-rail-overlap', '2.0']),
+        ('incast', [
+            '--incast-rail-overlap', '2.0',
+            '--incast-weighted-quotas',
+        ]),
+    )
     return [
         _base(args, 'incast', policy) + [
             '--totals', args.incast_totals,
@@ -51,46 +60,102 @@ def _incast(args: argparse.Namespace) -> list[list[str]]:
             '--expert-alphas', '0',
             '--source-alphas', '0',
             '--fan-ins', '1,2,3',
-            '--incast-total-mode', 'aggregate',
+            '--incast-total-mode', 'per-source',
             '--rail-phase', 'aligned',
-        ]
-        for policy in ('off', 'active', 'incast')
+        ] + extra
+        for policy, extra in variants
     ]
 
 
 def _joint(args: argparse.Namespace) -> list[list[str]]:
+    variants = (
+        ('off', []),
+        ('active', []),
+        ('incast', ['--incast-rail-overlap', '2.0']),
+        ('incast', [
+            '--incast-rail-overlap', '2.0',
+            '--incast-weighted-quotas',
+        ]),
+    )
     commands = [
-        _base(args, 'balanced-alltoall', policy) + [
+        _base(args, 'expert-rail-incast', policy) + [
             '--totals', args.joint_totals,
             '--rail-alphas', args.joint_alphas,
             '--expert-alphas', '0',
             '--source-alphas', '0',
             '--fan-ins', '3',
-            '--incast-total-mode', 'aggregate',
+            '--incast-total-mode', 'per-source',
             '--rail-phase', 'aligned',
-        ]
-        for policy in ('off', 'active', 'incast')
+        ] + extra
+        for policy, extra in variants
     ]
     if args.include_rotated:
         commands.extend(
-            _base(args, 'balanced-alltoall', policy) + [
+            _base(args, 'expert-rail-incast', policy) + [
                 '--totals', args.rotated_total,
                 '--rail-alphas', args.rotated_alpha,
                 '--expert-alphas', '0',
                 '--source-alphas', '0',
                 '--fan-ins', '3',
-                '--incast-total-mode', 'aggregate',
+                '--incast-total-mode', 'per-source',
                 '--rail-phase', 'rotated',
-            ]
-            for policy in ('active', 'incast')
+            ] + extra
+            for policy, extra in variants
         )
+    return commands
+
+
+def _auto_calibration(args: argparse.Namespace) -> list[list[str]]:
+    """Frozen Expert-to-Node-to-Rail calibration regimes."""
+    variants = (
+        ('off', []),
+        ('active', []),
+        ('incast', ['--incast-rail-overlap', '2.0']),
+    )
+    commands = []
+    for policy, extra in variants:
+        commands.append(
+            _base(args, 'balanced-alltoall', policy) + [
+                '--num-qps', str(args.auto_anchor_qps),
+                '--totals', args.auto_anchor_total,
+                '--rail-alphas', '0',
+                '--expert-alphas', '0',
+                '--source-alphas', '0',
+                '--fan-ins', '3',
+                '--incast-total-mode', 'per-source',
+                '--rail-phase', 'aligned',
+            ] + extra)
+    for policy, extra in variants:
+        commands.append(
+            _base(args, 'incast', policy) + [
+                '--totals', args.auto_node_total,
+                '--rail-alphas', '0',
+                '--expert-alphas', '0',
+                '--source-alphas', args.auto_node_alphas,
+                '--fan-ins', '3',
+                '--incast-total-mode', 'per-source',
+                '--rail-phase', 'aligned',
+            ] + extra)
+    for policy, extra in variants:
+        commands.append(
+            _base(args, 'balanced-alltoall', policy) + [
+                '--totals', args.auto_rail_total,
+                '--rail-alphas', args.auto_rail_alpha,
+                '--expert-alphas', '0',
+                '--source-alphas', '0',
+                '--fan-ins', '3',
+                '--incast-total-mode', 'per-source',
+                '--rail-phase', 'rotated',
+            ] + extra)
     return commands
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--suite', choices=('rail', 'incast', 'joint', 'four-node-core'),
+        '--suite', choices=(
+            'rail', 'incast', 'joint', 'four-node-core',
+            'auto-calibration'),
         required=True)
     parser.add_argument('--num-processes', type=int, default=8)
     parser.add_argument('--num-sms', type=int, default=16)
@@ -106,6 +171,12 @@ def main() -> None:
     parser.add_argument('--include-rotated', action='store_true')
     parser.add_argument('--rotated-total', default='8192')
     parser.add_argument('--rotated-alpha', default='1.5')
+    parser.add_argument('--auto-anchor-total', default='16384')
+    parser.add_argument('--auto-anchor-qps', type=int, default=9)
+    parser.add_argument('--auto-node-total', default='8192')
+    parser.add_argument('--auto-node-alphas', default='1,1.25,1.5')
+    parser.add_argument('--auto-rail-total', default='16384')
+    parser.add_argument('--auto-rail-alpha', default='2.25')
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
     if args.num_processes <= 0 or args.iterations <= 0 or args.warmups < 0:
@@ -117,8 +188,10 @@ def main() -> None:
         commands = _incast(args)
     elif args.suite == 'joint':
         commands = _joint(args)
-    else:
+    elif args.suite == 'four-node-core':
         commands = _incast(args) + _joint(args)
+    else:
+        commands = _auto_calibration(args)
 
     print('SUITE_CONFIG ' + json.dumps({
         'suite': args.suite,

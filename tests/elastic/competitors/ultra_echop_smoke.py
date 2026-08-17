@@ -126,6 +126,40 @@ def _measure_global_us(fn, warmups: int, iterations: int, group) -> dict[str, fl
     }
 
 
+def _measure_global_cuda_us(
+        fn, warmups: int, iterations: int, group) -> dict[str, float]:
+    """Measure only the GPU critical path; CPU launch work may overlap."""
+    for _ in range(warmups):
+        dist.barrier(group=group)
+        torch.cuda.synchronize()
+        result = fn()
+        torch.cuda.synchronize()
+        del result
+
+    samples = []
+    start_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+    for _ in range(iterations):
+        dist.barrier(group=group)
+        torch.cuda.synchronize()
+        start_event.record()
+        result = fn()
+        end_event.record()
+        end_event.synchronize()
+        elapsed = torch.tensor(
+            start_event.elapsed_time(end_event) * 1e3,
+            dtype=torch.float64, device='cuda')
+        del result
+        dist.all_reduce(elapsed, op=dist.ReduceOp.MAX, group=group)
+        samples.append(elapsed.item())
+    return {
+        'median_us': statistics.median(samples),
+        'p90_us': _percentile(samples, 0.90),
+        'p99_us': _percentile(samples, 0.99),
+        'samples_us': samples,
+    }
+
+
 def _max_mean(values: torch.Tensor) -> float:
     values = values.to(torch.float64)
     mean = values.mean().item()
@@ -154,12 +188,18 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         num_nodes, num_local_ranks, node, rail, source_totals, sink,
         args.rail_alpha, args.expert_alpha, args.seed, args.rail_phase)
     num_tokens = len(logical_targets)
-    num_max_tokens_per_rank = max(
+    max_input_tokens_per_rank = max(
         1,
         max(
             max(_zipf_counts(count, args.rail_alpha, num_local_ranks))
             for count in source_totals if count > 0),
     )
+    # A proxy Rail can receive at most all tokens from one source node in one
+    # channel, plus one rounded channel tail per owner Rail. Keep this same
+    # deterministic capacity for every policy without the old 8x overreserve.
+    num_max_tokens_per_rank = max(
+        max_input_tokens_per_rank,
+        max(source_totals) + num_local_ranks * args.num_sms * 8)
 
     logical_topk = torch.tensor(
         logical_targets, dtype=torch.int64, device='cuda')[:, None]
@@ -269,7 +309,7 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         x_value = (src_global % 127 + 1).to(torch.bfloat16)
         x = x_value[:, None].expand(num_tokens, args.hidden).contiguous()
 
-        dispatch_args = dict(
+        sync_dispatch_args = dict(
             x=x,
             topk_idx=physical_topk,
             topk_weights=physical_weights,
@@ -280,10 +320,8 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             do_cpu_sync=True,
         )
 
-        def dispatch_once():
-            return echo_buffer.dispatch(**dispatch_args)
-
-        recv_x, recv_topk, recv_weights, handle, _ = dispatch_once()
+        recv_x, recv_topk, recv_weights, handle, _ = echo_buffer.dispatch(
+            **sync_dispatch_args)
         num_recv = handle.psum_num_recv_tokens_per_scaleup_rank[-1].item()
         expected_local_counts = physical_counts[
             rank * num_local_physical:(rank + 1) * num_local_physical]
@@ -305,7 +343,23 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         assert torch.equal(combined_x, x)
         assert torch.equal(combined_weights, physical_weights)
 
-        dispatch_stats = _measure_global_us(
+        dispatch_args = dict(sync_dispatch_args)
+        dispatch_args['do_cpu_sync'] = False
+        dispatch_args['num_recv_tokens_hint'] = num_recv
+
+        def dispatch_once():
+            return echo_buffer.dispatch(**dispatch_args)
+
+        async_recv_x, _, async_recv_weights, async_handle, _ = dispatch_once()
+        async_combined_x, async_combined_weights, _ = echo_buffer.combine(
+            async_recv_x, handle=async_handle,
+            topk_weights=async_recv_weights, num_sms=args.num_sms)
+        assert async_recv_x.shape[0] == num_recv
+        assert async_handle.recv_src_metadata.shape[0] == num_recv
+        assert torch.equal(async_combined_x, x)
+        assert torch.equal(async_combined_weights, physical_weights)
+
+        dispatch_stats = _measure_global_cuda_us(
             dispatch_once, args.warmups, args.iterations, group)
         recv_x, _, recv_weights, handle, _ = dispatch_once()
 
@@ -314,7 +368,7 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 recv_x, handle=handle, topk_weights=recv_weights,
                 num_sms=args.num_sms)
 
-        combine_stats = _measure_global_us(
+        combine_stats = _measure_global_cuda_us(
             combine_once, args.warmups, args.iterations, group)
 
         def roundtrip_once():
@@ -323,7 +377,7 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 rt_recv_x, handle=rt_handle, topk_weights=rt_recv_weights,
                 num_sms=args.num_sms)
 
-        roundtrip_stats = _measure_global_us(
+        roundtrip_stats = _measure_global_cuda_us(
             roundtrip_once, args.warmups, args.iterations, group)
 
         if rank == 0:
@@ -347,6 +401,8 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 'rail_phase': args.rail_phase,
                 'expert_alpha': args.expert_alpha,
                 'redundant_experts_per_rank': args.redundant_experts_per_rank,
+                'max_input_tokens_per_rank': max_input_tokens_per_rank,
+                'buffer_token_capacity_per_rank': num_max_tokens_per_rank,
                 'logical_rank_load_max_over_mean': _max_mean(logical_counts),
                 'physical_rank_load_max_over_mean': _max_mean(physical_rank_load),
                 'physical_node_demand': demand.to(torch.int64).tolist(),
@@ -366,6 +422,8 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 'roundtrip_median_us': roundtrip_stats['median_us'],
                 'roundtrip_p99_us': roundtrip_stats['p99_us'],
                 'roundtrip_samples_us': roundtrip_stats['samples_us'],
+                'ep_timing': 'cuda-event',
+                'dispatch_cpu_sync': False,
                 'steady_step_median_us': per_step_us,
                 'control_interval_steps': args.control_interval,
                 'amortized_control_us_per_step': amortized_control_us,

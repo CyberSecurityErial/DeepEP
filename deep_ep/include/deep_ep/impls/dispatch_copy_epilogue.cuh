@@ -59,9 +59,15 @@ dispatch_copy_epilogue_impl(void* buffer, void* workspace,
     // NOTES: PDL is used, please do not use `__ldg`
     cudaGridDependencySynchronize();
 
-    // For no CPU sync case, the number of received tokens should be read from the GPU tensor
+    // For no CPU sync without an exact hint, read the received count from the
+    // GPU tensor. Otherwise verify the host-provided exact count before any
+    // output writes, preventing an incorrect hint from truncating or
+    // overflowing the receive tensors.
+    const int actual_num_recv_tokens =
+        psum_num_recv_tokens_per_scaleup_rank[kNumScaleupRanks - 1];
     if (num_recv_tokens == kNumMaxTokensPerRank * kNumRanks)
-        num_recv_tokens = psum_num_recv_tokens_per_scaleup_rank[kNumScaleupRanks - 1];
+        num_recv_tokens = actual_num_recv_tokens;
+    EP_DEVICE_ASSERT(num_recv_tokens == actual_num_recv_tokens);
 
     // Current rank indices should be maintained
     int current_rank_idx = -1, stored_psum_num_recv_tokens;
