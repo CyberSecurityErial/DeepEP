@@ -105,6 +105,25 @@ def _joint(args: argparse.Namespace) -> list[list[str]]:
     return commands
 
 
+def _fast_compare(args: argparse.Namespace) -> list[list[str]]:
+    """FAST-style global weighted permutations on the EchoP data plane."""
+    return [
+        _base(args, 'balanced-alltoall', 'active') + [
+            '--totals', args.fast_total,
+            '--rail-alphas', args.fast_rail_alphas,
+            '--expert-alphas', '0',
+            '--source-alphas', args.fast_source_alphas,
+            '--fan-ins', '3',
+            '--incast-total-mode', 'per-source',
+            '--rail-phase', 'aligned',
+            '--alltoall-flow-shape', 'directed-zipf',
+            '--pairwise-peer-budget', '1',
+            '--pairwise-planner', planner,
+        ]
+        for planner in ('cyclic-local', 'fast-global')
+    ]
+
+
 def _auto_calibration(args: argparse.Namespace) -> list[list[str]]:
     """Frozen Expert-to-Node-to-Rail calibration regimes."""
     variants = (
@@ -155,7 +174,7 @@ def main() -> None:
     parser.add_argument(
         '--suite', choices=(
             'rail', 'incast', 'joint', 'four-node-core',
-            'auto-calibration'),
+            'auto-calibration', 'fast-compare'),
         required=True)
     parser.add_argument('--num-processes', type=int, default=8)
     parser.add_argument('--num-sms', type=int, default=16)
@@ -177,6 +196,11 @@ def main() -> None:
     parser.add_argument('--auto-node-alphas', default='1,1.25,1.5')
     parser.add_argument('--auto-rail-total', default='16384')
     parser.add_argument('--auto-rail-alpha', default='2.25')
+    parser.add_argument('--fast-total', default='65536')
+    parser.add_argument(
+        '--fast-source-alphas', default='0.5,0.75,1,1.25,1.5')
+    parser.add_argument(
+        '--fast-rail-alphas', default='1,1.25,1.75,2,2.25')
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
     if args.num_processes <= 0 or args.iterations <= 0 or args.warmups < 0:
@@ -190,6 +214,8 @@ def main() -> None:
         commands = _joint(args)
     elif args.suite == 'four-node-core':
         commands = _incast(args) + _joint(args)
+    elif args.suite == 'fast-compare':
+        commands = _fast_compare(args)
     else:
         commands = _auto_calibration(args)
 

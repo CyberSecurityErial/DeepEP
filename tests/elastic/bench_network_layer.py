@@ -20,6 +20,11 @@ import torch.distributed as dist
 import deep_ep
 from deep_ep.buffers.elastic import _pack_incast_weighted_quotas
 from deep_ep.utils.envs import init_dist
+from fast_style_planner import (
+    plan_cyclic_source_local_waves,
+    plan_fast_style_waves,
+    reconstruct_demand,
+)
 
 
 def _parse_int_csv(value: str) -> list[int]:
@@ -39,8 +44,19 @@ def _parse_float_csv(value: str) -> list[float]:
 
 def _policy_variant(
         policy: str, weighted_quotas: bool,
-        pairwise_peer_budget: int = 0) -> str:
+        pairwise_peer_budget: int = 0,
+        pairwise_planner: str = 'round-robin') -> str:
     if pairwise_peer_budget > 0:
+        if pairwise_planner == 'fast-global':
+            return (
+                'fast_style_global'
+                if policy in ('active', 'all') else
+                'fast_style_global_no_local_balance')
+        if pairwise_planner == 'cyclic-local':
+            return (
+                'echop_local_matching'
+                if policy in ('active', 'all') else
+                'echop_local_matching_no_rail_balance')
         if policy == 'off':
             return 'fanin_only'
         if policy in ('active', 'all'):
@@ -606,6 +622,10 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         if args.rail_balance not in ('off', 'active', 'all'):
             raise ValueError(
                 'pairwise waves require rail_balance=off/active/all')
+        if (args.pairwise_planner in ('cyclic-local', 'fast-global') and
+                args.pairwise_peer_budget != 1):
+            raise ValueError(
+                'directed permutations require peer budget 1')
     num_experts = world_size
     max_input_tokens_per_rank = _max_input_rank_tokens(
         num_nodes, num_local_ranks, args)
@@ -635,7 +655,7 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             'policy': args.rail_balance,
             'variant': _policy_variant(
                 args.rail_balance, args.incast_weighted_quotas,
-                args.pairwise_peer_budget),
+                args.pairwise_peer_budget, args.pairwise_planner),
             'num_nodes': num_nodes,
             'num_rails_per_node': num_local_ranks,
             'totals_parameter': args.totals,
@@ -654,6 +674,7 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             'incast_rail_overlap': args.incast_rail_overlap,
             'incast_weighted_quotas': args.incast_weighted_quotas,
             'pairwise_peer_budget': args.pairwise_peer_budget,
+            'pairwise_planner': args.pairwise_planner,
             'hidden': args.hidden,
             'dtype': 'bfloat16',
             'topk': 1,
@@ -767,6 +788,18 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 
                     if args.pairwise_peer_budget > 0:
                         def make_pairwise_waves():
+                            if args.pairwise_planner == 'fast-global':
+                                integer_demand = demand.to(
+                                    torch.int64).tolist()
+                                waves = plan_fast_style_waves(integer_demand)
+                                assert reconstruct_demand(
+                                    num_nodes, waves) == integer_demand
+                                return waves
+                            if args.pairwise_planner == 'cyclic-local':
+                                integer_demand = demand.to(
+                                    torch.int64).tolist()
+                                return plan_cyclic_source_local_waves(
+                                    integer_demand)
                             plain_waves = (
                                 deep_ep.utils.plan_pairwise_incast_waves(
                                     num_nodes,
@@ -779,6 +812,25 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
 
                         pairwise_waves, pairwise_plan_us = _measure_control_us(
                             make_pairwise_waves, group)
+                        pairwise_wave_edge_tokens = []
+                        for wave in pairwise_waves:
+                            edge_tokens = []
+                            if args.pairwise_planner in (
+                                    'cyclic-local', 'fast-global'):
+                                edge_tokens.extend(
+                                    int(transfer[3]) for transfer in wave)
+                            else:
+                                for (lhs, rhs, chunk_index,
+                                     num_chunks) in wave:
+                                    for source, destination in (
+                                            (lhs, rhs), (rhs, lhs)):
+                                        edge_total = int(
+                                            demand[source, destination].item())
+                                        edge_tokens.append(max(
+                                            0,
+                                            (edge_total + num_chunks - 1 -
+                                             chunk_index) // num_chunks))
+                            pairwise_wave_edge_tokens.append(edge_tokens)
                         covered_positions = []
                         timed_wave_dispatch_args = []
                         reconstructed_x = torch.empty_like(x)
@@ -786,31 +838,66 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                         max_wave_fan_in = 0
 
                         for wave in pairwise_waves:
-                            degrees = [0] * num_nodes
-                            peer_chunks = []
-                            for lhs, rhs, chunk_index, num_chunks in wave:
-                                degrees[lhs] += 1
-                                degrees[rhs] += 1
-                                if lhs == node:
-                                    peer_chunks.append(
-                                        (rhs, chunk_index, num_chunks))
-                                elif rhs == node:
-                                    peer_chunks.append(
-                                        (lhs, chunk_index, num_chunks))
-                            max_wave_fan_in = max(
-                                max_wave_fan_in, max(degrees))
-                            assert (1 <= len(peer_chunks) <=
-                                    args.pairwise_peer_budget)
                             positions = []
-                            for peer, chunk_index, num_chunks in peer_chunks:
-                                peer_positions = [
-                                    position
-                                    for position, target in enumerate(
-                                        local_targets)
-                                    if target // num_local_ranks == peer
-                                ]
-                                positions.extend(
-                                    peer_positions[chunk_index::num_chunks])
+                            if args.pairwise_planner in (
+                                    'cyclic-local', 'fast-global'):
+                                incoming = [0] * num_nodes
+                                outgoing = [0] * num_nodes
+                                local_transfers = []
+                                for (source, destination, offset, count,
+                                     edge_total) in wave:
+                                    outgoing[source] += 1
+                                    incoming[destination] += 1
+                                    if source == node:
+                                        local_transfers.append((
+                                            destination, offset, count,
+                                            edge_total))
+                                max_wave_fan_in = max(
+                                    max_wave_fan_in, max(incoming))
+                                assert max(incoming) <= 1
+                                assert max(outgoing) <= 1
+                                assert len(local_transfers) == 1
+                                for (peer, offset, count,
+                                     edge_total) in local_transfers:
+                                    peer_positions = [
+                                        position
+                                        for position, target in enumerate(
+                                            local_targets)
+                                        if (target // num_local_ranks == peer)
+                                    ]
+                                    begin = offset * len(
+                                        peer_positions) // edge_total
+                                    end = (offset + count) * len(
+                                        peer_positions) // edge_total
+                                    positions.extend(
+                                        peer_positions[begin:end])
+                            else:
+                                degrees = [0] * num_nodes
+                                peer_chunks = []
+                                for (lhs, rhs, chunk_index,
+                                     num_chunks) in wave:
+                                    degrees[lhs] += 1
+                                    degrees[rhs] += 1
+                                    if lhs == node:
+                                        peer_chunks.append(
+                                            (rhs, chunk_index, num_chunks))
+                                    elif rhs == node:
+                                        peer_chunks.append(
+                                            (lhs, chunk_index, num_chunks))
+                                max_wave_fan_in = max(
+                                    max_wave_fan_in, max(degrees))
+                                assert (1 <= len(peer_chunks) <=
+                                        args.pairwise_peer_budget)
+                                for (peer, chunk_index,
+                                     num_chunks) in peer_chunks:
+                                    peer_positions = [
+                                        position
+                                        for position, target in enumerate(
+                                            local_targets)
+                                        if (target // num_local_ranks == peer)
+                                    ]
+                                    positions.extend(peer_positions[
+                                        chunk_index::num_chunks])
                             positions.sort()
                             # The four-node hardware experiment uses large,
                             # expert-balanced flows, so every physical source
@@ -904,6 +991,25 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                             pairwise_roundtrip_once, args.warmups,
                             args.iterations, group)
 
+                        pairwise_wave_stats = []
+                        if args.profile_pairwise_waves:
+                            def one_wave_roundtrip_once(timed_wave_args):
+                                (wave_recv_x, _, wave_recv_weights,
+                                 wave_handle, _) = buffer.dispatch(
+                                     **timed_wave_args)
+                                return buffer.combine(
+                                    wave_recv_x, handle=wave_handle,
+                                    topk_weights=wave_recv_weights,
+                                    num_sms=args.num_sms,
+                                    num_qps=args.num_qps)
+
+                            for timed_wave_args in timed_wave_dispatch_args:
+                                pairwise_wave_stats.append(
+                                    _measure_global_us(
+                                        lambda wave_args=timed_wave_args:
+                                        one_wave_roundtrip_once(wave_args),
+                                        args.warmups, args.iterations, group))
+
                         if rank == 0:
                             remote_tokens = int(demand.sum().item())
                             source_node_counts = demand.sum(
@@ -943,8 +1049,16 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                                 'variant': _policy_variant(
                                     args.rail_balance,
                                     args.incast_weighted_quotas,
-                                    args.pairwise_peer_budget),
-                                'fanin_strategy': 'pairwise-waves',
+                                    args.pairwise_peer_budget,
+                                    args.pairwise_planner),
+                                'fanin_strategy': (
+                                    'fast-style-global-weighted-permutations'
+                                    if args.pairwise_planner == 'fast-global'
+                                    else (
+                                        'echop-cyclic-source-local-permutations'
+                                        if args.pairwise_planner ==
+                                        'cyclic-local'
+                                        else 'pairwise-waves')),
                                 'latency_timing': 'gpu-event',
                                 'component_timing': (
                                     'all-waves-roundtrip-total'),
@@ -964,9 +1078,46 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                                 'plan_state': args.plan_state,
                                 'pairwise_peer_budget': (
                                     args.pairwise_peer_budget),
+                                'pairwise_planner': args.pairwise_planner,
+                                'planner_input_scope': (
+                                    'complete-global-demand-matrix'
+                                    if args.pairwise_planner == 'fast-global'
+                                    else (
+                                        'source-local-outgoing-row+topology'
+                                        if args.pairwise_planner ==
+                                        'cyclic-local'
+                                        else 'topology-only')),
+                                'global_demand_cells': (
+                                    world_size * world_size
+                                    if args.pairwise_planner == 'fast-global'
+                                    else 0),
+                                'global_demand_bytes_u32': (
+                                    world_size * world_size * 4
+                                    if args.pairwise_planner == 'fast-global'
+                                    else 0),
+                                'local_demand_cells_per_node': (
+                                    num_nodes
+                                    if args.pairwise_planner == 'cyclic-local'
+                                    else 0),
                                 'num_qps': args.num_qps,
                                 'pairwise_num_waves': len(pairwise_waves),
                                 'pairwise_waves': pairwise_waves,
+                                'pairwise_wave_edge_tokens': (
+                                    pairwise_wave_edge_tokens),
+                                'pairwise_wave_edge_max_over_mean': [
+                                    (max(loads) /
+                                     (sum(loads) / len(loads)))
+                                    if loads and sum(loads) else 0.0
+                                    for loads in pairwise_wave_edge_tokens
+                                ],
+                                'pairwise_wave_roundtrip_us': [
+                                    stats['median_us']
+                                    for stats in pairwise_wave_stats
+                                ],
+                                'pairwise_wave_roundtrip_p99_us': [
+                                    stats['p99_us']
+                                    for stats in pairwise_wave_stats
+                                ],
                                 'node_fan_in_after_policy': (
                                     max_wave_fan_in),
                                 'source_node_counts': source_node_counts,
@@ -1347,6 +1498,18 @@ if __name__ == '__main__':
         help=(
             'split balanced All-to-All into round-robin node-pair waves; '
             '0 disables temporal scheduling, 1 makes node fan-in one'))
+    parser.add_argument(
+        '--pairwise-planner',
+        choices=('round-robin', 'cyclic-local', 'fast-global'),
+        default='round-robin',
+        help=(
+            'round-robin uses topology-only undirected waves; cyclic-local '
+            'uses fixed directed matchings plus source-local counts; '
+            'fast-global independently reimplements FAST-style weighted '
+            'directed permutations from the complete global demand matrix'))
+    parser.add_argument(
+        '--profile-pairwise-waves', action='store_true',
+        help='also time every pairwise wave separately for critical-path audit')
     parser.add_argument('--control-interval', type=int, default=32)
     parser.add_argument(
         '--profile-dir', type=str, default='',
