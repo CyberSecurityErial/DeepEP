@@ -22,6 +22,7 @@ from deep_ep.buffers.elastic import _pack_incast_weighted_quotas
 from deep_ep.utils.envs import init_dist
 from fast_style_planner import (
     plan_cyclic_source_local_waves,
+    plan_equal_chunk_interleaved_waves,
     plan_fast_style_waves,
     reconstruct_demand,
 )
@@ -57,6 +58,11 @@ def _policy_variant(
                 'echop_local_matching'
                 if policy in ('active', 'all') else
                 'echop_local_matching_no_rail_balance')
+        if pairwise_planner == 'chunked-global':
+            return (
+                'equal_chunk_interleave_joint'
+                if policy in ('active', 'all') else
+                'equal_chunk_interleave_matching_only')
         if policy == 'off':
             return 'fanin_only'
         if policy in ('active', 'all'):
@@ -119,6 +125,26 @@ def _balanced_destinations(
     """Build a regular directed graph with equal send/receive node totals."""
     if flow_shape == 'directed-zipf':
         counts = _zipf_counts(total, flow_alpha, fan_in)
+    elif flow_shape == 'permuted-zipf':
+        if num_nodes != 4 or fan_in != 3:
+            raise ValueError(
+                'permuted-zipf currently requires four nodes and fan-in 3')
+        counts = _zipf_counts(total, flow_alpha, fan_in)
+        # Three non-cyclic perfect matchings.  Every row and column sees one
+        # hot, one medium, and one cold edge, while a fixed cyclic wave mixes
+        # edge sizes and exposes its hot/cold straggler problem.
+        edge_class = {}
+        for index, pairs in enumerate((
+                ((0, 1), (2, 3)),
+                ((0, 2), (1, 3)),
+                ((0, 3), (1, 2)))):
+            for lhs, rhs in pairs:
+                edge_class[lhs, rhs] = index
+                edge_class[rhs, lhs] = index
+        return [
+            (destination, counts[edge_class[source, destination]])
+            for destination in range(num_nodes) if destination != source
+        ]
     elif flow_shape == 'symmetric-distance':
         # Equal weights for opposite directions make every physical node-pair
         # bidirectionally symmetric.  For four nodes this produces two hot
@@ -622,10 +648,16 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         if args.rail_balance not in ('off', 'active', 'all'):
             raise ValueError(
                 'pairwise waves require rail_balance=off/active/all')
-        if (args.pairwise_planner in ('cyclic-local', 'fast-global') and
+        if (args.pairwise_planner in (
+                'cyclic-local', 'fast-global', 'chunked-global') and
                 args.pairwise_peer_budget != 1):
             raise ValueError(
                 'directed permutations require peer budget 1')
+        if (args.pairwise_planner == 'chunked-global' and
+                args.pairwise_chunk_tokens <= 0 and
+                args.pairwise_chunk_divisor <= 0):
+            raise ValueError(
+                'chunked-global requires a positive chunk size or divisor')
     num_experts = world_size
     max_input_tokens_per_rank = _max_input_rank_tokens(
         num_nodes, num_local_ranks, args)
@@ -675,6 +707,9 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             'incast_weighted_quotas': args.incast_weighted_quotas,
             'pairwise_peer_budget': args.pairwise_peer_budget,
             'pairwise_planner': args.pairwise_planner,
+            'pairwise_chunk_tokens': args.pairwise_chunk_tokens,
+            'pairwise_chunk_divisor': args.pairwise_chunk_divisor,
+            'pairwise_execution': args.pairwise_execution,
             'hidden': args.hidden,
             'dtype': 'bfloat16',
             'topk': 1,
@@ -787,6 +822,13 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                         (num_tokens, 1), dtype=torch.float, device='cuda')
 
                     if args.pairwise_peer_budget > 0:
+                        effective_chunk_tokens = 0
+                        if args.pairwise_planner == 'chunked-global':
+                            effective_chunk_tokens = (
+                                args.pairwise_chunk_tokens
+                                if args.pairwise_chunk_tokens > 0 else
+                                max(1, total // args.pairwise_chunk_divisor))
+
                         def make_pairwise_waves():
                             if args.pairwise_planner == 'fast-global':
                                 integer_demand = demand.to(
@@ -800,6 +842,15 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                                     torch.int64).tolist()
                                 return plan_cyclic_source_local_waves(
                                     integer_demand)
+                            if args.pairwise_planner == 'chunked-global':
+                                integer_demand = demand.to(
+                                    torch.int64).tolist()
+                                waves = plan_equal_chunk_interleaved_waves(
+                                    integer_demand,
+                                    effective_chunk_tokens)
+                                assert reconstruct_demand(
+                                    num_nodes, waves) == integer_demand
+                                return waves
                             plain_waves = (
                                 deep_ep.utils.plan_pairwise_incast_waves(
                                     num_nodes,
@@ -816,7 +867,8 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                         for wave in pairwise_waves:
                             edge_tokens = []
                             if args.pairwise_planner in (
-                                    'cyclic-local', 'fast-global'):
+                                    'cyclic-local', 'fast-global',
+                                    'chunked-global'):
                                 edge_tokens.extend(
                                     int(transfer[3]) for transfer in wave)
                             else:
@@ -833,6 +885,8 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                             pairwise_wave_edge_tokens.append(edge_tokens)
                         covered_positions = []
                         timed_wave_dispatch_args = []
+                        timed_wave_indices = []
+                        timed_wave_num_recv = []
                         reconstructed_x = torch.empty_like(x)
                         reconstructed_weights = torch.empty_like(topk_weights)
                         max_wave_fan_in = 0
@@ -840,7 +894,8 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                         for wave in pairwise_waves:
                             positions = []
                             if args.pairwise_planner in (
-                                    'cyclic-local', 'fast-global'):
+                                    'cyclic-local', 'fast-global',
+                                    'chunked-global'):
                                 incoming = [0] * num_nodes
                                 outgoing = [0] * num_nodes
                                 local_transfers = []
@@ -962,7 +1017,9 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                                 async_wave_combined_weights,
                                 wave_topk_weights)
                             timed_wave_dispatch_args.append(timed_wave_args)
-                            del index, wave_recv_x, wave_recv_weights
+                            timed_wave_indices.append(index)
+                            timed_wave_num_recv.append(wave_num_recv)
+                            del wave_recv_x, wave_recv_weights
                             del wave_combined_x, wave_combined_weights
                             del async_wave_x, async_wave_weights
                             del async_wave_combined_x
@@ -987,8 +1044,73 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                                     num_qps=args.num_qps))
                             return outputs
 
+                        def materialized_roundtrip_once(pipelined):
+                            outputs = []
+                            for index, wave_num_recv in zip(
+                                    timed_wave_indices,
+                                    timed_wave_num_recv):
+                                wave_x = x.index_select(0, index)
+                                wave_topk_idx = topk_idx.index_select(0, index)
+                                wave_topk_weights = topk_weights.index_select(
+                                    0, index)
+                                dispatch_args = dict(
+                                    x=wave_x,
+                                    topk_idx=wave_topk_idx,
+                                    topk_weights=wave_topk_weights,
+                                    num_experts=num_experts,
+                                    num_max_tokens_per_rank=(
+                                        num_max_tokens_per_rank),
+                                    expert_alignment=1,
+                                    num_sms=args.num_sms,
+                                    num_qps=args.num_qps,
+                                    do_cpu_sync=False,
+                                    num_recv_tokens_hint=wave_num_recv,
+                                )
+                                if pipelined:
+                                    ready = buffer.capture()
+                                    dispatch_args.update(
+                                        previous_event=ready,
+                                        async_with_compute_stream=True,
+                                        allocate_on_comm_stream=True)
+                                (wave_recv_x, _, wave_recv_weights,
+                                 wave_handle,
+                                 dispatch_event) = buffer.dispatch(
+                                     **dispatch_args)
+                                combine_args = dict(
+                                    x=wave_recv_x,
+                                    handle=wave_handle,
+                                    topk_weights=wave_recv_weights,
+                                    num_sms=args.num_sms,
+                                    num_qps=args.num_qps)
+                                if pipelined:
+                                    combine_args.update(
+                                        previous_event=dispatch_event.event,
+                                        async_with_compute_stream=True,
+                                        allocate_on_comm_stream=True)
+                                (combined_x, combined_weights,
+                                 combine_event) = buffer.combine(
+                                     **combine_args)
+                                outputs.append((
+                                    wave_x, wave_topk_idx,
+                                    wave_topk_weights, wave_recv_x,
+                                    wave_recv_weights, wave_handle,
+                                    combined_x, combined_weights,
+                                    dispatch_event, combine_event))
+                            if pipelined:
+                                for output in outputs:
+                                    output[-1].current_stream_wait()
+                            return outputs
+
+                        measured_roundtrip = pairwise_roundtrip_once
+                        if args.pairwise_execution == 'sequential-pack':
+                            measured_roundtrip = lambda: (
+                                materialized_roundtrip_once(False))
+                        elif args.pairwise_execution == 'pipelined-pack':
+                            measured_roundtrip = lambda: (
+                                materialized_roundtrip_once(True))
+
                         roundtrip_stats = _measure_global_us(
-                            pairwise_roundtrip_once, args.warmups,
+                            measured_roundtrip, args.warmups,
                             args.iterations, group)
 
                         pairwise_wave_stats = []
@@ -1055,10 +1177,14 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                                     'fast-style-global-weighted-permutations'
                                     if args.pairwise_planner == 'fast-global'
                                     else (
+                                        'equal-chunk-interleaved-permutations'
+                                        if args.pairwise_planner ==
+                                        'chunked-global'
+                                        else (
                                         'echop-cyclic-source-local-permutations'
                                         if args.pairwise_planner ==
                                         'cyclic-local'
-                                        else 'pairwise-waves')),
+                                        else 'pairwise-waves'))),
                                 'latency_timing': 'gpu-event',
                                 'component_timing': (
                                     'all-waves-roundtrip-total'),
@@ -1079,9 +1205,16 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                                 'pairwise_peer_budget': (
                                     args.pairwise_peer_budget),
                                 'pairwise_planner': args.pairwise_planner,
+                                'pairwise_chunk_tokens': (
+                                    effective_chunk_tokens),
+                                'pairwise_chunk_divisor': (
+                                    args.pairwise_chunk_divisor),
+                                'pairwise_execution': (
+                                    args.pairwise_execution),
                                 'planner_input_scope': (
                                     'complete-global-demand-matrix'
-                                    if args.pairwise_planner == 'fast-global'
+                                    if args.pairwise_planner in (
+                                        'fast-global', 'chunked-global')
                                     else (
                                         'source-local-outgoing-row+topology'
                                         if args.pairwise_planner ==
@@ -1089,11 +1222,13 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                                         else 'topology-only')),
                                 'global_demand_cells': (
                                     world_size * world_size
-                                    if args.pairwise_planner == 'fast-global'
+                                    if args.pairwise_planner in (
+                                        'fast-global', 'chunked-global')
                                     else 0),
                                 'global_demand_bytes_u32': (
                                     world_size * world_size * 4
-                                    if args.pairwise_planner == 'fast-global'
+                                    if args.pairwise_planner in (
+                                        'fast-global', 'chunked-global')
                                     else 0),
                                 'local_demand_cells_per_node': (
                                     num_nodes
@@ -1292,7 +1427,12 @@ def _worker(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                     roundtrip_stats = _measure_global_us(
                         roundtrip_once, args.warmups, args.iterations, group)
 
-                    if args.profile_dir:
+                    if (args.profile_dir and
+                            (args.profile_total == 0 or
+                             args.profile_total == total) and
+                            (args.profile_rail_alpha < 0 or
+                             math.isclose(
+                                 args.profile_rail_alpha, rail_alpha))):
                         profile_name = (
                             f'{_policy_variant(args.rail_balance, args.incast_weighted_quotas, args.pairwise_peer_budget)}'
                             f'_s{total}_ra{rail_alpha}_rank0.json')
@@ -1460,11 +1600,13 @@ if __name__ == '__main__':
         default=_parse_float_csv('0,1.5'))
     parser.add_argument(
         '--alltoall-flow-shape',
-        choices=('directed-zipf', 'symmetric-distance'),
+        choices=(
+            'directed-zipf', 'symmetric-distance', 'permuted-zipf'),
         default='directed-zipf',
         help=(
             'node-pair demand pattern for balanced-alltoall; symmetric-distance '
-            'keeps opposite directions equal and all node/expert totals balanced'))
+            'keeps opposite directions equal; permuted-zipf keeps all totals '
+            'balanced while mixing hot/cold edges in fixed cyclic waves'))
     parser.add_argument(
         '--fan-ins', type=_parse_int_csv,
         default=_parse_int_csv('1,2,3'))
@@ -1500,13 +1642,34 @@ if __name__ == '__main__':
             '0 disables temporal scheduling, 1 makes node fan-in one'))
     parser.add_argument(
         '--pairwise-planner',
-        choices=('round-robin', 'cyclic-local', 'fast-global'),
+        choices=(
+            'round-robin', 'cyclic-local', 'fast-global',
+            'chunked-global'),
         default='round-robin',
         help=(
             'round-robin uses topology-only undirected waves; cyclic-local '
             'uses fixed directed matchings plus source-local counts; '
             'fast-global independently reimplements FAST-style weighted '
-            'directed permutations from the complete global demand matrix'))
+            'directed permutations from the complete global demand matrix; '
+            'chunked-global interleaves equal-sized matching chunks and '
+            'drains sub-chunk tails last'))
+    parser.add_argument(
+        '--pairwise-chunk-tokens', type=int, default=0,
+        help='edge chunk size for chunked-global; zero for other planners')
+    parser.add_argument(
+        '--pairwise-chunk-divisor', type=int, default=0,
+        help=(
+            'choose chunk size as tokens-per-node divided by this value; '
+            'ignored when --pairwise-chunk-tokens is positive'))
+    parser.add_argument(
+        '--pairwise-execution',
+        choices=('prepacked', 'sequential-pack', 'pipelined-pack'),
+        default='prepacked',
+        help=(
+            'prepacked measures communication after wave materialization; '
+            'sequential-pack includes index packing on the critical path; '
+            'pipelined-pack overlaps next-wave packing with current-wave '
+            'dispatch/combine using compute and communication streams'))
     parser.add_argument(
         '--profile-pairwise-waves', action='store_true',
         help='also time every pairwise wave separately for critical-path audit')
@@ -1514,6 +1677,12 @@ if __name__ == '__main__':
     parser.add_argument(
         '--profile-dir', type=str, default='',
         help='optional directory for one rank-0 CUDA kernel trace per point')
+    parser.add_argument(
+        '--profile-total', type=int, default=0,
+        help='when positive, profile only this tokens-per-node point')
+    parser.add_argument(
+        '--profile-rail-alpha', type=float, default=-1.0,
+        help='when non-negative, profile only this Rail-alpha point')
     parser.add_argument('--warmups', type=int, default=5)
     parser.add_argument('--iterations', type=int, default=10)
     args = parser.parse_args()
@@ -1521,6 +1690,12 @@ if __name__ == '__main__':
         parser.error('--control-interval must be positive')
     if args.pairwise_peer_budget < 0:
         parser.error('--pairwise-peer-budget must be non-negative')
+    if args.pairwise_chunk_tokens < 0:
+        parser.error('--pairwise-chunk-tokens must be non-negative')
+    if args.pairwise_chunk_divisor < 0:
+        parser.error('--pairwise-chunk-divisor must be non-negative')
+    if args.profile_total < 0:
+        parser.error('--profile-total must be non-negative')
     if args.num_qps < 0 or args.num_qps == 1:
         parser.error('--num-qps must be 0 (automatic) or at least 2')
     torch.multiprocessing.spawn(

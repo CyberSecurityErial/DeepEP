@@ -4,6 +4,7 @@ import unittest
 
 from fast_style_planner import (
     plan_cyclic_source_local_waves,
+    plan_equal_chunk_interleaved_waves,
     plan_fast_style_waves,
     reconstruct_demand,
 )
@@ -40,6 +41,33 @@ class FastStylePlannerTest(unittest.TestCase):
         waves = plan_fast_style_waves(demand)
         self.assertEqual(reconstruct_demand(3, waves), demand)
         self.assertEqual(sum(item[3] for wave in waves for item in wave), 8)
+
+    def test_equal_chunks_are_interleaved_before_tails(self):
+        # Each row/column contains the same hot/mid/cold multiset, but the
+        # weights are deliberately not aligned with cyclic destination shifts.
+        demand = [
+            [0, 10, 6, 3],
+            [10, 0, 3, 6],
+            [6, 3, 0, 10],
+            [3, 6, 10, 0],
+        ]
+        waves = plan_equal_chunk_interleaved_waves(demand, 4)
+        self.assertEqual(reconstruct_demand(4, waves), demand)
+        for wave in waves:
+            self.assertEqual(len({item[0] for item in wave}), len(wave))
+            self.assertEqual(len({item[1] for item in wave}), len(wave))
+        counts = [item[3] for wave in waves for item in wave]
+        first_tail = next(index for index, count in enumerate(counts)
+                          if count < 4)
+        self.assertTrue(all(count == 4 for count in counts[:first_tail]))
+        self.assertTrue(all(count < 4 for count in counts[first_tail:]))
+
+    def test_equal_chunk_argument_validation(self):
+        demand = [[0, 1], [1, 0]]
+        with self.assertRaises(ValueError):
+            plan_equal_chunk_interleaved_waves(demand, 0)
+        with self.assertRaises(TypeError):
+            plan_equal_chunk_interleaved_waves(demand, 1.5)
 
     def test_rejects_invalid_input(self):
         with self.assertRaises(ValueError):

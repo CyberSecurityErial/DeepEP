@@ -265,7 +265,6 @@ void rail_balance_source_shuffle_impl(
                         gin.get_sym_ptr<ncclTeamTagLsa>(rank_delta, egress);
                     ptx::red_add_rel_sys(peer_rank_delta + dst_rank, 1);
                 }
-                ptx::tma_store_wait();
                 if (ptx::elect_one_sync())
                     *tma_buffer.get_linked_list_idx_ptr() = proxy_slot;
                 ptx::tma_store_fence();
@@ -282,10 +281,10 @@ void rail_balance_source_shuffle_impl(
                     ptx::tma_store_1d(proxy.get_base_ptr(), tma_buffer.get_base_ptr(),
                                       token_layout.get_num_bytes<false>());
                 }
-                // The same shared-memory staging record is reused by the next
-                // token. Finish publishing this proxy record before that reuse.
                 ptx::tma_store_commit();
-                ptx::tma_store_wait();
+                // Reuse shared memory as soon as TMA has consumed it. The
+                // peer write itself finishes in the background.
+                ptx::tma_store_wait_read();
                 __syncwarp();
             }
         }
@@ -374,9 +373,10 @@ void rail_balance_return_unshuffle_impl(
                 ptx::tma_store_commit();
             }
             __syncwarp();
-            ptx::tma_store_wait();
+            ptx::tma_store_wait_read();
         }
     }
+    ptx::tma_store_wait();
 }
 
 }  // namespace deep_ep::elastic

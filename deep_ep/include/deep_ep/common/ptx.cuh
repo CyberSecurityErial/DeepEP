@@ -116,6 +116,13 @@ __forceinline__ __device__ void tma_store_wait() {
     asm volatile("cp.async.bulk.wait_group %0;" ::"n"(kNumRemainingWaits) : "memory");
 }
 
+// The shared-memory stage may be reused as soon as the TMA engine has
+// consumed it. The global destination can finish in the background and is
+// drained with tma_store_wait() only at the end of the reorder pass.
+__forceinline__ __device__ void tma_store_wait_read() {
+    asm volatile("cp.async.bulk.wait_group.read 0;" ::: "memory");
+}
+
 enum TMACacheHint: int64_t {
     kEvictFirst = 0x12f0000000000000ll,
     kEvictNormal = 0x1000000000000000ll

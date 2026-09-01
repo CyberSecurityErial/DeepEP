@@ -190,6 +190,80 @@ def plan_cyclic_source_local_waves(
     return tuple(waves)
 
 
+def plan_equal_chunk_interleaved_waves(
+        demand: Sequence[Sequence[int]], chunk_tokens: int) -> tuple[Wave, ...]:
+    """Interleave equal-size edge chunks, then drain the final tails.
+
+    Every original edge is split into ``chunk_tokens``-sized pieces.  At each
+    chunk depth, the active pieces form a bipartite multigraph which is
+    decomposed into directed matchings.  Thus every non-tail transfer in a
+    wave has exactly the same size and no source or destination appears more
+    than once.  Residual pieces smaller than one chunk are scheduled last
+    with the weighted planner.
+
+    This experimental planner consumes the complete node-demand matrix.  It
+    is deliberately separate from the source-local cyclic fast path so its
+    scheduling benefit and global-control cost can be measured honestly.
+    """
+    original = _validated_matrix(demand)
+    if (not isinstance(chunk_tokens, int) or
+            isinstance(chunk_tokens, bool)):
+        raise TypeError('chunk_tokens must be an integer')
+    if chunk_tokens <= 0:
+        raise ValueError('chunk_tokens must be positive')
+
+    size = len(original)
+    full_chunks = [
+        [value // chunk_tokens for value in row] for row in original
+    ]
+    tails = [[value % chunk_tokens for value in row] for row in original]
+    consumed = [[0] * size for _ in range(size)]
+    waves: list[Wave] = []
+    max_depth = max(value for row in full_chunks for value in row)
+
+    # Breadth-first chunk order is the interleaving: every active edge sends
+    # its first chunk before any edge sends its second chunk, and so on.
+    for depth in range(max_depth):
+        layer = [
+            [int(full_chunks[source][destination] > depth)
+             for destination in range(size)]
+            for source in range(size)
+        ]
+        residual, _ = _complete_balanced(layer)
+        while any(any(value > 0 for value in row) for row in residual):
+            matching = _positive_perfect_matching(residual)
+            transfers = []
+            for source, destination in enumerate(matching):
+                residual[source][destination] -= 1
+                if layer[source][destination] == 0:
+                    continue
+                total = original[source][destination]
+                offset = consumed[source][destination]
+                transfers.append((
+                    source, destination, offset, chunk_tokens, total))
+                consumed[source][destination] += chunk_tokens
+                layer[source][destination] = 0
+            if transfers:
+                waves.append(tuple(transfers))
+
+    # Tail transfers are smaller than the common chunk and are intentionally
+    # kept after all full chunks.  Offsets are translated back to the original
+    # unsplit edge so the executor can use contiguous views.
+    for tail_wave in plan_fast_style_waves(tails):
+        transfers = []
+        for source, destination, offset, count, _ in tail_wave:
+            transfers.append((
+                source, destination,
+                consumed[source][destination] + offset,
+                count, original[source][destination]))
+        if transfers:
+            waves.append(tuple(transfers))
+
+    if reconstruct_demand(size, waves) != original:
+        raise AssertionError('equal-chunk waves did not cover demand')
+    return tuple(waves)
+
+
 def reconstruct_demand(num_nodes: int, waves: Sequence[Wave]) -> list[list[int]]:
     """Reconstruct original directed demand; useful for audits and tests."""
     result = [[0] * num_nodes for _ in range(num_nodes)]

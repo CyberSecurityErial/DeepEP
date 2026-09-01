@@ -298,7 +298,8 @@ static void launch_rail_balance_prepare(
             arena.num_channels, 32, token_layout.get_num_bytes<true>()),
     };
     const auto shuffle_runtime = jit::compiler->build(
-        "rail_balance_source_shuffle", RailBalanceShuffleRuntime::generate(shuffle_args));
+        "rail_balance_source_shuffle_pipelined",
+        RailBalanceShuffleRuntime::generate(shuffle_args));
     RailBalanceShuffleRuntime::launch(shuffle_runtime, shuffle_args, stream);
     // The following hybrid dispatch starts with a scale-up barrier. The stream
     // boundary completes these TMA stores, so that barrier also closes shuffle.
@@ -337,7 +338,8 @@ static void launch_rail_balance_return_unshuffle(
             arena.num_channels, 32, token_layout.get_num_bytes<true>()),
     };
     const auto runtime = jit::compiler->build(
-        "rail_balance_return_unshuffle", RailBalanceUnshuffleRuntime::generate(args));
+        "rail_balance_return_unshuffle_pipelined",
+        RailBalanceUnshuffleRuntime::generate(args));
     RailBalanceUnshuffleRuntime::launch(runtime, args, stream);
     launch_rail_balance_local_barrier(
         nccl_dev_comm, nccl_window, workspace,
